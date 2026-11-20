@@ -33,12 +33,21 @@ function needStaff(){
   return false; }
 
 // ---------- Spiele
-const GAMES = ["One Piece","Pokémon","Riftbound","Magic","Yu-Gi-Oh!"];
+const BASE_GAMES = ["One Piece","Pokémon","Riftbound","Magic","Yu-Gi-Oh!"];
+const NO_GAME = "Ohne Spiel";
+const gameId = n => "g-" + n.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+// Spielsysteme: feste Grundliste + selbst angelegte (Sammlung games); „Ohne Spiel“ ist immer wählbar
+function games(){ const g=Object.values(S.games||{}); const hidden=new Set(g.filter(x=>x.hidden).map(x=>x.name));
+  return [...new Set([...BASE_GAMES.filter(x=>!hidden.has(x)), ...g.filter(x=>!x.hidden).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)).map(x=>x.name)])]; }
+const gameOptions = cur => { const l=games(); if(cur && cur!==NO_GAME && !l.includes(cur)) l.push(cur); return [...l, NO_GAME].map(g=>`<option value="${esc(g)}" ${g===cur?"selected":""}>${esc(g)}</option>`).join(""); };
 const gameOf = p => p?.game || "One Piece";
-S.game = store("game") || "Alle"; if (S.game!=="Alle" && !GAMES.includes(S.game)) S.game="Alle";
+S.game = store("game") || "Alle";
 const inGame = p => S.game==="Alle" || gameOf(p)===S.game;
 function setGame(g){ S.game=g; store("game",g); drawGames(); render(); }
-function drawGames(){ const g=$("#games"); g.innerHTML=["Alle",...GAMES].map(x=>`<button type="button" class="${x===S.game?"on":""}" data-g="${x}">${x}</button>`).join("");
+function drawGames(){ const g=$("#games"); const used=new Set(Object.values(S.products||{}).map(gameOf));
+  const list=["Alle",...games(),...(used.has(NO_GAME)?[NO_GAME]:[])];
+  if(S.loaded?.p && !list.includes(S.game)) { S.game="Alle"; }
+  g.innerHTML=list.map(x=>`<button type="button" class="${x===S.game?"on":""}" data-g="${esc(x)}">${esc(x)}</button>`).join("");
   g.querySelectorAll("button").forEach(b=>b.onclick=()=>{ S.game=b.dataset.g; store("game",S.game); drawGames(); render(); }); }
 drawGames();
 
@@ -193,7 +202,7 @@ function renderProducts(){
     <form class="form" id="np">
       <label class="wide">Produktname<input id="np-name" required placeholder="z. B. OP22, Pokémon Prismatic ETB, Riftbound Origins"></label>
       <label>Release<input id="np-rel" placeholder="2027-05-15, Q3 2027 oder leer"></label>
-      <label>Spiel<select id="np-game">${GAMES.map(g=>`<option ${g===(S.game==="Alle"?"One Piece":S.game)?"selected":""}>${g}</option>`).join("")}</select></label>
+      <label>Spiel<select id="np-game">${gameOptions(S.game==="Alle"?"One Piece":S.game)}</select></label>
       <label>Einheit<input id="np-unit" placeholder="Display, Case, Stück"></label>
       <button class="pri" ${S.canWrite?"":"disabled"}>Anlegen</button>
     </form><p class="muted">Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Dann zählt jede Variante getrennt.</p></div>`;
@@ -236,7 +245,7 @@ function renderProduct(pid){
       <label class="wide">Name in Kundennachrichten<input id="pd-msgName" value="${esc(p.msgName||"")}" placeholder="leer = Produktname (ohne Artikelnummer eintragen)"></label>
       <label>Release<input id="pd-release" value="${esc(p.release||"")}" placeholder="JJJJ-MM-TT, Q2 2027"></label>
       <label>Serie<input id="pd-series" value="${esc(p.series||"")}" placeholder="z. B. Mega Evolution"></label>
-      <label>Spiel<select id="pd-game">${GAMES.map(g=>`<option ${g===gameOf(p)?"selected":""}>${g}</option>`).join("")}</select></label>
+      <label>Spiel<select id="pd-game">${gameOptions(gameOf(p))}</select></label>
       <label>Einheit<input id="pd-unit" value="${esc(p.unit||"")}"></label>
       <label>Beim Lieferanten bestellt<input id="pd-supplierOrdered" type="number" min="0" value="${p.supplierOrdered??""}"></label>
       <label>Lieferant zugesagt<input id="pd-supplierConfirmed" type="number" min="0" value="${p.supplierConfirmed??""}"></label>
@@ -398,6 +407,23 @@ function msgDialog(ids){
 function drawStaffList(){ let dl=document.getElementById("staff-dl"); if(!dl){ dl=document.createElement("datalist"); dl.id="staff-dl"; document.body.appendChild(dl); staffEl.setAttribute("list","staff-dl"); }
   dl.innerHTML=Object.values(S.staff||{}).map(m=>`<option value="${esc(m.kuerzel)}">${esc(m.name||"")}</option>`).join("");
   markStaff(); }
+function gamesPanel(){
+  const cnt={}; Object.values(S.products).forEach(p=>{ const g=gameOf(p); cnt[g]=(cnt[g]||0)+1; });
+  return `<div class="panel"><h2>Spielsysteme</h2>
+    <p class="muted">Erscheinen oben im Umschalter und bei der Spiel-Auswahl der Produkte. „${NO_GAME}“ ist immer wählbar, z. B. für Zubehör. Löschen geht nur, wenn kein Produkt mehr dazu gehört.</p>
+    <div class="row">${games().map(g=>`<span class="pill" style="background:var(--surface2);padding:4px 6px 4px 10px">${esc(g)} <span class="muted">(${cnt[g]||0})</span> <button class="sm" data-gdel="${esc(g)}" title="Löschen" ${cnt[g]?"disabled":""}>✕</button></span>`).join("")}</div>
+    <form class="row" id="gnew"><input id="gnn" placeholder="Neues Spielsystem, z. B. Lorcana" style="flex:1 1 220px" required><button class="pri">Anlegen</button></form></div>`;
+}
+function bindGames(){
+  const f=$("#gnew"); if(f) f.onsubmit=async e=>{ e.preventDefault(); const n=$("#gnn").value.trim().replace(/\s+/g," "); if(!n) return;
+    if(n.toLowerCase()===NO_GAME.toLowerCase()||n.toLowerCase()==="alle") return toast("Dieser Name ist reserviert.");
+    const ex=games().find(g=>g.toLowerCase()===n.toLowerCase()); if(ex) return toast(`„${ex}“ gibt es schon.`);
+    if(await write("games",gameId(n),{id:gameId(n),name:n,hidden:false,createdAt:now()},"set")) toast(`„${n}“ angelegt`); };
+  app.querySelectorAll("[data-gdel]").forEach(b=>b.onclick=()=>{ const n=b.dataset.gdel;
+    if(Object.values(S.products).some(p=>gameOf(p)===n)) return toast("Es gibt noch Produkte zu diesem Spiel.");
+    b.outerHTML=`<button class="sm danger" id="gdok">Wirklich löschen?</button>`;
+    $("#gdok").onclick=()=>{ if(BASE_GAMES.includes(n)) write("games",gameId(n),{id:gameId(n),name:n,hidden:true},"set"); else write("games",gameId(n),{},"delete"); if(S.game===n){ S.game="Alle"; store("game","Alle"); } }; });
+}
 function staffPanel(){
   const list=Object.values(S.staff||{}).sort((a,b)=>a.kuerzel.localeCompare(b.kuerzel));
   return `<div class="panel"><h2>Mitarbeiter</h2>
@@ -765,7 +791,7 @@ function showText(t){ const ta=$("#ta"); ta.hidden=false; ta.value=t; ta.focus()
 // Kleine Hülle mit der Form collection(c).doc(id).set/update/delete, damit die Ansichten unabhängig vom Speicher bleiben.
 // ---------- Änderungsprotokoll: pro Monat eine Datei protokoll/JJJJ-MM.json in der Dropbox
 const LOG_DIR = "protokoll";
-const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
+const AREA = { games: "Spielsystem", orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
 const FIELD = { noWhatsapp: "Kein WhatsApp", firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
   archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronUrl: "etron-Link" };
@@ -860,8 +886,9 @@ S.downloads = { save: async ({ filename, data }) => saveFile(filename, data) };
 const live = m => Object.fromEntries(Object.entries(m || {}).filter(([, v]) => v && !v.deleted).map(([id, v]) => [id, { id, ...v }]));
 function pull(){
   const o = S.doc.obj || {};
-  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders); S.templates = live(o.templates); S.staff = live(o.staff); S.config = live(o.config); drawStaffList();
+  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders); S.templates = live(o.templates); S.staff = live(o.staff); S.config = live(o.config); S.games = live(o.games); drawStaffList();
   S.loaded = { p: true, c: true, o: true };
+  drawGames();
 }
 const SYNC_TXT = { idle: "–", syncing: "Speichert …", ok: "Gespeichert", offline: "Offline, wird nachgeholt", error: "Fehler beim Speichern" };
 function drawSync(){
@@ -948,6 +975,7 @@ function renderSettings(){
   ${isDb ? `<div class="panel"><h2>Kollegen einladen</h2>
     <p class="muted">Mit diesem Code kann ein weiteres Gerät auf denselben Dropbox-App-Ordner zugreifen (nicht auf den Rest der Dropbox). Nur an Mitarbeiter weitergeben.</p>
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
+  ${gamesPanel()}
   ${staffPanel()}
   ${templatesPanel()}
   <div class="panel"><h2>Sicherung</h2>
@@ -958,7 +986,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff();
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames();
   $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
@@ -1012,7 +1040,7 @@ function xlDraw(){
     <div class="form">
       <label>Spalte Name${colSel("xl-n", X.cName)}</label><label>Spalte Telefon${colSel("xl-t", X.cTel)}</label><label>Spalte E-Mail${colSel("xl-m", X.cMail)}</label>
       <label>Serie<input id="xl-s" placeholder="z. B. Mega Evolution" value="${esc(X.series || "")}"></label>
-      <label>Spiel<select id="xl-g">${GAMES.map(g => `<option ${g === (X.game || "Pokémon") ? "selected" : ""}>${g}</option>`).join("")}</select></label>
+      <label>Spiel<select id="xl-g">${gameOptions(X.game || "Pokémon")}</select></label>
       <label class="wide">Mehrere Produkte angekreuzt bedeutet<select id="xl-r"><option value="any" ${X.rule !== "all" ? "selected" : ""}>egal welches (Kunde bekommt eines davon)</option><option value="all" ${X.rule === "all" ? "selected" : ""}>beide (Kunde bekommt alle angekreuzten)</option></select></label>
     </div>
     <h2 style="margin-top:12px">Produktspalten</h2>
