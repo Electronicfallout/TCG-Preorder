@@ -691,6 +691,36 @@ function renderDupes(){
     if(await write("customers",x,{notDupes:[...(a.notDupes||[]),y]})) toast("Als verschiedene Kunden markiert"); });
 }
 function exportRows(){ return Object.values(S.orders).filter(o=>o.status==="Zugeteilt"&&(o.alloc||0)>0&&inGame(S.products[o.productId])).sort((a,b)=>(S.customers[a.customerId]?.name||"").localeCompare(S.customers[b.customerId]?.name||"","de")||sortOrders(a,b)); }
+// ---------- Odoo-Import (etron onRetail = Odoo 16): Verkaufsaufträge, ein Auftrag pro Kunde, Folgezeilen ohne Kopfdaten
+const odooCfg = () => ({ key: "ref", ...(S.config?.odoo || {}) });
+function odooCsv(rows){
+  const cfg=odooCfg(); const q=v=>{v=String(v??"");return /[,"\n]/.test(v)?`"${v.replace(/"/g,'""')}"`:v};
+  const head=[cfg.key==="id"?"partner_id/.id":"partner_id","client_order_ref","order_line/product_id","order_line/product_uom_qty"];
+  const byC={}; rows.forEach(o=>(byC[o.customerId]=byC[o.customerId]||[]).push(o));
+  const out=[head];
+  for(const [cid,list] of Object.entries(byC)){ const c=S.customers[cid]||{}; if(!c.etronId) continue;
+    list.forEach((o,i)=>{ const p=S.products[o.productId]||{};
+      out.push([i?"":(c.etronId||""), i?"":`Vorbestellung ${fmtDate(today())}`, p.articleNo||p.name||"", o.alloc]); }); }
+  return "\ufeff"+out.map(r=>r.map(q).join(",")).join("\r\n");
+}
+function odooPanel(rows){
+  const cfg=odooCfg(); const noC=[...new Set(rows.filter(o=>!S.customers[o.customerId]?.etronId).map(o=>S.customers[o.customerId]?.name||"?"))];
+  const noA=[...new Set(rows.filter(o=>!S.products[o.productId]?.articleNo).map(o=>S.products[o.productId]?.name||"?"))];
+  return `<details class="panel wiki"><summary>Odoo-Import für etron (Aufträge per Datei anlegen)</summary><div>
+    <ol><li>„Odoo-Import herunterladen“ klicken.</li><li>In etron: Verkauf → Aufträge → ⚙ bzw. Favoriten → <b>Datensätze importieren</b> → Datei hochladen.</li>
+    <li>Oben „Test“ klicken. Meldet Odoo keine Fehler, auf „Importieren“ klicken.</li><li>Danach hier „Alle als ‚Auftrag angelegt‘ markieren“.</li></ol>
+    <p>Pro Kunde entsteht ein Auftrag mit allen zugeteilten Positionen. Der Kunde wird über die etron-Kundennr. gefunden, das Produkt über die Artikelnummer (sonst über den Produktnamen).</p>
+    <label class="row muted" style="gap:6px">etron-Kundennr. ist in Odoo <select id="odoo-key"><option value="ref" ${cfg.key==="ref"?"selected":""}>die Referenz des Kontakts</option><option value="id" ${cfg.key==="id"?"selected":""}>die interne ID des Kontakts</option></select></label>
+    ${noC.length?`<div class="note bad">Ohne etron-Kundennr., kommen nicht in die Datei (erst unter Kunden nachtragen): ${noC.map(esc).join(", ")}</div>`:""}
+    ${noA.length?`<div class="note">Ohne Artikelnummer, es wird der Produktname verwendet: ${noA.map(esc).join(", ")}</div>`:""}
+    <div class="row"><button id="odl" class="pri" ${rows.length?"":"disabled"}>Odoo-Import herunterladen</button></div></div></details>`;
+}
+function bindOdoo(rows){
+  const k=$("#odoo-key"); if(k) k.onchange=e=>write("config","odoo",{...odooCfg(),key:e.target.value},"set").then(ok=>ok&&toast("Gespeichert"));
+  const b=$("#odl"); if(b) b.onclick=async()=>{ const data=odooCsv(rows); const name=`odoo-auftraege-${today()}.csv`;
+    if(S.downloads){ try{ await S.downloads.save({filename:name,data:new Blob([data],{type:"text/csv;charset=utf-8"})}); return; }catch(e){ if(e&&e.code==="dismissed") return; } }
+    showText(data); };
+}
 function csv(rows){ const q=v=>{v=String(v??"");return /[;"\n]/.test(v)?`"${v.replace(/"/g,'""')}"`:v}; const head=["etron-Kundennr.","Kunde","Kontakt","Spiel","Artikelnummer","Produkt","Menge","Bestelldatum","Mitarbeiter","Kommentar","Vorbestell-Nr"];
   return "﻿"+[head,...rows.map(o=>{const c=S.customers[o.customerId]||{},p=S.products[o.productId]||{};return [c.etronId,c.name,c.contact,gameOf(p),p.articleNo,p.name,o.alloc,fmtDate(o.date),o.staff,o.comment,o.id]})].map(r=>r.map(q).join(";")).join("\r\n"); }
 async function backup(){
@@ -708,6 +738,7 @@ function renderExport(){
   <div class="tiles"><div class="tile"><b>${new Set(rows.map(o=>o.customerId)).size}</b><span>Kunden offen</span></div><div class="tile"><b>${rows.length}</b><span>Positionen</span></div><div class="tile"><b>${rows.reduce((s,o)=>s+o.alloc,0)}</b><span>Stück</span></div></div>
   ${Object.keys(byC).some(id=>!S.customers[id]?.etronId)?`<div class="note">${Object.keys(byC).filter(id=>!S.customers[id]?.etronId).length} Kunden haben noch keine etron-Nr. Bitte vor dem Anlegen der Aufträge unter Kunden eintragen.</div>`:""}
   <div class="row">${oqInput()}</div>
+  ${odooPanel(rows)}
   <div class="row"><button class="pri" id="dl" ${rows.length?"":"disabled"}>CSV herunterladen</button><button id="cp" ${rows.length?"":"disabled"}>Als Text kopieren</button><button id="mk" ${rows.length&&S.canWrite?"":"disabled"}>Alle als „Auftrag angelegt“ markieren</button><span id="mkc"></span></div>
   ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2><a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
     <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th><th>Nachricht</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}${S.products[o.productId]?.articleNo?` <span class="muted">Art.-Nr. ${esc(S.products[o.productId].articleNo)}</span>`:""}${/^https?:\/\//.test(S.products[o.productId]?.etronUrl||"")?` <a href="${esc(S.products[o.productId].etronUrl)}" target="_blank" rel="noopener">etron</a>`:""}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
@@ -716,6 +747,7 @@ function renderExport(){
   $("#bk").onclick=backup; bindAuftrag();
   if(!rows.length) return;
   bindOq();
+  bindOdoo(rows);
   $("#dl").onclick=async()=>{ const data=csv(rows); const name=`etron-auftraege-${today()}.csv`;
     if(S.downloads){ try{ await S.downloads.save({filename:name,data:new Blob([data],{type:"text/csv;charset=utf-8"})}); return; }catch(e){ if(e&&e.code==="dismissed") return; } }
     showText(data); toast("Download nicht verfügbar: Text unten markieren und kopieren."); };
@@ -824,7 +856,7 @@ S.downloads = { save: async ({ filename, data }) => saveFile(filename, data) };
 const live = m => Object.fromEntries(Object.entries(m || {}).filter(([, v]) => v && !v.deleted).map(([id, v]) => [id, { id, ...v }]));
 function pull(){
   const o = S.doc.obj || {};
-  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders); S.templates = live(o.templates); S.staff = live(o.staff); drawStaffList();
+  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders); S.templates = live(o.templates); S.staff = live(o.staff); S.config = live(o.config); drawStaffList();
   S.loaded = { p: true, c: true, o: true };
 }
 const SYNC_TXT = { idle: "–", syncing: "Speichert …", ok: "Gespeichert", offline: "Offline, wird nachgeholt", error: "Fehler beim Speichern" };
