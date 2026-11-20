@@ -228,7 +228,7 @@ function renderProduct(pid){
   </div>
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
     <select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
-  <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Kommentar</th></tr></thead><tbody>
+  <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Kommentar</th></tr></thead><tbody>
   ${shown.map(o=>{const c=S.customers[o.customerId];const d=c?dupesOf(c):[];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a>${!o.productId?` <span class="pill s-Offen" title="${esc(orderLabel(o))}">egal welches</span>`:o.pairId?` <span class="gtag">Teil von „beide“</span>`:""}${d.length?` <span class="pill s-Warteliste" title="Ähnlich: ${esc(d.map(x=>x.name).join(", "))}">Dublette?</span>`:""}</td>
     <td class="n"><input type="number" min="0" data-f="qty" id="q-${o.id}" value="${o.qty??""}"></td>
@@ -237,6 +237,7 @@ function renderProduct(pid){
     <td><select data-f="status" id="s-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
     <td class="n"><input type="number" min="0" data-f="alloc" id="a-${o.id}" value="${o.alloc??""}"></td>
     ${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.map[o.id]??""}</td>`:""}
+    <td style="text-align:center">${auftragBox([o])}</td>
     <td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("") || `<tr><td colspan="8" class="empty">Noch keine Bestellungen. Unten die erste erfassen.</td></tr>`}
   </tbody></table></div>
   ${orderForm("pr", pid)}`;
@@ -261,7 +262,21 @@ function renderProduct(pid){
   bindRows(); bindOrderForm("pr");
 }
 
+// Häkchen „Auftrag angelegt“: an = Auftrag in etron angelegt, aus = zurück auf Zugeteilt
+S.doneNow = new Set();
+function auftragBox(list){
+  const os=list.filter(o=>o&&o.productId&&(o.alloc||0)>0&&o.status!=="Storniert"); if(!os.length) return `<span class="muted" title="Erst zuteilen">–</span>`;
+  const on=os.every(o=>LOCKED.has(o.status));
+  return `<input type="checkbox" class="auftrag" data-auftrag="${os.map(o=>o.id).join(",")}" id="au-${os[0].id}" ${on?"checked":""} title="${on?"Auftrag in etron angelegt":"Haken setzen, wenn der Auftrag in etron angelegt ist"}">`;
+}
+function bindAuftrag(){
+  app.querySelectorAll("[data-auftrag]").forEach(el=>el.onchange=async()=>{ const ids=el.dataset.auftrag.split(","); const on=el.checked;
+    ids.forEach(id=>on?S.doneNow.add(id):S.doneNow.delete(id));
+    await pool(ids, id=>S.db.collection("orders").doc(id).update({status:on?"Auftrag angelegt":"Zugeteilt"}));
+    toast(on?"Auftrag angelegt ✓":"Zurück auf Zugeteilt"); });
+}
 function bindRows(){
+  bindAuftrag();
   app.querySelectorAll("tr[data-o] [data-f]").forEach(el=>el.onchange=()=>{ const id=el.closest("tr").dataset.o, f=el.dataset.f;
     let v = el.type==="number"?num(el.value):el.value.trim(); const patch={[f]:v};
     if (f==="status" && v==="Storniert") patch.alloc=null;
@@ -357,11 +372,11 @@ function renderSeries(anyPid){
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
-  <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Kommentar</th></tr></thead><tbody>
+  <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n">${o.qty??""}</td><td>${fmtDate(o.date)}</td>
     <td><select data-rs id="ss-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
-    ${sib.map(p=>cell(r,p.id)).join("")}<td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
+    ${sib.map(p=>cell(r,p.id)).join("")}<td style="text-align:center">${auftragBox(r)}</td><td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
   </tbody></table></div>
   ${orderForm("se", null, null, ids)}`;
   app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
@@ -380,7 +395,7 @@ function renderSeries(anyPid){
       try{ await pool(ch,([id,pt])=>S.db.collection("orders").doc(id).update(pt)); delete S.sugg[key]; toast(`${ch.length} Zuteilungen gespeichert`); render(); }catch(e){ toast("Fehler: "+(e.message||e.code)); } }; }
   $("#close").onclick=async()=>{ const ch=all.filter(o=>o.productId&&o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
     await pool(ch,o=>S.db.collection("orders").doc(o.id).update({status:"Zugeteilt"})); toast(`${ch.length} Bestellungen auf Zugeteilt gesetzt.`); };
-  bindOrderForm("se");
+  bindAuftrag(); bindOrderForm("se");
 }
 
 function renderCustomers(){
@@ -413,11 +428,11 @@ function renderCustomer(cid){
     <label>etron-Kundennr.<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
-  <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Kommentar</th></tr></thead><tbody>
+  <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Auftrag</th><th>Kommentar</th></tr></thead><tbody>
   ${os.map(o=>{const p=S.products[o.productId||(o.choices||[])[0]];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}"><td><a href="#produkt-${p?.id||""}">${esc(orderLabel(o))}</a><span class="gtag">${esc(gameOf(p))}</span></td><td>${esc(relTxt(p?.release))}</td>
     <td class="n"><input type="number" min="0" data-f="qty" id="q-${o.id}" value="${o.qty??""}"></td><td>${fmtDate(o.date)}</td>
     <td><select data-f="status" id="s-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
-    <td class="n">${o.alloc??""}</td><td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("")||`<tr><td colspan="7" class="empty">Keine Bestellungen.</td></tr>`}
+    <td class="n">${o.alloc??""}</td><td style="text-align:center">${auftragBox([o])}</td><td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("")||`<tr><td colspan="8" class="empty">Keine Bestellungen.</td></tr>`}
   </tbody></table></div>
   ${orderForm("cu", null, cid)}
   <div class="panel"><h2>Mit anderem Kunden zusammenführen</h2>
@@ -485,23 +500,25 @@ async function backup(){
   showText(data); toast("Download nicht verfügbar: Text unten markieren, kopieren und als .json speichern.");
 }
 function renderExport(){
-  const rows=exportRows(); const byC={}; rows.forEach(o=>(byC[o.customerId]=byC[o.customerId]||[]).push(o));
-  app.innerHTML=`<div><h1>etron-Export${S.game==="Alle"?"":" · "+esc(S.game)}</h1><p class="sub">Alle Bestellungen mit Status „Zugeteilt“. Daraus werden in etron onRetail die Aufträge angelegt. Danach hier als „Auftrag angelegt“ markieren.</p></div>
-  <div class="tiles"><div class="tile"><b>${Object.keys(byC).length}</b><span>Kunden</span></div><div class="tile"><b>${rows.length}</b><span>Positionen</span></div><div class="tile"><b>${rows.reduce((s,o)=>s+o.alloc,0)}</b><span>Stück</span></div></div>
+  const rows=exportRows(); const byC={};
+  const shownRows=[...rows, ...[...S.doneNow].map(id=>S.orders[id]).filter(o=>o&&o.status==="Auftrag angelegt"&&inGame(S.products[o.productId]))];
+  shownRows.forEach(o=>(byC[o.customerId]=byC[o.customerId]||[]).push(o));
+  app.innerHTML=`<div><h1>etron-Export${S.game==="Alle"?"":" · "+esc(S.game)}</h1><p class="sub">Alle Bestellungen mit Status „Zugeteilt“. Daraus werden in etron onRetail die Aufträge angelegt. Danach pro Position den Haken bei „Auftrag angelegt“ setzen. Abgehakte bleiben bis zum Neuladen grau sichtbar, falls du dich verklickt hast.</p></div>
+  <div class="tiles"><div class="tile"><b>${new Set(rows.map(o=>o.customerId)).size}</b><span>Kunden offen</span></div><div class="tile"><b>${rows.length}</b><span>Positionen</span></div><div class="tile"><b>${rows.reduce((s,o)=>s+o.alloc,0)}</b><span>Stück</span></div></div>
   ${Object.keys(byC).some(id=>!S.customers[id]?.etronId)?`<div class="note">${Object.keys(byC).filter(id=>!S.customers[id]?.etronId).length} Kunden haben noch keine etron-Nr. Bitte vor dem Anlegen der Aufträge unter Kunden eintragen.</div>`:""}
   <div class="row"><button class="pri" id="dl" ${rows.length?"":"disabled"}>CSV herunterladen</button><button id="cp" ${rows.length?"":"disabled"}>Als Text kopieren</button><button id="mk" ${rows.length&&S.canWrite?"":"disabled"}>Alle als „Auftrag angelegt“ markieren</button><span id="mkc"></span></div>
-  ${rows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2><a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
-    <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th></th></tr></thead><tbody>${list.map(o=>`<tr><td>${esc(S.products[o.productId]?.name||"?")}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td class="n"><button class="sm" data-done="${o.id}">Auftrag angelegt</button></td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
+  ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2><a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
+    <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
   <div class="panel"><h2>Gesamtsicherung</h2><p class="muted">Alle Produkte, Kunden und Bestellungen als eine JSON-Datei, z. B. für den Umzug in die Dropbox.</p><div class="row"><button id="bk">Alle Daten exportieren (JSON)</button></div></div>
   <textarea id="ta" hidden rows="6" style="width:100%"></textarea>`;
-  $("#bk").onclick=backup;
+  $("#bk").onclick=backup; bindAuftrag();
   if(!rows.length) return;
   $("#dl").onclick=async()=>{ const data=csv(rows); const name=`etron-auftraege-${today()}.csv`;
     if(S.downloads){ try{ await S.downloads.save({filename:name,data:new Blob([data],{type:"text/csv;charset=utf-8"})}); return; }catch(e){ if(e&&e.code==="dismissed") return; } }
     showText(data); toast("Download nicht verfügbar: Text unten markieren und kopieren."); };
   $("#cp").onclick=async()=>{ const data=csv(rows).slice(1); try{ await navigator.clipboard.writeText(data); toast("Kopiert"); }catch(e){ showText(data); } };
   $("#mk").onclick=()=>{ $("#mkc").innerHTML=` <button class="sm danger" id="mkok">${rows.length} Positionen markieren</button>`; $("#mkok").onclick=async()=>{ try{ await pool(rows,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt"})); toast("Markiert"); }catch(e){ toast("Fehler: "+(e.message||e.code)); } }; };
-  app.querySelectorAll("[data-done]").forEach(b=>b.onclick=()=>write("orders",b.dataset.done,{status:"Auftrag angelegt"}));
+  bindAuftrag();
 }
 function showText(t){ const ta=$("#ta"); ta.hidden=false; ta.value=t; ta.focus(); ta.select(); }
 
