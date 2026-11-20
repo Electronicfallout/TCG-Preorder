@@ -8,6 +8,7 @@ Vorbestellungen, Wartelisten und Zuteilungen für One Piece, Pokémon und Riftbo
 
 - **Produkte** pro Spiel (One Piece, Pokémon, Riftbound), sortiert nach Release, mit Vorbestellt, Wareneingang, Zugeteilt, Frei und Fehlmenge.
 - **Serien** (z. B. zwei Pokémon-Produkte einer Serie): Kunden bestellen „nur A“, „nur B“, „egal welches“ oder „beide“. „Egal welches“-Bestellungen bekommen bei der Zuteilung das Produkt, von dem nach den festen Wünschen noch etwas übrig ist.
+- **Serien-Liste**: alle Produkte einer Serie (z. B. Doppel-Release) in einer Tabelle mit gemeinsamer Zuteilung.
 - **Excel-Import** (Einstellungen): Spalten wie Name, Telefon, E-Mail, Produkt A, Produkt B werden direkt im Browser eingelesen. Die Datei wird nirgends hochgeladen.
 - **Bestellungen** mit Status: Offen, Zugeteilt, Auftrag angelegt, Abgeholt, Warteliste, Storniert. Stornierte und Wartelisten-Einträge zählen nicht zur Vorbestellsumme.
 - **Zuteilung** per Vorschlag: proportional (Reststücke nach größtem Rest, bei Gleichstand die frühere Bestellung) oder nach Bestelldatum.

@@ -70,7 +70,7 @@ const relTxt = r => /^\d{4}-\d{2}-\d{2}$/.test(r||"") ? fmtDate(r) : (r || "offe
 const sortOrders = (a,b) => (a.date||"9999").localeCompare(b.date||"9999") || (a.createdAt||"").localeCompare(b.createdAt||"") || a.id.localeCompare(b.id);
 
 // ---------- Zuteilung: proportional mit Restverteilung (größter Rest, bei Gleichstand frühere Bestellung) oder nach Eingang
-function suggest(p, mode){
+function suggest(p, mode, noFlex){
   const os = ordersOf(p.id).filter(o=>o.status!=="Storniert" && o.status!=="Warteliste" && (o.qty||0)>0).sort(sortOrders);
   const fixed = os.filter(o=>LOCKED.has(o.status)); const flex = os.filter(o=>!LOCKED.has(o.status));
   let avail = (num(p.received)||0) - fixed.reduce((s,o)=>s+(o.alloc||0),0);
@@ -84,6 +84,7 @@ function suggest(p, mode){
     rest.sort((x,y)=> y.r-x.r || x.i-y.i);
     for (const {o} of rest){ if(used>=avail) break; if(res[o.id]<o.qty){ res[o.id]++; used++; } }
   }
+  if (noFlex) return res;
   // Was übrig bleibt, geht an „egal welches“-Bestellungen der Serie (nach Bestelldatum)
   let left = avail - Object.values(res).reduce((a,b)=>a+b,0);
   for (const o of flexOf(p.id).filter(o=>o.status==="Offen" && (o.qty||0)>0).sort(sortOrders)){ if(left<=0) break; const g=Math.min(o.qty,left); res[o.id]=g; left-=g; }
@@ -101,7 +102,7 @@ const newId = p => p + Date.now().toString(36) + Math.random().toString(36).slic
 
 // ---------- views
 const h0=()=>(location.hash||"#produkte").slice(1);
-function route(){ const h=(location.hash||"#produkte").slice(1); document.querySelectorAll("#nav a").forEach(a=>{const v=a.dataset.v; a.classList.toggle("on", h===v || (v==="produkte"&&h.startsWith("produkt-")) || (v==="kunden"&&h.startsWith("kunde-")));}); render(); }
+function route(){ const h=(location.hash||"#produkte").slice(1); document.querySelectorAll("#nav a").forEach(a=>{const v=a.dataset.v; a.classList.toggle("on", h===v || (v==="produkte"&&(h.startsWith("produkt-")||h.startsWith("serie-"))) || (v==="kunden"&&h.startsWith("kunde-")));}); render(); }
 function render(){
   if (S.err) { app.innerHTML = `<div class="note bad">${esc(S.err)}</div>`; return; }
   if (!(S.loaded.p&&S.loaded.c&&S.loaded.o)) return;
@@ -110,6 +111,7 @@ function render(){
   const keepFocus = document.activeElement && document.activeElement.id; const sel = keepFocus && document.activeElement.selectionStart;
   if (h.startsWith("produkt-")) renderProduct(h.slice(8));
   else if (h.startsWith("kunde-")) renderCustomer(h.slice(6));
+  else if (h.startsWith("serie-")) renderSeries(h.slice(6));
   else if (h==="kunden") renderCustomers();
   else if (h==="dubletten") renderDupes();
   else if (h==="export") renderExport();
@@ -143,7 +145,7 @@ function renderProducts(){
   <div class="row"><input id="pq" class="search" placeholder="Produkt suchen, z. B. OP19" value="${esc(S.pq||"")}"><label class="row muted"><input type="checkbox" id="parch" ${showArch?"checked":""}> Archivierte zeigen</label></div>
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Vorbestellt</th><th class="n">Bestellungen</th><th class="n">Wareneingang</th><th class="n">Zugeteilt</th><th>Deckung</th><th class="n">Frei</th></tr></thead><tbody>
   ${ps.map(p=>{const s=stats(p);const pct=s.rec&&s.pre?Math.min(100,Math.round(s.rec/s.pre*100)):0;return `<tr class="click ${p.archived?"dim":""}" data-go="produkt-${p.id}">
-    <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${seriesOf(p)?`<span class="gtag">Serie ${esc(seriesOf(p))}</span>`:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(archiviert)</span>':""}</td><td>${esc(relTxt(p.release))}</td>
+    <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${seriesOf(p)?` <a class="gtag" href="#serie-${p.id}">Serie ${esc(seriesOf(p))}</a>`:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(archiviert)</span>':""}</td><td>${esc(relTxt(p.release))}</td>
     <td class="n">${s.pre}${s.flex?`<span class="gtag" title="Kunden, denen egal ist, welches Produkt der Serie">+${s.flex} egal</span>`:""}</td><td class="n">${s.n}</td><td class="n">${s.rec??"–"}</td><td class="n">${s.alloc||""}</td>
     <td>${s.rec==null?'<span class="muted">Ware fehlt</span>':`<div class="bar-meter ${s.over?"over":""}" title="${pct}% der Vorbestellung gedeckt"><i style="width:${pct}%"></i></div>`}</td>
     <td class="n" style="${s.over?"color:var(--bad);font-weight:700":""}">${s.free??""}</td></tr>`}).join("") || `<tr><td colspan="8" class="empty">Kein Produkt passt zur Suche.</td></tr>`}
@@ -174,7 +176,7 @@ function renderProduct(pid){
   const sugSum = sug ? Object.values(sug.map).reduce((a,b)=>a+b,0) : 0;
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
-  <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub">${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}</p></div>
+  <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub">${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
    <div class="row"><button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button></div></div>
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
@@ -240,8 +242,8 @@ function bindRows(){
     write("orders",id,patch).then(ok=>ok&&toast("Gespeichert")); });
 }
 
-function orderForm(k, pid, cid){
-  const prods = Object.values(S.products).filter(p=>!p.archived && inGame(p)).sort((a,b)=>gameOf(a).localeCompare(gameOf(b))||a.name.localeCompare(b.name));
+function orderForm(k, pid, cid, only){
+  const prods = Object.values(S.products).filter(p=>!p.archived && (only ? only.includes(p.id) : inGame(p))).sort((a,b)=>gameOf(a).localeCompare(gameOf(b))||a.name.localeCompare(b.name));
   return `<div class="panel"><h2>Neue Bestellung erfassen</h2>
   <form class="form" id="${k}-f">
     ${pid?"":`<label class="wide">Produkt<select id="${k}-p" required><option value="">Produkt wählen</option>${prods.map(p=>`<option value="${p.id}">${S.game==="Alle"?esc(gameOf(p))+" · ":""}${esc(p.name)}</option>`).join("")}</select></label>`}
@@ -282,6 +284,77 @@ function bindOrderForm(k){
     const mode=$("#"+k+"-ml")?.hidden===false ? $("#"+k+"-m").value : "one";
     if(await saveOrder(o, mode, siblings(S.products[pid]).map(x=>x.id))){ toast("Bestellung gespeichert"); f.reset(); $("#"+k+"-d").value=today(); hint.innerHTML=""; }
   };
+}
+
+// ---------- Serie: alle Produkte einer Serie in einer Liste, gemeinsame Zuteilung
+function seriesSuggest(sib, mode){
+  const res = {}; const left = {};
+  for (const p of sib){ const m = suggest(p, mode, true); Object.assign(res, m);
+    const fixedLocked = ordersOf(p.id).filter(o=>LOCKED.has(o.status)).reduce((a,o)=>a+(o.alloc||0),0);
+    left[p.id] = Math.max(0,(num(p.received)||0) - fixedLocked) - Object.values(m).reduce((a,b)=>a+b,0); }
+  const flex = {}; const ids = sib.map(p=>p.id);
+  const fl = Object.values(S.orders).filter(o=>!o.productId && o.status==="Offen" && (o.qty||0)>0 && (o.choices||[]).some(c=>ids.includes(c))).sort(sortOrders);
+  for (const o of fl){ const opts=(o.choices||[]).filter(c=>ids.includes(c)&&left[c]>0).sort((a,b)=>left[b]-left[a]); if(!opts.length) continue;
+    const pid=opts[0]; const g=Math.min(o.qty,left[pid]); flex[o.id]={pid,n:g}; left[pid]-=g; }
+  return { res, flex, left };
+}
+function renderSeries(anyPid){
+  const p0 = S.products[anyPid]; if(!p0){ app.innerHTML=`<a class="back" href="#produkte">← Produkte</a><div class="empty">Diese Serie gibt es nicht mehr.</div>`; return; }
+  const sib = siblings(p0); const ids = sib.map(p=>p.id); const key = "serie:"+seriesOf(p0); const sug = S.sugg[key];
+  const all = Object.values(S.orders).filter(o=>ids.includes(o.productId) || (!o.productId && (o.choices||[]).some(c=>ids.includes(c))));
+  const fstat = S.fstat||"aktiv";
+  // Zeilen: Paare („beide“) zusammenfassen, sonst eine Zeile pro Bestellung
+  const rowsMap = new Map();
+  for (const o of all.sort(sortOrders)){ const k = o.pairId || o.id; if(!rowsMap.has(k)) rowsMap.set(k, []); rowsMap.get(k).push(o); }
+  let rows = [...rowsMap.values()];
+  rows = rows.filter(r => fstat==="alle" || r.some(o => fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat));
+  const wish = r => { const o=r[0]; if(r.length>1||o.pairId) return "beide"; if(!o.productId) return "egal"; if(o.choices) return "egal → "+(S.products[o.productId]?.name||"?"); return "nur "+(S.products[o.productId]?.name||"?"); };
+  const st = sib.map(p=>({p, s:stats(p)}));
+  const cell = (r, pid) => { const o = r.find(x=>x.productId===pid);
+    if (o) return `<td class="n"><input type="number" min="0" data-f="alloc" data-oid="${o.id}" id="sa-${o.id}" value="${o.alloc??""}" title="Bestellt ${o.qty??"?"}"></td>${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.res[o.id]??""}</td>`:""}`;
+    const f = r.find(x=>!x.productId && (x.choices||[]).includes(pid));
+    if (f) return `<td class="n"><input type="number" min="0" data-flex="${f.id}" data-pid="${pid}" id="sf-${f.id}-${pid}" placeholder="–"></td>${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.flex[f.id]?.pid===pid?sug.flex[f.id].n:""}</td>`:""}`;
+    return `<td class="n muted">·</td>${sug?"<td></td>":""}`; };
+  const sugSum = sug ? Object.values(sug.res).reduce((a,b)=>a+b,0)+Object.values(sug.flex).reduce((a,b)=>a+b.n,0) : 0;
+  app.innerHTML = `<a class="back" href="#produkte">← Produkte</a>
+  <div><h1>Serie ${esc(seriesOf(p0))}</h1><p class="sub">${esc(gameOf(p0))} · ${sib.map(p=>`<a class="back" href="#produkt-${p.id}">${esc(p.name)}</a>`).join(" · ")}</p></div>
+  <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">nur dieses</th><th class="n">+ egal</th><th class="n">Wareneingang</th><th class="n">Zugeteilt</th><th class="n">Frei</th></tr></thead><tbody>
+  ${st.map(({p,s})=>`<tr><td><a href="#produkt-${p.id}">${esc(p.name)}</a></td><td class="n">${s.pre}</td><td class="n">${s.flex||""}</td>
+    <td class="n"><input type="number" min="0" data-rec="${p.id}" id="sr-${p.id}" value="${p.received??""}" placeholder="fehlt"></td><td class="n">${s.alloc||""}</td>
+    <td class="n" style="${s.over?"color:var(--bad);font-weight:700":""}">${s.free??""}</td></tr>`).join("")}
+  </tbody></table></div>
+  <div class="panel"><div class="row spread"><h2>Zuteilung für die ganze Serie</h2><div class="row">
+    <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum</option></select>
+    <button id="sug" ${st.some(x=>x.s.rec==null)?"disabled":""}>Vorschlag berechnen</button>
+    ${sug?`<button class="pri" id="apply">Vorschlag übernehmen (${sugSum} Stück)</button><button id="dis">Verwerfen</button>`:""}
+    <button id="close">Zuteilung abschließen</button></div></div>
+    <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
+    ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
+  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
+  <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Kommentar</th></tr></thead><tbody>
+  ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
+    <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n">${o.qty??""}</td><td>${fmtDate(o.date)}</td>
+    <td><select data-rs id="ss-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
+    ${sib.map(p=>cell(r,p.id)).join("")}<td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
+  </tbody></table></div>
+  ${orderForm("se", null, null, ids)}`;
+  app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
+  app.querySelectorAll("input[data-oid]").forEach(el=>el.onchange=()=>write("orders",el.dataset.oid,{alloc:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
+  app.querySelectorAll("input[data-flex]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!v) return; const o=S.orders[el.dataset.flex];
+    write("orders",o.id,{productId:el.dataset.pid,alloc:v,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")}).then(ok=>ok&&toast("Zugeteilt")); });
+  app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const ids2=el.closest("tr").dataset.row.split(","); const v=el.value;
+    await pool(ids2, id=>S.db.collection("orders").doc(id).update(v==="Storniert"?{status:v,alloc:null}:{status:v})); toast("Gespeichert"); });
+  $("#fstat").onchange=e=>{S.fstat=e.target.value;render();};
+  $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[key]){S.sugg[key]=seriesSuggest(sib,S.mode);render();}};
+  $("#sug").onclick=()=>{ S.sugg[key]=seriesSuggest(sib,$("#mode").value); render(); };
+  if (sug){ $("#dis").onclick=()=>{delete S.sugg[key];render();};
+    $("#apply").onclick=async()=>{ $("#apply").disabled=true;
+      const ch=[...Object.entries(sug.res).filter(([id,v])=>S.orders[id]&&S.orders[id].alloc!==v).map(([id,v])=>[id,{alloc:v}]),
+                ...Object.entries(sug.flex).filter(([id])=>S.orders[id]&&!S.orders[id].productId).map(([id,f])=>[id,{productId:f.pid,alloc:f.n,comment:[S.orders[id].comment,`war: ${orderLabel(S.orders[id])}`].filter(Boolean).join(" · ")}])];
+      try{ await pool(ch,([id,pt])=>S.db.collection("orders").doc(id).update(pt)); delete S.sugg[key]; toast(`${ch.length} Zuteilungen gespeichert`); render(); }catch(e){ toast("Fehler: "+(e.message||e.code)); } }; }
+  $("#close").onclick=async()=>{ const ch=all.filter(o=>o.productId&&o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
+    await pool(ch,o=>S.db.collection("orders").doc(o.id).update({status:"Zugeteilt"})); toast(`${ch.length} Bestellungen auf Zugeteilt gesetzt.`); };
+  bindOrderForm("se");
 }
 
 function renderCustomers(){
