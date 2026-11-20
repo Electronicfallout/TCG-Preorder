@@ -208,7 +208,7 @@ function renderProduct(pid){
   const sugSum = sug ? Object.values(sug.map).reduce((a,b)=>a+b,0) : 0;
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
-  <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a> · ${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
+  <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a>${/^https?:\/\//.test(p.etronUrl||"")?` · <a class="back" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">In etron öffnen</a>`:""} · ${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
    <div class="row"><button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button><button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
   ${p.archived?`<div class="note">Dieses Produkt ist archiviert und erscheint nur mit „Archivierte zeigen“ in der Produktliste.</div>`:""}
   <div class="tiles">
@@ -223,7 +223,9 @@ function renderProduct(pid){
   <div class="panel"><h2>Produktdaten</h2>
     <div class="form">
       <label class="wide">Produktname<input id="pd-name" value="${esc(p.name||"")}"></label>
-      <label class="wide">Name in Kundennachrichten<input id="pd-msgName" value="${esc(p.msgName||"")}" placeholder="leer = Produktname, z. B. ${esc(p.name||"")} ohne Artikelnummer"></label>
+      <label>Artikelnummer<input id="pd-articleNo" value="${esc(p.articleNo||"")}" placeholder="etron-Artikelnr."></label>
+      <label class="wide">etron-Link zum Artikel<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="pd-etronUrl" type="url" value="${esc(p.etronUrl||"")}" placeholder="https://… (Adresse aus dem Browser kopieren)" style="flex:1">${/^https?:\/\//.test(p.etronUrl||"")?`<a class="btn" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">Öffnen</a>`:""}</span></label>
+      <label class="wide">Name in Kundennachrichten<input id="pd-msgName" value="${esc(p.msgName||"")}" placeholder="leer = Produktname (ohne Artikelnummer eintragen)"></label>
       <label>Release<input id="pd-release" value="${esc(p.release||"")}" placeholder="JJJJ-MM-TT, Q2 2027"></label>
       <label>Serie<input id="pd-series" value="${esc(p.series||"")}" placeholder="z. B. Mega Evolution"></label>
       <label>Spiel<select id="pd-game">${GAMES.map(g=>`<option ${g===gameOf(p)?"selected":""}>${g}</option>`).join("")}</select></label>
@@ -258,7 +260,7 @@ function renderProduct(pid){
   ${orderForm("pr", pid)}`;
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
-  ["name","msgName","release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  ["name","msgName","articleNo","etronUrl","release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
   $("#del").onclick=()=>{ const own=ordersOf(pid), fl=flexOf(pid);
     $("#delc").innerHTML=` <button class="sm danger" id="delok">Ja: Produkt und ${own.length} Bestellungen endgültig löschen</button>`;
@@ -655,8 +657,8 @@ function renderDupes(){
     if(await write("customers",x,{notDupes:[...(a.notDupes||[]),y]})) toast("Als verschiedene Kunden markiert"); });
 }
 function exportRows(){ return Object.values(S.orders).filter(o=>o.status==="Zugeteilt"&&(o.alloc||0)>0&&inGame(S.products[o.productId])).sort((a,b)=>(S.customers[a.customerId]?.name||"").localeCompare(S.customers[b.customerId]?.name||"","de")||sortOrders(a,b)); }
-function csv(rows){ const q=v=>{v=String(v??"");return /[;"\n]/.test(v)?`"${v.replace(/"/g,'""')}"`:v}; const head=["etron-Kundennr.","Kunde","Kontakt","Spiel","Produkt","Menge","Bestelldatum","Mitarbeiter","Kommentar","Vorbestell-Nr"];
-  return "﻿"+[head,...rows.map(o=>{const c=S.customers[o.customerId]||{},p=S.products[o.productId]||{};return [c.etronId,c.name,c.contact,gameOf(p),p.name,o.alloc,fmtDate(o.date),o.staff,o.comment,o.id]})].map(r=>r.map(q).join(";")).join("\r\n"); }
+function csv(rows){ const q=v=>{v=String(v??"");return /[;"\n]/.test(v)?`"${v.replace(/"/g,'""')}"`:v}; const head=["etron-Kundennr.","Kunde","Kontakt","Spiel","Artikelnummer","Produkt","Menge","Bestelldatum","Mitarbeiter","Kommentar","Vorbestell-Nr"];
+  return "﻿"+[head,...rows.map(o=>{const c=S.customers[o.customerId]||{},p=S.products[o.productId]||{};return [c.etronId,c.name,c.contact,gameOf(p),p.articleNo,p.name,o.alloc,fmtDate(o.date),o.staff,o.comment,o.id]})].map(r=>r.map(q).join(";")).join("\r\n"); }
 async function backup(){
   const strip=m=>Object.values(m).map(x=>({...x}));
   const data=JSON.stringify({format:"vorbestellungen-v1",exportedAt:new Date().toISOString(),products:strip(S.products),customers:strip(S.customers),orders:strip(S.orders)},null,1);
@@ -673,7 +675,7 @@ function renderExport(){
   ${Object.keys(byC).some(id=>!S.customers[id]?.etronId)?`<div class="note">${Object.keys(byC).filter(id=>!S.customers[id]?.etronId).length} Kunden haben noch keine etron-Nr. Bitte vor dem Anlegen der Aufträge unter Kunden eintragen.</div>`:""}
   <div class="row"><button class="pri" id="dl" ${rows.length?"":"disabled"}>CSV herunterladen</button><button id="cp" ${rows.length?"":"disabled"}>Als Text kopieren</button><button id="mk" ${rows.length&&S.canWrite?"":"disabled"}>Alle als „Auftrag angelegt“ markieren</button><span id="mkc"></span></div>
   ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2><a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
-    <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th><th>Nachricht</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
+    <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th><th>Nachricht</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}${S.products[o.productId]?.articleNo?` <span class="muted">Art.-Nr. ${esc(S.products[o.productId].articleNo)}</span>`:""}${/^https?:\/\//.test(S.products[o.productId]?.etronUrl||"")?` <a href="${esc(S.products[o.productId].etronUrl)}" target="_blank" rel="noopener">etron</a>`:""}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
   <div class="panel"><h2>Gesamtsicherung</h2><p class="muted">Alle Produkte, Kunden und Bestellungen als eine JSON-Datei, z. B. für den Umzug in die Dropbox.</p><div class="row"><button id="bk">Alle Daten exportieren (JSON)</button></div></div>
   <textarea id="ta" hidden rows="6" style="width:100%"></textarea>`;
   $("#bk").onclick=backup; bindAuftrag();
@@ -694,7 +696,7 @@ const LOG_DIR = "protokoll";
 const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
 const FIELD = { status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
-  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten" };
+  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronUrl: "etron-Link" };
 const LOG_SKIP = new Set(["updatedAt", "createdAt", "notDupes", "pairId", "order", "hidden"]);
 function logVal(k, v){
   if (v == null || v === "") return "–";
