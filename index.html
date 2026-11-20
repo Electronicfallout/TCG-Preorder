@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TCG Vorbestellungen</title>
+<meta name="theme-color" content="#1d4ed8">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="css/app.css">
+<style>html{color-scheme:light}body{margin:0;font-family:system-ui,sans-serif}[hidden]{display:none!important}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}</style>
+</head>
+<body>
+<header class="bar"><div class="wrap">
+  <div class="brand">Vorbestellungen <small>TCG</small></div>
+  <div class="games" id="games" role="group" aria-label="Spiel"></div>
+  <nav id="nav">
+    <a href="#produkte" data-v="produkte">Produkte</a>
+    <a href="#kunden" data-v="kunden">Kunden</a>
+    <a href="#dubletten" data-v="dubletten">Dubletten</a>
+    <a href="#export" data-v="export">etron-Export</a>
+    <a href="#einstellungen" data-v="einstellungen">Einstellungen</a>
+  </nav>
+  <span class="sync" id="sync" title="Speicherstatus"><i></i><span>–</span></span>
+  <label class="staff" for="staff">Kürzel <input id="staff" maxlength="4" placeholder="JF"></label>
+</div></header>
+<main class="wrap" id="app"><div class="empty">App wird geladen.</div></main>
+<div class="toast" id="toast" hidden></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

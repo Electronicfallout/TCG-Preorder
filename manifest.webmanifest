@@ -1,0 +1,12 @@
+{
+  "name": "TCG Vorbestellungen",
+  "short_name": "Vorbestellungen",
+  "description": "Vorbestellungen und Zuteilungen für One Piece, Pokémon und Riftbound",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#1d4ed8",
+  "lang": "de",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

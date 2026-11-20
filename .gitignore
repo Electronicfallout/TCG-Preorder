@@ -1,0 +1,8 @@
+# Kundendaten gehören NIE ins Repository, nur in die Dropbox.
+*.json
+!manifest.webmanifest
+*.xlsx
+*.xls
+*.csv
+daten/
+.DS_Store
