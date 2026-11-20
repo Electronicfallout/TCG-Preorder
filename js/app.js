@@ -64,6 +64,10 @@ const nameMatch = (q, c) => { const w=norm(q).split(" ").filter(Boolean); if(!w.
 const oqInput = () => `<input id="oq" type="search" class="search" placeholder="Kunde suchen (Vor-/Nachname)" value="${esc(S.oq||"")}" style="width:220px">`;
 function bindOq(){ const el=$("#oq"); if(el) el.oninput=e=>{S.oq=e.target.value;render();}; }
 const custByName = n => Object.values(S.customers).find(c => norm(c.name)===norm(n));
+// Vor-/Nachname: gespeichert in firstName/lastName; ältere Kunden haben nur name (dann: erstes Wort = Vorname, ungeprüft)
+const nameChecked = c => !!(c && c.firstName);
+const nameParts = c => { if (nameChecked(c)) return { first: c.firstName, last: c.lastName || "" }; const t=(c?.name||"").trim().split(/\s+/); return { first: t[0]||"", last: t.slice(1).join(" ") }; };
+const custByParts = (fn, ln) => { const a=norm(fn+" "+ln), b=norm(ln+" "+fn); return Object.values(S.customers).find(c => { const n=norm(c.name); return n===a || n===b; }); };
 
 // ---------- derived numbers
 function ordersOf(pid){ return Object.values(S.orders).filter(o=>o.productId===pid); }
@@ -342,11 +346,11 @@ const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag",
 const fmtTag = d => d ? WEEKDAYS[new Date(d+"T12:00:00").getDay()]+", "+fmtDate(d) : "";
 const spielOf = os => [...new Set(os.map(o=>gameOf(S.products[o.productId||(o.choices||[])[0]])))].join(" und ");
 function fillTemplate(text, os, tag){
-  const o=os[0], c=S.customers[o.customerId]||{}; const parts=(c.name||"").trim().split(/\s+/);
+  const o=os[0], c=S.customers[o.customerId]||{}; const np=nameParts(c);
   const mn=id=>{ const p=S.products[id]; return p?(p.msgName||p.name):"?"; };
   const prod=os.map(x=>x.productId?mn(x.productId):(x.choices||[]).map(mn).join(" oder ")).join(" und ");
   const menge=os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ");
-  const map={ Vorname: parts[0]||"", Nachname: parts.slice(1).join(" "), Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
+  const map={ Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
   return text.replace(/\{(\w+)\}/g, (m,k)=> k in map ? map[k] : m);
 }
 function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]+@[^\s·,;]+/)||[])[0]||"";
@@ -363,7 +367,7 @@ function msgDialog(ids){
     <div class="row spread"><h2 id="msgh">Nachricht an ${esc(c.name||"Kunde")}</h2><span class="muted">${esc(c.contact||"kein Kontakt hinterlegt")}</span></div>
     <label class="form" style="grid-template-columns:1fr"><span class="muted">Vorlage</span><select id="m-t">${tpls.map(t=>`<option value="${t.id}" ${t.id===cur?.id?"selected":""}>${esc(t.name)}</option>`).join("")}<option value="">Eigene Nachricht</option></select></label>
     <label class="form" style="grid-template-columns:1fr"><span class="muted">Abholbar ab {Tag}</span><input type="date" id="m-d" value="${tag}"></label>
-    <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os,tag):`Hallo ${firstName(c.name)},\n\n\nLiebe Grüße\nHive Games\n${staffName()}`)}</textarea>
+    <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os,tag):`Hallo ${nameParts(c).first},\n\n\nLiebe Grüße\nHive Games\n${staffName()}`)}</textarea>
     ${!staff()?`<div class="note">Tipp: oben dein Kürzel eintragen, dann wird {Mitarbeiter} mit deinem Vornamen ausgefüllt.</div>`:staffRec()?"":`<div class="note">Kürzel „${esc(staff())}“ ist noch nicht unter Einstellungen → Mitarbeiter angelegt.</div>`}
     <div class="row"><button class="pri" id="m-c">Kopieren</button>
       ${cp.wa?`<a class="btn" id="m-w" href="#" target="_blank" rel="noopener">WhatsApp öffnen</a>`:""}
@@ -462,7 +466,7 @@ function orderForm(k, pid, cid, only){
   return `<div class="panel"><h2>Neue Bestellung erfassen</h2>
   <form class="form" id="${k}-f">
     ${pid?"":`<label class="wide">Produkt<select id="${k}-p" required><option value="">Produkt wählen</option>${prods.map(p=>`<option value="${p.id}">${S.game==="Alle"?esc(gameOf(p))+" · ":""}${esc(p.name)}</option>`).join("")}</select></label>`}
-    ${cid?"":`<label class="wide">Kunde<input id="${k}-c" list="${k}-cl" required autocomplete="off" placeholder="Vorname Nachname"><datalist id="${k}-cl">${Object.values(S.customers).map(c=>`<option value="${esc(c.name)}">`).join("")}</datalist></label>`}
+    ${cid?"":`<label>Vorname<input id="${k}-fn" required autocomplete="off" placeholder="Vorname"></label><label>Nachname<input id="${k}-ln" required autocomplete="off" placeholder="Nachname"></label>`}
     <label class="wide" id="${k}-ml" hidden>Bei dieser Serie<select id="${k}-m"></select></label>
     <label>Menge (Stück)<input id="${k}-q" type="number" min="1" required></label>
     <label>Bestelldatum<input id="${k}-d" type="date" value="${today()}"></label>
@@ -479,11 +483,14 @@ async function saveOrder(o, mode, sib){
   return write("orders",newId("o"),o,"set");
 }
 function bindOrderForm(k){
-  const f=$("#"+k+"-f"); if(!f) return; const ci=$("#"+k+"-c"), hint=$("#"+k+"-hint");
-  const check=()=>{ if(!ci) return; const n=ci.value.trim(); if(!n||custByName(n)){hint.innerHTML="";return;}
-    const d=Object.values(S.customers).filter(c=>similar(c.name,n)); hint.innerHTML = d.length?`<div class="note">„${esc(n)}“ ist neu. Meinst du ${d.map(c=>`<button type="button" class="sm" data-n="${esc(c.name)}">${esc(c.name)}</button>`).join(" ")}? Sonst wird ein neuer Kunde angelegt.</div>`:`<p class="muted">Neuer Kunde „${esc(n)}“ wird angelegt.</p>`;
-    hint.querySelectorAll("[data-n]").forEach(b=>b.onclick=()=>{ci.value=b.dataset.n;check();}); };
-  if(ci) ci.oninput=check;
+  const f=$("#"+k+"-f"); if(!f) return; const fi=$("#"+k+"-fn"), li=$("#"+k+"-ln"), hint=$("#"+k+"-hint");
+  const check=()=>{ if(!fi) return; const fn=fi.value.trim(), ln=li.value.trim(), n=(fn+" "+ln).trim(); if(!n){hint.innerHTML="";return;}
+    const ex=fn&&ln?custByParts(fn,ln):null;
+    if(ex){ hint.innerHTML=`<p class="muted">Bestehender Kunde: <b>${esc(ex.name)}</b>${norm(ex.name)!==norm(n)?" (Vor- und Nachname waren vertauscht)":""}. Die Bestellung kommt zu diesem Kunden.</p>`; return; }
+    const d=Object.values(S.customers).filter(c=>similar(c.name,n) || (ln && norm(nameParts(c).last)===norm(ln) && fn && norm(nameParts(c).first).startsWith(norm(fn).slice(0,2))) || (fn && ln && norm(nameParts(c).first)===norm(ln) && norm(nameParts(c).last)===norm(fn))).slice(0,6);
+    hint.innerHTML = d.length?`<div class="note">„${esc(n)}“ ist neu. Meinst du ${d.map(c=>`<button type="button" class="sm" data-cid="${c.id}">${esc(c.name)}</button>`).join(" ")}? Sonst wird ein neuer Kunde angelegt.</div>`:(fn&&ln?`<p class="muted">Neuer Kunde: Vorname „${esc(fn)}“, Nachname „${esc(ln)}“.</p>`:"");
+    hint.querySelectorAll("[data-cid]").forEach(b=>b.onclick=()=>{ const pp=nameParts(S.customers[b.dataset.cid]); fi.value=pp.first; li.value=pp.last; S.pickCust=b.dataset.cid; check();}); };
+  if(fi){ fi.oninput=()=>{S.pickCust=null;check();}; li.oninput=()=>{S.pickCust=null;check();}; }
   const curPid=()=>{ const h=(location.hash||"").slice(1); return h.startsWith("produkt-")?h.slice(8):($("#"+k+"-p")?.value||""); };
   const modeUi=()=>{ const p=S.products[curPid()]; const sib=siblings(p); const ml=$("#"+k+"-ml"); if(!ml) return;
     ml.hidden = sib.length<2; if(sib.length<2) return;
@@ -494,7 +501,9 @@ function bindOrderForm(k){
     const h=(location.hash||"").slice(1); const pid=h.startsWith("produkt-")?h.slice(8):$("#"+k+"-p").value; if(!pid) return toast("Bitte Produkt wählen.");
     let cid = h.startsWith("kunde-")?h.slice(6):null;
     if(needStaff()) return;
-    if(!cid){ const n=ci.value.trim(); const ex=custByName(n); if(ex) cid=ex.id; else { cid=newId("c"); if(!await write("customers",cid,{name:n,contact:"",note:""},"set")) return; } }
+    if(!cid){ const fn=fi.value.trim(), ln=li.value.trim(); if(!fn||!ln) return toast("Bitte Vor- und Nachname eintragen.");
+      const ex=(S.pickCust&&S.customers[S.pickCust])||custByParts(fn,ln);
+      if(ex) cid=ex.id; else { cid=newId("c"); if(!await write("customers",cid,{name:fn+" "+ln,firstName:fn,lastName:ln,contact:"",note:""},"set")) return; } S.pickCust=null; }
     const o={productId:pid,customerId:cid,qty:num($("#"+k+"-q").value),date:$("#"+k+"-d").value,staff:staff(),status:$("#"+k+"-s").value,alloc:null,comment:$("#"+k+"-k").value.trim(),createdAt:new Date().toISOString()};
     const mode=$("#"+k+"-ml")?.hidden===false ? $("#"+k+"-m").value : "one";
     if(await saveOrder(o, mode, siblings(S.products[pid]).map(x=>x.id))){ toast("Bestellung gespeichert"); f.reset(); $("#"+k+"-d").value=today(); hint.innerHTML=""; }
@@ -576,16 +585,17 @@ function renderSeries(anyPid){
 function renderCustomers(){
   const q=norm(S.cq||""); const onlyD=S.cdup;
   const counts={}; Object.values(S.orders).forEach(o=>{ const c=counts[o.customerId]||(counts[o.customerId]={n:0,open:0}); if(COUNTS(o.status)){c.n++; if(o.status==="Offen"||o.status==="Zugeteilt") c.open+=(o.alloc||o.qty||0);} });
-  const cs=Object.values(S.customers).map(c=>({...c,d:dupesOf(c)})).filter(c=>(!q||nameMatch(q,c)||String(c.etronId||"").includes(S.cq.trim())) && (!onlyD||c.d.length) && (!S.cnoe||!c.etronId)).sort((a,b)=>a.name.localeCompare(b.name,"de"));
+  const cs=Object.values(S.customers).map(c=>({...c,d:dupesOf(c)})).filter(c=>(!q||nameMatch(q,c)||String(c.etronId||"").includes(S.cq.trim())) && (!onlyD||c.d.length) && (!S.cnoe||!c.etronId) && (!S.cunc||!nameChecked(c))).sort((a,b)=>a.name.localeCompare(b.name,"de"));
   const dn=Object.values(S.customers).filter(c=>dupesOf(c).length).length;
   app.innerHTML=`<div><h1>Kunden</h1><p class="sub">${Object.keys(S.customers).length} Kunden, davon ${Object.values(S.customers).filter(c=>!c.etronId).length} ohne etron-Nr. ${dn?`${dn} sehen nach Dublette aus: <a class="back" href="#dubletten">jetzt prüfen</a>.`:""}</p></div>
-  <div class="row"><input id="cq" class="search" placeholder="Kunde suchen" value="${esc(S.cq||"")}"><label class="row muted"><input type="checkbox" id="cdup" ${onlyD?"checked":""}> Nur mögliche Dubletten</label><label class="row muted"><input type="checkbox" id="cnoe" ${S.cnoe?"checked":""}> Nur ohne etron-Nr.</label></div>
+  <div class="row"><input id="cq" class="search" placeholder="Kunde suchen" value="${esc(S.cq||"")}"><label class="row muted"><input type="checkbox" id="cdup" ${onlyD?"checked":""}> Nur mögliche Dubletten</label><label class="row muted"><input type="checkbox" id="cnoe" ${S.cnoe?"checked":""}> Nur ohne etron-Nr.</label><label class="row muted"><input type="checkbox" id="cunc" ${S.cunc?"checked":""}> Vor-/Nachname ungeprüft (${Object.values(S.customers).filter(c=>!nameChecked(c)).length})</label></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>etron-Nr.</th><th>Kontakt</th><th class="n">Bestellungen</th><th class="n">Stück offen</th><th>Ähnlich</th></tr></thead><tbody>
   ${cs.map(c=>`<tr class="click" data-go="kunde-${c.id}"><td><a href="#kunde-${c.id}">${esc(c.name)}</a></td><td><input data-cf="${c.id}" id="e-${c.id}" style="width:110px" value="${esc(c.etronId||"")}" placeholder="fehlt"></td><td>${esc(c.contact||"")}</td><td class="n">${counts[c.id]?.n||0}</td><td class="n">${counts[c.id]?.open||""}</td><td>${c.d.map(x=>esc(x.name)).join(", ")}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Kein Kunde gefunden.</td></tr>`}
   </tbody></table></div>`;
   $("#cq").oninput=e=>{S.cq=e.target.value;render();};
   $("#cdup").onchange=e=>{S.cdup=e.target.checked;renderCustomers();};
   $("#cnoe").onchange=e=>{S.cnoe=e.target.checked;renderCustomers();};
+  $("#cunc").onchange=e=>{S.cunc=e.target.checked;renderCustomers();};
   app.querySelectorAll("[data-cf]").forEach(el=>{ el.onclick=e=>e.stopPropagation(); el.onchange=()=>saveEtron(el.dataset.cf, el.value); });
   app.querySelectorAll("tr[data-go]").forEach(tr=>tr.onclick=e=>{ if(e.target.tagName!=="A") location.hash=tr.dataset.go; });
 }
@@ -598,8 +608,10 @@ function renderCustomer(cid){
   app.innerHTML=`<a class="back" href="#kunden">← Kunden</a>
   <div><h1>${esc(c.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(c.name)}">Verlauf</a> · ${os.length} Bestellungen${pickup.length?` · ${pickup.reduce((s,o)=>s+o.alloc,0)} Stück bereit zur Abholung`:""}</p></div>
   ${d.length?`<div class="note">Ähnliche Schreibweise: ${d.map(x=>`<a href="#kunde-${x.id}">${esc(x.name)}</a>`).join(", ")}. Falls es dieselbe Person ist, unten zusammenführen.</div>`:""}
-  <div class="panel"><h2>Kundendaten</h2><div class="form">
-    <label>Name<input id="cd-name" value="${esc(c.name)}"></label>
+  <div class="panel"><h2>Kundendaten</h2>${nameChecked(c)?"":`<div class="note">Vor- und Nachname wurden automatisch aufgeteilt. Bitte prüfen und mit „Stimmt so“ bestätigen, oder mit „Vertauschen“ bzw. direkt im Feld korrigieren.</div>`}<div class="form">
+    <label>Vorname<input id="cd-fn" value="${esc(nameParts(c).first)}"></label>
+    <label>Nachname<input id="cd-ln" value="${esc(nameParts(c).last)}"></label>
+    <label><span>&nbsp;</span><span class="row" style="gap:6px"><button type="button" class="sm" id="cd-swap">⇄ Vertauschen</button>${nameChecked(c)?"":`<button type="button" class="sm pri" id="cd-ok">Stimmt so</button>`}</span></label>
     <label>etron-Kundennr.<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
@@ -614,7 +626,13 @@ function renderCustomer(cid){
     <p class="muted">Alle Bestellungen von „${esc(c.name)}“ wandern zum gewählten Kunden, danach wird „${esc(c.name)}“ gelöscht.</p>
     <div class="row"><select id="mt"><option value="">Ziel-Kunde wählen</option>${[...d,...others.filter(x=>!d.includes(x))].map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>
     <button id="mg" class="danger" ${S.canWrite?"":"disabled"}>Zusammenführen</button><span id="mgc"></span></div></div>`;
-  ["name","contact","note"].forEach(f=>{ const el=$("#cd-"+f); el.onchange=()=>{ const v=el.value.trim(); if(f==="name"&&!v) return; write("customers",cid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  ["contact","note"].forEach(f=>{ const el=$("#cd-"+f); el.onchange=()=>{ const v=el.value.trim(); write("customers",cid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  const saveName=(fn,ln)=>{ fn=fn.trim(); ln=ln.trim(); if(!fn) return toast("Vorname darf nicht leer sein.");
+    const dup=custByParts(fn,ln); if(dup&&dup.id!==cid) toast(`Achtung: „${dup.name}“ gibt es schon. Bitte unten zusammenführen.`);
+    write("customers",cid,{firstName:fn,lastName:ln,name:(fn+" "+ln).trim()}).then(ok=>ok&&!(dup&&dup.id!==cid)&&toast("Name gespeichert")); };
+  $("#cd-fn").onchange=$("#cd-ln").onchange=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
+  $("#cd-swap").onclick=()=>saveName($("#cd-ln").value,$("#cd-fn").value);
+  if($("#cd-ok")) $("#cd-ok").onclick=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
   $("#cd-etronId").onchange=e=>saveEtron(cid,e.target.value);
   bindRows(); bindOrderForm("cu");
   $("#mg").onclick=()=>{ const t=$("#mt").value; if(!t) return toast("Bitte Ziel-Kunde wählen."); const tn=S.customers[t].name;
@@ -704,7 +722,7 @@ function showText(t){ const ta=$("#ta"); ta.hidden=false; ta.value=t; ta.focus()
 // ---------- Änderungsprotokoll: pro Monat eine Datei protokoll/JJJJ-MM.json in der Dropbox
 const LOG_DIR = "protokoll";
 const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
-const FIELD = { status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
+const FIELD = { firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
   archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronUrl: "etron-Link" };
 const LOG_SKIP = new Set(["updatedAt", "createdAt", "notDupes", "pairId", "order", "hidden"]);
@@ -855,7 +873,7 @@ const WIKI = [
     <li><b>Anlegen</b> klicken. Die Produktseite öffnet sich.</li></ol>
     <p>Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Gehören zwei Produkte zu einem Doppel-Release, auf beiden Produktseiten unter <b>Produktdaten</b> dieselbe <b>Serie</b> eintragen. Dann gibt es eine gemeinsame Liste („Ganze Serie zuteilen“).</p>`],
   ["Vorbestellung aufnehmen (und neuen Kunden anlegen)", `<ol><li>Produkt in der Liste anklicken (oder einen Kunden unter <b>Kunden</b> öffnen).</li>
-    <li>Unten bei „Neue Bestellung erfassen“ den Kundennamen als <b>Vorname Nachname</b> eintippen. Ist der Kunde schon da, erscheint er zur Auswahl. Bitte dann den vorhandenen Namen anklicken, damit keine Doppelten entstehen.</li>
+    <li>Unten bei „Neue Bestellung erfassen“ <b>Vorname</b> und <b>Nachname</b> in die eigenen Felder eintragen. Gibt es den Kunden schon (auch mit vertauschtem Vor- und Nachnamen), wird die Bestellung automatisch ihm zugeordnet. Bei ähnlichen Namen erscheint „Meinst du …?“. Dann den vorhandenen Kunden anklicken, damit keine Doppelten entstehen.</li>
     <li>Gibt es den Kunden noch nicht, wird er beim Speichern automatisch angelegt. Ähnliche Namen werden als Hinweis angezeigt („Meinst du …?“).</li>
     <li>Menge, Bestelldatum und eventuell einen Kommentar eintragen. Bei einer Serie wählen: nur dieses Produkt, „egal welches“ oder „beide“.</li>
     <li><b>Speichern</b>.</li></ol>
