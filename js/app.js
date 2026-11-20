@@ -41,6 +41,9 @@ function similar(a,b){
   const sa=na.split(" ").sort().join(" "), sb=nb.split(" ").sort().join(" ");
   if (sa===sb || lev(sa,sb)<=2) return true;
   const ta=na.split(" "), tb=nb.split(" ");
+  // Doppelnamen: „Max Muster-Beispiel“ ~ „Max Muster“ (alle Teile des kürzeren Namens kommen im längeren vor)
+  const [sh,lo]=ta.length<=tb.length?[ta,tb]:[tb,ta];
+  if (sh.length>1 && sh.every(t=>lo.some(u=>u===t||(t.length>3&&lev(t,u)<=1)))) return true;
   const lastA=ta[ta.length-1], lastB=tb[tb.length-1];
   return ta.length>1 && tb.length>1 && (lastA===lastB || ta[0]===tb[0] && lev(lastA,lastB)<=1) && (ta[0].startsWith(tb[0])||tb[0].startsWith(ta[0])||ta.includes(lastB)&&tb.includes(lastA));
 }
