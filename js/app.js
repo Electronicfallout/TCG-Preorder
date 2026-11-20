@@ -28,6 +28,7 @@ const GAMES = ["One Piece","Pokémon","Riftbound"];
 const gameOf = p => p?.game || "One Piece";
 S.game = store("game") || "Alle"; if (S.game!=="Alle" && !GAMES.includes(S.game)) S.game="Alle";
 const inGame = p => S.game==="Alle" || gameOf(p)===S.game;
+function setGame(g){ S.game=g; store("game",g); drawGames(); render(); }
 function drawGames(){ const g=$("#games"); g.innerHTML=["Alle",...GAMES].map(x=>`<button type="button" class="${x===S.game?"on":""}" data-g="${x}">${x}</button>`).join("");
   g.querySelectorAll("button").forEach(b=>b.onclick=()=>{ S.game=b.dataset.g; store("game",S.game); drawGames(); render(); }); }
 drawGames();
@@ -143,6 +144,7 @@ function renderProducts(){
     <div class="tile ${tot.over?"bad":""}"><b>${tot.over}</b><span>überzugeteilt</span></div>
   </div>
   <div class="row"><input id="pq" class="search" placeholder="Produkt suchen, z. B. OP19" value="${esc(S.pq||"")}"><label class="row muted"><input type="checkbox" id="parch" ${showArch?"checked":""}> Archivierte zeigen</label></div>
+  ${(()=>{const hid=Object.values(S.products).filter(p=>!p.archived&&!inGame(p)).length; return hid?`<div class="note">${hid} Produkte anderer Spiele sind ausgeblendet. <button class="sm" id="showall">Alle Spiele zeigen</button></div>`:"";})()}
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Vorbestellt</th><th class="n">Bestellungen</th><th class="n">Wareneingang</th><th class="n">Zugeteilt</th><th>Deckung</th><th class="n">Frei</th></tr></thead><tbody>
   ${ps.map(p=>{const s=stats(p);const pct=s.rec&&s.pre?Math.min(100,Math.round(s.rec/s.pre*100)):0;return `<tr class="click ${p.archived?"dim":""}" data-go="produkt-${p.id}">
     <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${seriesOf(p)?` <a class="gtag" href="#serie-${p.id}">Serie ${esc(seriesOf(p))}</a>`:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(archiviert)</span>':""}</td><td>${esc(relTxt(p.release))}</td>
@@ -159,6 +161,7 @@ function renderProducts(){
       <button class="pri" ${S.canWrite?"":"disabled"}>Anlegen</button>
     </form><p class="muted">Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Dann zählt jede Variante getrennt.</p></div>`;
   $("#pq").oninput = e => { S.pq=e.target.value; renderProducts(); };
+  const sa=$("#showall"); if(sa) sa.onclick=()=>setGame("Alle");
   $("#parch").onchange = e => { S.parch=e.target.checked; renderProducts(); };
   app.querySelectorAll("tr[data-go]").forEach(tr=>tr.onclick=e=>{ if(e.target.tagName!=="A") location.hash=tr.dataset.go; });
   $("#np").onsubmit = async e => { e.preventDefault(); const name=$("#np-name").value.trim(); if(!name) return;
@@ -519,6 +522,7 @@ function importObj(d){
   if (!d || !Array.isArray(d.products) || !Array.isArray(d.customers) || !Array.isArray(d.orders)) { toast("Diese Datei ist keine Vorbestellungs-Sicherung."); return false; }
   const m = toMaps(d);
   S.doc.update(o => { for (const k of ["products", "customers", "orders"]) o[k] = { ...(o[k] || {}), ...m[k] }; });
+  setGame("Alle");
   toast(`Übernommen: ${d.products.length} Produkte, ${d.customers.length} Kunden, ${d.orders.length} Bestellungen`);
   location.hash = "produkte"; return true;
 }
@@ -632,7 +636,7 @@ function xlDraw(){
       else if (X.rule === "any") { await saveOrder({ ...base, productId: null, qty: Math.max(...it.hit.map(h => h.q)) }, "any", it.hit.map(h => pid[h.i])); n++; }
       else { const g = newId("g"); for (const h of it.hit) { await write("orders", newId("o"), { ...base, productId: pid[h.i], qty: h.q, pairId: g }, "set"); n++; } }
     }
-    S.xl = null; toast(`${n} Bestellungen importiert`); location.hash = "produkte";
+    S.xl = null; setGame("Alle"); toast(`${n} Bestellungen importiert`); location.hash = "produkte";
   };
 }
 
