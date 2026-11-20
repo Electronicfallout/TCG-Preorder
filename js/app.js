@@ -20,11 +20,17 @@ const store = (k,v) => { try { if (v===undefined) return localStorage.getItem(k)
 
 // ---------- Kürzel
 const staffEl = $("#staff"); staffEl.value = store("staff") || "";
-const markStaff = () => staffEl.classList.toggle("need", !staffEl.value.trim());
+function markStaff(){ const v=staffEl.value.toUpperCase().trim(); const known=Object.values(S.staff||{}); const rec=known.find(m=>m.kuerzel===v);
+  staffEl.classList.toggle("need", !v || (known.length>0 && !rec)); staffEl.title = rec ? `Angemeldet als ${rec.name}` : (v && known.length ? "Kürzel nicht angelegt" : ""); }
 staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); store("staff", staffEl.value); markStaff(); });
 staffEl.addEventListener("input", markStaff); markStaff();
 const staff = () => staffEl.value.toUpperCase().trim();
-function needStaff(){ if(staff()) return false; markStaff(); staffEl.focus(); toast("Bitte zuerst oben rechts dein Kürzel eintragen."); return true; }
+function staffRec(k){ return Object.values(S.staff||{}).find(m=>m.kuerzel===(k??staff())); }
+const staffName = () => staffRec()?.name || staff();
+function needStaff(){
+  if(!staff()){ markStaff(); staffEl.focus(); toast("Bitte zuerst oben rechts dein Kürzel eintragen."); return true; }
+  if(Object.keys(S.staff||{}).length && !staffRec()){ staffEl.classList.add("need"); staffEl.focus(); toast(`Kürzel „${staff()}“ ist nicht angelegt. Bitte unter Einstellungen → Mitarbeiter anlegen.`); return true; }
+  return false; }
 
 // ---------- Spiele
 const GAMES = ["One Piece","Pokémon","Riftbound"];
@@ -198,7 +204,7 @@ function renderProduct(pid){
   const s = stats(p); const sug = S.sugg[pid];
   const os = [...ordersOf(pid), ...flexOf(pid)].sort(sortOrders);
   const fstat = S.fstat||"aktiv";
-  const shown = os.filter(o => fstat==="alle" || (fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat));
+  const shown = os.filter(o => fstat==="alle" || (fstat===MSG_OPEN ? msgOpen([o]) : fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat));
   const sugSum = sug ? Object.values(sug.map).reduce((a,b)=>a+b,0) : 0;
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
@@ -234,7 +240,7 @@ function renderProduct(pid){
     ${s.rec==null?'<p class="muted">Erst den Wareneingang eintragen, dann kann ein Vorschlag berechnet werden.</p>':sug?'<p class="muted">Vorschlag steht in der Spalte „Vorschlag“. Noch nichts gespeichert.</p>':'<p class="muted">Zuteilungen können auch direkt in der Tabelle eingetragen werden. Bestellungen mit Status „Auftrag angelegt“ oder „Abgeholt“ bleiben beim Vorschlag unverändert.</p>'}
   </div>
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
-    <select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
+    <select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${shown.map(o=>{const c=S.customers[o.customerId];const d=c?dupesOf(c):[];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a>${!o.productId?` <span class="pill s-Offen" title="${esc(orderLabel(o))}">egal welches</span>`:o.pairId?` <span class="gtag">Teil von „beide“</span>`:""}${d.length?` <span class="pill s-Warteliste" title="Ähnlich: ${esc(d.map(x=>x.name).join(", "))}">Dublette?</span>`:""}</td>
@@ -309,10 +315,16 @@ async function quickCopy(ids){ if(needStaff()) return; const os=ids.map(id=>S.or
   if(!await copyText(fillTemplate(t.text,os))) return toast("Kopieren nicht möglich, bitte über „Nachricht“");
   await markSent(os, t); toast(`„${t.name}“ kopiert und als gesendet markiert`); }
 const TID_BY_NAME = {Abholbereit:"t-abholbereit", Storno:"t-storno", Warteliste:"t-warteliste"};
-function msgClass(n){ if(!n) return "msg-new"; const id=n.tid||TID_BY_NAME[n.template]||""; return id==="t-storno"?"msg-storno":id==="t-warteliste"?"msg-wait":"msg-ok"; }
+const MSG_OPEN = "Nachricht noch nicht gesendet";
+const notifiedTid = n => n ? (n.tid || TID_BY_NAME[n.template] || "") : null;
+// offen = Status braucht eine Nachricht, und die passende (Abholung/Storno/Warteliste) wurde noch nicht gesendet
+function msgOpen(list){ const os=list.filter(o=>o&&["Zugeteilt","Auftrag angelegt","Storniert","Warteliste"].includes(o.status)); if(!os.length) return false;
+  const want=autoTplId(os); const n=os.find(o=>o.notified)?.notified; if(!n) return true;
+  const got=notifiedTid(n); return Object.values(TID_BY_NAME).includes(got) ? got!==want : false; } // eigene Nachricht gilt als gesendet
+function msgClass(n, os){ if(!n || (os && msgOpen(os))) return "msg-new"; const id=notifiedTid(n); return id==="t-storno"?"msg-storno":id==="t-warteliste"?"msg-wait":"msg-ok"; }
 function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
   const q=quickTpl(os);
-  return `<span class="row" style="gap:4px;flex-wrap:nowrap">${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button></span>`; }
+  return `<span class="row" style="gap:4px;flex-wrap:nowrap">${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n, os)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button></span>`; }
 const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
 const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
 const fmtTag = d => d ? WEEKDAYS[new Date(d+"T12:00:00").getDay()]+", "+fmtDate(d) : "";
@@ -321,7 +333,7 @@ function fillTemplate(text, os, tag){
   const o=os[0], c=S.customers[o.customerId]||{}; const parts=(c.name||"").trim().split(/\s+/);
   const prod=os.map(x=>orderLabel(x)).join(" und ");
   const menge=os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ");
-  const map={ Vorname: parts[0]||"", Nachname: parts.slice(1).join(" "), Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staff(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
+  const map={ Vorname: parts[0]||"", Nachname: parts.slice(1).join(" "), Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
   return text.replace(/\{(\w+)\}/g, (m,k)=> k in map ? map[k] : m);
 }
 function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]+@[^\s·,;]+/)||[])[0]||"";
@@ -338,8 +350,8 @@ function msgDialog(ids){
     <div class="row spread"><h2 id="msgh">Nachricht an ${esc(c.name||"Kunde")}</h2><span class="muted">${esc(c.contact||"kein Kontakt hinterlegt")}</span></div>
     <label class="form" style="grid-template-columns:1fr"><span class="muted">Vorlage</span><select id="m-t">${tpls.map(t=>`<option value="${t.id}" ${t.id===cur?.id?"selected":""}>${esc(t.name)}</option>`).join("")}<option value="">Eigene Nachricht</option></select></label>
     <label class="form" style="grid-template-columns:1fr"><span class="muted">Abholbar ab {Tag}</span><input type="date" id="m-d" value="${tag}"></label>
-    <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os,tag):`Hallo ${firstName(c.name)},\n\n\nLiebe Grüße\nHive Games\n${staff()}`)}</textarea>
-    ${staff()?"":`<div class="note">Tipp: oben dein Kürzel eintragen, dann wird {Mitarbeiter} ausgefüllt.</div>`}
+    <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os,tag):`Hallo ${firstName(c.name)},\n\n\nLiebe Grüße\nHive Games\n${staffName()}`)}</textarea>
+    ${!staff()?`<div class="note">Tipp: oben dein Kürzel eintragen, dann wird {Mitarbeiter} mit deinem Vornamen ausgefüllt.</div>`:staffRec()?"":`<div class="note">Kürzel „${esc(staff())}“ ist noch nicht unter Einstellungen → Mitarbeiter angelegt.</div>`}
     <div class="row"><button class="pri" id="m-c">Kopieren</button>
       ${cp.wa?`<a class="btn" id="m-w" href="#" target="_blank" rel="noopener">WhatsApp öffnen</a>`:""}
       ${cp.mail?`<a class="btn" id="m-e" href="#">E-Mail öffnen</a>`:""}
@@ -360,9 +372,26 @@ function msgDialog(ids){
   };
   draw();
 }
+function drawStaffList(){ let dl=document.getElementById("staff-dl"); if(!dl){ dl=document.createElement("datalist"); dl.id="staff-dl"; document.body.appendChild(dl); staffEl.setAttribute("list","staff-dl"); }
+  dl.innerHTML=Object.values(S.staff||{}).map(m=>`<option value="${esc(m.kuerzel)}">${esc(m.name||"")}</option>`).join("");
+  markStaff(); }
+function staffPanel(){
+  const list=Object.values(S.staff||{}).sort((a,b)=>a.kuerzel.localeCompare(b.kuerzel));
+  return `<div class="panel"><h2>Mitarbeiter</h2>
+    <p class="muted">Das Kürzel steht intern (Bestellungen, Protokoll), der Vorname wird in Kundennachrichten für {Mitarbeiter} eingesetzt. Sobald Mitarbeiter angelegt sind, funktionieren nur noch diese Kürzel.</p>
+    ${list.length?`<div class="tablebox"><table><thead><tr><th>Kürzel</th><th>Vorname (für Nachrichten)</th><th></th></tr></thead><tbody>${list.map(m=>`<tr><td><b>${esc(m.kuerzel)}</b></td><td><input id="sn-${m.id}" value="${esc(m.name||"")}"></td><td class="nowrap"><button class="sm" data-ssave="${m.id}">Speichern</button> <button class="sm danger" data-sdel="${m.id}">Löschen</button></td></tr>`).join("")}</tbody></table></div>`:`<p>Noch keine Mitarbeiter angelegt.</p>`}
+    <form class="row" id="snew"><input id="snk" maxlength="4" placeholder="Kürzel, z. B. TT" style="width:140px;text-transform:uppercase" required><input id="snn" placeholder="Vorname, z. B. Tommy" style="flex:1 1 200px" required><button class="pri">Mitarbeiter anlegen</button></form></div>`;
+}
+function bindStaff(){
+  const f=$("#snew"); if(f) f.onsubmit=async e=>{ e.preventDefault(); const k=$("#snk").value.toUpperCase().trim(), n=$("#snn").value.trim(); if(!k||!n) return;
+    if(staffRec(k)) return toast(`Kürzel „${k}“ gibt es schon.`);
+    if(await write("staff","s-"+k,{id:"s-"+k,kuerzel:k,name:n},"set")){ toast(`${n} (${k}) angelegt`); if(!staff()){ staffEl.value=k; store("staff",k); markStaff(); } } };
+  app.querySelectorAll("[data-ssave]").forEach(b=>b.onclick=()=>{ const id=b.dataset.ssave; const n=$("#sn-"+id).value.trim(); if(!n) return toast("Vorname fehlt."); write("staff",id,{name:n}).then(ok=>ok&&toast("Gespeichert")); });
+  app.querySelectorAll("[data-sdel]").forEach(b=>b.onclick=()=>{ const id=b.dataset.sdel; b.outerHTML=`<button class="sm danger" id="sdok-${id}">Wirklich löschen?</button>`; $("#sdok-"+id).onclick=()=>write("staff",id,{},"delete"); });
+}
 function templatesPanel(){
   return `<div class="panel"><h2>Nachrichtenvorlagen</h2>
-    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Menge} {Tag} {Mitarbeiter} {Datum}. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
+    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Menge} {Tag} {Mitarbeiter} {Datum}. {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
     ${templates().map(t=>`<div class="panel" style="gap:8px"><div class="row"><input id="tn-${t.id}" value="${esc(t.name)}" style="flex:1 1 200px"><button class="sm" data-tsave="${t.id}">Speichern</button><button class="sm danger" data-tdel="${t.id}">Löschen</button></div>
       <textarea id="tt-${t.id}" rows="7" style="width:100%">${esc(t.text)}</textarea></div>`).join("")}
     <div class="row"><button id="tnew">Neue Vorlage</button></div></div>`;
@@ -480,7 +509,7 @@ function renderSeries(anyPid){
   const rowsMap = new Map();
   for (const o of all.sort(sortOrders)){ const k = o.pairId || o.id; if(!rowsMap.has(k)) rowsMap.set(k, []); rowsMap.get(k).push(o); }
   let rows = [...rowsMap.values()];
-  rows = rows.filter(r => fstat==="alle" || r.some(o => fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat));
+  rows = rows.filter(r => fstat==="alle" || (fstat===MSG_OPEN ? msgOpen(r) : r.some(o => fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat)));
   const wish = r => { const o=r[0]; if(r.length>1||o.pairId) return "beide"; if(!o.productId) return "egal"; if(o.choices) return "egal → "+(S.products[o.productId]?.name||"?"); return "nur "+(S.products[o.productId]?.name||"?"); };
   const st = sib.map(p=>({p, s:stats(p)}));
   const cell = (r, pid) => { const o = r.find(x=>x.productId===pid);
@@ -503,7 +532,7 @@ function renderSeries(anyPid){
     <button id="close">Zuteilung abschließen</button></div></div>
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
-  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
+  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n">${o.qty??""}</td><td>${fmtDate(o.date)}</td>
@@ -659,10 +688,10 @@ function showText(t){ const ta=$("#ta"); ta.hidden=false; ta.value=t; ta.focus()
 // Kleine Hülle mit der Form collection(c).doc(id).set/update/delete, damit die Ansichten unabhängig vom Speicher bleiben.
 // ---------- Änderungsprotokoll: pro Monat eine Datei protokoll/JJJJ-MM.json in der Dropbox
 const LOG_DIR = "protokoll";
-const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage" };
+const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
 const FIELD = { status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
-  archived: "Archiviert", series: "Serie", game: "Spiel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text" };
+  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text" };
 const LOG_SKIP = new Set(["updatedAt", "createdAt", "notDupes", "pairId", "order", "hidden"]);
 function logVal(k, v){
   if (v == null || v === "") return "–";
@@ -689,7 +718,7 @@ function logChange(c, id, b, a){
     }
     if (!ch.length) return; text = ch.join("; ");
   }
-  const name = c === "orders" ? `${S.customers[r.customerId]?.name || "?"} – ${orderLabel(r)}` : (r.name || "");
+  const name = c === "orders" ? `${S.customers[r.customerId]?.name || "?"} – ${orderLabel(r)}` : c === "staff" ? `${r.kuerzel} (${r.name || ""})` : (r.name || "");
   const link = c === "orders" ? (r.customerId ? "#kunde-" + r.customerId : "") : c === "products" ? "#produkt-" + id : c === "customers" ? "#kunde-" + id : "#einstellungen";
   logAdd({ area: AREA[c], ref: id, name, text, link: ad ? "" : link });
 }
@@ -754,7 +783,7 @@ S.downloads = { save: async ({ filename, data }) => saveFile(filename, data) };
 const live = m => Object.fromEntries(Object.entries(m || {}).filter(([, v]) => v && !v.deleted).map(([id, v]) => [id, { id, ...v }]));
 function pull(){
   const o = S.doc.obj || {};
-  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders); S.templates = live(o.templates);
+  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders); S.templates = live(o.templates); S.staff = live(o.staff); drawStaffList();
   S.loaded = { p: true, c: true, o: true };
 }
 const SYNC_TXT = { idle: "–", syncing: "Speichert …", ok: "Gespeichert", offline: "Offline, wird nachgeholt", error: "Fehler beim Speichern" };
@@ -805,7 +834,7 @@ const WIKI = [
   ["So funktioniert das Programm", `<p>Die App ersetzt die Excel-Warteliste. Es gibt drei Dinge: <b>Produkte</b> (z. B. ein Display oder eine ETB), <b>Kunden</b> und <b>Bestellungen</b> (Kunde X möchte Y Stück von Produkt Z).</p>
     <p>Alle Daten liegen in unserer Dropbox und gleichen sich automatisch zwischen allen Geräten ab. Oben rechts siehst du, ob gespeichert ist. Jede Änderung wird mit deinem Kürzel im <a href="#protokoll">Protokoll</a> festgehalten.</p>
     <p>Oben kannst du nach Spiel filtern (One Piece, Pokémon, Riftbound oder Alle).</p>`],
-  ["Bevor du loslegst: Kürzel eintragen", `<p>Trag oben rechts im Feld <b>Kürzel</b> deine Initialen ein (z. B. TT). Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden. Das Kürzel bleibt auf dem Gerät gespeichert. Wenn ein Kollege am selben Gerät arbeitet, muss er es auf sein eigenes ändern.</p>`],
+  ["Bevor du loslegst: Kürzel eintragen", `<p>Jeder Mitarbeiter wird einmal unter Einstellungen → <b>Mitarbeiter</b> mit Kürzel und Vorname angelegt. Der Vorname steht dann unter den Kundennachrichten, das Kürzel intern bei Bestellungen und im Protokoll.</p><p>Trag oben rechts im Feld <b>Kürzel</b> dein Kürzel ein (z. B. TT). Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden. Das Kürzel bleibt auf dem Gerät gespeichert. Wenn ein Kollege am selben Gerät arbeitet, muss er es auf sein eigenes ändern.</p>`],
   ["Neuen Artikel (Produkt) anlegen", `<ol><li>Reiter <b>Produkte</b> öffnen und ganz nach unten zu „Neues Produkt anlegen“ scrollen.</li>
     <li>Produktname eintragen, Spiel wählen, Release (Datum, „Q3 2027“ oder leer) und Einheit (Display, Case, Stück).</li>
     <li><b>Anlegen</b> klicken. Die Produktseite öffnet sich.</li></ol>
@@ -825,7 +854,7 @@ const WIKI = [
   ["Kunden benachrichtigen", `<p>In jeder Bestellzeile gibt es zwei Knöpfe:</p>
     <ul><li><b>📋 Abholung / Storno / Warteliste</b>: kopiert mit einem Klick den passenden Text (mit Spiel, Produkt und Abholdatum heute). In WhatsApp oder SMS einfügen. Die Nachricht gilt danach als gesendet.</li>
     <li><b>Nachricht</b>: öffnet das Fenster zum Anpassen (anderes Abholdatum, andere Vorlage, eigener Text) und kann WhatsApp oder E-Mail direkt öffnen.</li></ul>
-    <p>Farbe des Nachricht-Knopfs: <span class="pill" style="background:#1d4ed8;color:#fff">blau</span> noch nichts gesendet, <span class="pill" style="background:#17803d;color:#fff">grün</span> Abholnachricht gesendet, <span class="pill" style="background:#f5c518;color:#1f1a00">gelb</span> Warteliste, <span class="pill" style="background:#b42318;color:#fff">rot</span> Storno. Die Texte lassen sich unten unter „Nachrichtenvorlagen“ ändern.</p>`],
+    <p>Farbe des Nachricht-Knopfs: <span class="pill" style="background:#1d4ed8;color:#fff">blau</span> noch nichts gesendet, <span class="pill" style="background:#17803d;color:#fff">grün</span> Abholnachricht gesendet, <span class="pill" style="background:#f5c518;color:#1f1a00">gelb</span> Warteliste, <span class="pill" style="background:#b42318;color:#fff">rot</span> Storno. Ändert sich der Status (z. B. von Warteliste auf Zugeteilt), wird der Knopf wieder blau. Im Filter über der Bestellliste zeigt „Nachricht noch nicht gesendet“ alle, die noch eine Nachricht brauchen. Die Texte lassen sich unten unter „Nachrichtenvorlagen“ ändern.</p>`],
   ["Abholung, Storno, Doppelte", `<ul><li>Holt der Kunde ab: Status auf <b>Abgeholt</b> setzen.</li>
     <li>Storniert ein Kunde: Status auf <b>Storniert</b>. Die App fragt dann, ob die frei gewordene Ware an jemand anderen gehen soll.</li>
     <li>Reiter <b>Dubletten</b> zeigt Kunden, die vermutlich doppelt angelegt sind. Dort zusammenführen oder als „Kein Duplikat“ markieren.</li>
@@ -842,6 +871,7 @@ function renderSettings(){
   ${isDb ? `<div class="panel"><h2>Kollegen einladen</h2>
     <p class="muted">Mit diesem Code kann ein weiteres Gerät auf denselben Dropbox-App-Ordner zugreifen (nicht auf den Rest der Dropbox). Nur an Mitarbeiter weitergeben.</p>
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
+  ${staffPanel()}
   ${templatesPanel()}
   <div class="panel"><h2>Sicherung</h2>
     <div class="row"><button id="bk2">Alle Daten herunterladen (JSON)</button></div>
@@ -851,7 +881,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates();
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff();
   $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
@@ -933,7 +963,7 @@ function xlDraw(){
     if (!cols.length) return err("Bitte mindestens eine Produktspalte auf „neu anlegen“ oder ein Produkt stellen.");
     if (!items.length) return err("Keine Zeile hat einen Namen und einen Eintrag in einer Produktspalte.");
     if (cols.length > 1 && !X.series) { $("#xl-s").focus(); return err("Bitte einen Serien-Namen eintragen, z. B. „Mega Evolution“."); }
-    if (!staff()) { staffEl.focus(); return err("Bitte oben rechts dein Kürzel eintragen, dann noch einmal auf Importieren klicken."); }
+    if (needStaff()) return err("Bitte oben rechts ein gültiges Kürzel eintragen, dann noch einmal auf Importieren klicken.");
     $("#xl-go").disabled = true;
     const pid = {};
     for (const i of cols) { const v = X.map[i];
