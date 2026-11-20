@@ -1,7 +1,7 @@
 // TCG Vorbestellungen: Oberfläche und Logik.
 // Daten liegen ausschließlich in der Dropbox (App-Ordner) oder beim Ausprobieren im Browser.
 import { LS, LocalProvider, DropboxProvider, startDropboxLogin, finishDropboxLogin, makeInvite, parseInvite, redirectUri } from './storage.js';
-import { SyncDoc, DATA_PATH, emptyData, now } from './store.js';
+import { SyncDoc, DATA_PATH, emptyData, now, stable, clone } from './store.js';
 import { APP_VERSION } from './version.js';
 
 const STATUSES = ["Offen","Zugeteilt","Auftrag angelegt","Abgeholt","Warteliste","Storniert"];
@@ -20,8 +20,11 @@ const store = (k,v) => { try { if (v===undefined) return localStorage.getItem(k)
 
 // ---------- Kürzel
 const staffEl = $("#staff"); staffEl.value = store("staff") || "";
-staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); store("staff", staffEl.value); });
+const markStaff = () => staffEl.classList.toggle("need", !staffEl.value.trim());
+staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); store("staff", staffEl.value); markStaff(); });
+staffEl.addEventListener("input", markStaff); markStaff();
 const staff = () => staffEl.value.toUpperCase().trim();
+function needStaff(){ if(staff()) return false; markStaff(); staffEl.focus(); toast("Bitte zuerst oben rechts dein Kürzel eintragen."); return true; }
 
 // ---------- Spiele
 const GAMES = ["One Piece","Pokémon","Riftbound"];
@@ -120,6 +123,7 @@ function render(){
   else if (h==="dubletten") renderDupes();
   else if (h==="export") renderExport();
   else if (h==="einstellungen") renderSettings();
+  else if (h==="protokoll") renderLog();
   else renderProducts();
   if (keepFocus){ const el=document.getElementById(keepFocus); if(el){ el.focus(); try{ if(sel!=null) el.setSelectionRange(sel,sel);}catch(e){} } }
 }
@@ -198,7 +202,7 @@ function renderProduct(pid){
   const sugSum = sug ? Object.values(sug.map).reduce((a,b)=>a+b,0) : 0;
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
-  <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub">${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
+  <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a> · ${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
    <div class="row"><button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button><button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
   ${p.archived?`<div class="note">Dieses Produkt ist archiviert und erscheint nur mit „Archivierte zeigen“ in der Produktliste.</div>`:""}
   <div class="tiles">
@@ -274,6 +278,7 @@ function auftragBox(list){
 }
 function bindAuftrag(){
   app.querySelectorAll("[data-msg]").forEach(b=>b.onclick=()=>msgDialog(b.dataset.msg.split(",")));
+  app.querySelectorAll("[data-copy]").forEach(b=>b.onclick=()=>quickCopy(b.dataset.copy.split(",")));
   app.querySelectorAll("[data-auftrag]").forEach(el=>el.onchange=async()=>{ const ids=el.dataset.auftrag.split(","); const on=el.checked;
     ids.forEach(id=>on?S.doneNow.add(id):S.doneNow.delete(id));
     await pool(ids, id=>S.db.collection("orders").doc(id).update({status:on?"Auftrag angelegt":"Zugeteilt"}));
@@ -294,8 +299,20 @@ const DEFAULT_TEMPLATES = [
   { id: "t-warteliste", name: "Warteliste", text: "Hallo {Vorname},\nvon {Produkt} haben wir leider nicht genug für alle Vorbestellungen bekommen. Du stehst auf der Warteliste und wir melden uns, sobald eine Nachlieferung kommt.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
 ];
 function templates(){ const all = Object.values(S.templates||{}); const ids = new Set(all.map(t=>t.id)); const own = all.filter(t=>!t.hidden); return [...own, ...DEFAULT_TEMPLATES.filter(t=>!ids.has(t.id))].sort((a,b)=>(a.order??99)-(b.order??99)||a.name.localeCompare(b.name)); }
+const autoTplId = os => os.find(o=>o.status==="Storniert")?"t-storno":os.find(o=>o.status==="Warteliste")?"t-warteliste":"t-abholbereit";
+const QUICK = {"t-abholbereit":"Abholung","t-storno":"Storno","t-warteliste":"Warteliste"};
+function quickTpl(os){ if(!os.some(o=>["Zugeteilt","Auftrag angelegt","Abgeholt","Storniert","Warteliste"].includes(o.status))) return null; return templates().find(t=>t.id===autoTplId(os))||null; }
+async function copyText(txt){ try{ await navigator.clipboard.writeText(txt); return true; }
+  catch(e){ const ta=document.createElement("textarea"); ta.value=txt; document.body.appendChild(ta); ta.select(); let ok=false; try{ ok=document.execCommand("copy"); }catch(_){} ta.remove(); return ok; } }
+const markSent = (os, t) => pool(os, o=>S.db.collection("orders").doc(o.id).update({notified:{date:today(),template:t?.name||"Eigene Nachricht",tid:t?.id||"",staff:staff()}}));
+async function quickCopy(ids){ if(needStaff()) return; const os=ids.map(id=>S.orders[id]).filter(Boolean); const t=quickTpl(os); if(!t) return;
+  if(!await copyText(fillTemplate(t.text,os))) return toast("Kopieren nicht möglich, bitte über „Nachricht“");
+  await markSent(os, t); toast(`„${t.name}“ kopiert und als gesendet markiert`); }
+const TID_BY_NAME = {Abholbereit:"t-abholbereit", Storno:"t-storno", Warteliste:"t-warteliste"};
+function msgClass(n){ if(!n) return "msg-new"; const id=n.tid||TID_BY_NAME[n.template]||""; return id==="t-storno"?"msg-storno":id==="t-warteliste"?"msg-wait":"msg-ok"; }
 function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
-  return `<button class="sm" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Nachricht an den Kunden"}">${n?"✓ ":""}Nachricht</button>`; }
+  const q=quickTpl(os);
+  return `<span class="row" style="gap:4px;flex-wrap:nowrap">${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button></span>`; }
 const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
 const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
 const fmtTag = d => d ? WEEKDAYS[new Date(d+"T12:00:00").getDay()]+", "+fmtDate(d) : "";
@@ -313,7 +330,7 @@ function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]
   return { mail, tel, wa }; }
 function msgDialog(ids){
   const os=ids.map(id=>S.orders[id]).filter(Boolean); if(!os.length) return; const c=S.customers[os[0].customerId]||{};
-  const tpls=templates(); const st=os.find(o=>o.status==="Storniert")?"t-storno":os.find(o=>o.status==="Warteliste")?"t-warteliste":"t-abholbereit";
+  const tpls=templates(); const st=autoTplId(os);
   let cur=tpls.find(t=>t.id===st)||tpls[0]; let tag=today();
   const box=document.createElement("div"); box.className="modal"; document.body.appendChild(box);
   const cp=contactParts(c);
@@ -334,9 +351,10 @@ function msgDialog(ids){
     ta.oninput=links; links();
     box.querySelector("#m-t").onchange=e=>{ cur=tpls.find(t=>t.id===e.target.value)||null; draw(); };
     box.querySelector("#m-d").onchange=e=>{ tag=e.target.value||today(); if(cur) draw(); };
-    box.querySelector("#m-c").onclick=async()=>{ try{ await navigator.clipboard.writeText(ta.value); toast("Kopiert"); }catch(e){ ta.select(); toast("Text markiert: mit Strg+C kopieren"); } };
-    const mark=async()=>{ const n={date:today(),template:cur?.name||"Eigene Nachricht",staff:staff()}; await pool(os,o=>S.db.collection("orders").doc(o.id).update({notified:n})); toast("Als gesendet markiert"); };
-    box.querySelector("#m-s").onclick=async()=>{ await mark(); box.remove(); };
+    const mark=()=>markSent(os, cur);
+    box.querySelector("#m-c").onclick=async()=>{ if(needStaff()) return; if(await copyText(ta.value)){ await mark(); toast("Kopiert und als gesendet markiert"); } else { ta.select(); toast("Text markiert: mit Strg+C kopieren"); } };
+    for(const sel of ["#m-w","#m-e"]){ const a=box.querySelector(sel); if(a) a.addEventListener("click", e=>{ if(needStaff()){ e.preventDefault(); return; } mark(); }); }
+    box.querySelector("#m-s").onclick=async()=>{ if(needStaff()) return; await mark(); toast("Als gesendet markiert"); box.remove(); };
     box.querySelector("#m-x2").onclick=()=>box.remove();
     box.onclick=e=>{ if(e.target===box) box.remove(); };
   };
@@ -433,7 +451,7 @@ function bindOrderForm(k){
   f.onsubmit=async e=>{ e.preventDefault();
     const h=(location.hash||"").slice(1); const pid=h.startsWith("produkt-")?h.slice(8):$("#"+k+"-p").value; if(!pid) return toast("Bitte Produkt wählen.");
     let cid = h.startsWith("kunde-")?h.slice(6):null;
-    if(!staff()){ staffEl.focus(); return toast("Bitte oben dein Kürzel eintragen."); }
+    if(needStaff()) return;
     if(!cid){ const n=ci.value.trim(); const ex=custByName(n); if(ex) cid=ex.id; else { cid=newId("c"); if(!await write("customers",cid,{name:n,contact:"",note:""},"set")) return; } }
     const o={productId:pid,customerId:cid,qty:num($("#"+k+"-q").value),date:$("#"+k+"-d").value,staff:staff(),status:$("#"+k+"-s").value,alloc:null,comment:$("#"+k+"-k").value.trim(),createdAt:new Date().toISOString()};
     const mode=$("#"+k+"-ml")?.hidden===false ? $("#"+k+"-m").value : "one";
@@ -536,7 +554,7 @@ function renderCustomer(cid){
   const d=dupesOf(c); const others=Object.values(S.customers).filter(x=>x.id!==cid).sort((a,b)=>a.name.localeCompare(b.name,"de"));
   const pickup=os.filter(o=>(o.status==="Zugeteilt"||o.status==="Auftrag angelegt")&&(o.alloc||0)>0);
   app.innerHTML=`<a class="back" href="#kunden">← Kunden</a>
-  <div><h1>${esc(c.name)}</h1><p class="sub">${os.length} Bestellungen${pickup.length?` · ${pickup.reduce((s,o)=>s+o.alloc,0)} Stück bereit zur Abholung`:""}</p></div>
+  <div><h1>${esc(c.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(c.name)}">Verlauf</a> · ${os.length} Bestellungen${pickup.length?` · ${pickup.reduce((s,o)=>s+o.alloc,0)} Stück bereit zur Abholung`:""}</p></div>
   ${d.length?`<div class="note">Ähnliche Schreibweise: ${d.map(x=>`<a href="#kunde-${x.id}">${esc(x.name)}</a>`).join(", ")}. Falls es dieselbe Person ist, unten zusammenführen.</div>`:""}
   <div class="panel"><h2>Kundendaten</h2><div class="form">
     <label>Name<input id="cd-name" value="${esc(c.name)}"></label>
@@ -639,12 +657,91 @@ function showText(t){ const ta=$("#ta"); ta.hidden=false; ta.value=t; ta.focus()
 
 // ---------- Speicher-Anbindung
 // Kleine Hülle mit der Form collection(c).doc(id).set/update/delete, damit die Ansichten unabhängig vom Speicher bleiben.
+// ---------- Änderungsprotokoll: pro Monat eine Datei protokoll/JJJJ-MM.json in der Dropbox
+const LOG_DIR = "protokoll";
+const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage" };
+const FIELD = { status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
+  name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
+  archived: "Archiviert", series: "Serie", game: "Spiel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text" };
+const LOG_SKIP = new Set(["updatedAt", "createdAt", "notDupes", "pairId", "order", "hidden"]);
+function logVal(k, v){
+  if (v == null || v === "") return "–";
+  if (k === "productId") return S.products[v]?.name || v;
+  if (k === "customerId") return S.customers[v]?.name || v;
+  if (k === "choices") return (v || []).map(id => S.products[id]?.name || id).join(" oder ");
+  if (k === "archived") return v ? "ja" : "nein";
+  if (typeof v === "string" && /^\d{4}-\d\d-\d\d$/.test(v)) return fmtDate(v);
+  const t = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return t.length > 60 ? t.slice(0, 57) + "…" : t;
+}
+function logChange(c, id, b, a){
+  if (!AREA[c]) return;
+  const bd = !b || b.deleted, ad = !a || a.deleted || a.hidden; if (bd && ad) return;
+  const r = ad ? b : a; let text;
+  if (bd) text = c === "orders" ? `Neu angelegt: Menge ${r.qty ?? "–"}, Status ${r.status || "–"}` : "Neu angelegt";
+  else if (ad) text = "Gelöscht";
+  else {
+    const ch = [];
+    for (const k of new Set([...Object.keys(b), ...Object.keys(a)])) {
+      if (LOG_SKIP.has(k) || stable(b[k] ?? null) === stable(a[k] ?? null)) continue;
+      if (k === "notified") { if (a[k]) ch.push(`Nachricht „${a[k].template}“ gesendet`); continue; }
+      ch.push(`${FIELD[k] || k}: ${logVal(k, b[k])} → ${logVal(k, a[k])}`);
+    }
+    if (!ch.length) return; text = ch.join("; ");
+  }
+  const name = c === "orders" ? `${S.customers[r.customerId]?.name || "?"} – ${orderLabel(r)}` : (r.name || "");
+  const link = c === "orders" ? (r.customerId ? "#kunde-" + r.customerId : "") : c === "products" ? "#produkt-" + id : c === "customers" ? "#kunde-" + id : "#einstellungen";
+  logAdd({ area: AREA[c], ref: id, name, text, link: ad ? "" : link });
+}
+function openLog(){
+  const m = today().slice(0, 7);
+  if (S.logP?.m !== m) S.logP = { m, p: openLogMonth(m) };
+  return S.logP.p;
+}
+async function openLogMonth(m){
+  try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith("vb.log:") && k !== "vb.log:" + m) localStorage.removeItem(k); } } catch (e) { }
+  const d = new SyncDoc(S.provider, `${LOG_DIR}/${m}.json`, null, "vb.log:" + m);
+  if (!(await d.loadCache())) d.obj = { meta: { version: 1, updatedAt: 0 }, log: {} };
+  let n = -1; d.on(() => { const c = Object.keys(d.obj?.log || {}).length; if (c !== n) { n = c; if (h0() === "protokoll") render(); } });
+  S.log = { m, doc: d }; d.scheduleSync(1500);
+  return d;
+}
+function logAdd(e){
+  const t = now(); const entry = { t, staff: staff() || "?", ...e, updatedAt: t };
+  openLog().then(d => d.update(o => { (o.log ||= {})[newId("l")] = entry; })).catch(err => console.warn("Protokoll", err));
+}
+const lnorm = s => (s || "").toLowerCase().replace(/ß/g, "ss").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+const fmtTime = t => new Date(t).toLocaleString("de-AT", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+S.lg = { m: null, q: "", months: null, data: {} };
+document.addEventListener("click", e => { const a = e.target.closest("[data-logq]"); if (a) { S.lg.q = a.dataset.logq; S.lg.m = null; } });
+function renderLog(){
+  const cur = S.log?.m || today().slice(0, 7); const m = S.lg.m || cur;
+  if (!S.lg.months) { S.lg.months = [cur];
+    S.provider.list(LOG_DIR).then(ns => { S.lg.months = [...new Set([cur, ...ns.filter(x => /^\d{4}-\d\d\.json$/.test(x)).map(x => x.slice(0, 7))])].sort().reverse(); if (h0() === "protokoll") render(); }).catch(() => {}); }
+  let list = m === cur ? Object.values(S.log?.doc.obj?.log || {}) : S.lg.data[m];
+  if (list === undefined) { S.lg.data[m] = null;
+    S.provider.read(`${LOG_DIR}/${m}.json`).then(r => { S.lg.data[m] = Object.values(r?.data?.log || {}); render(); }).catch(e => { S.lg.data[m] = []; toast("Protokoll nicht lesbar: " + e.message); render(); }); }
+  const words = lnorm(S.lg.q).split(/\s+/).filter(Boolean);
+  const rows = (list || []).filter(e => e && !e.deleted).filter(e => { const hay = lnorm([fmtTime(e.t), e.staff, e.area, e.name, e.text].join(" ")); return words.every(w => hay.includes(w)); }).sort((a, b) => b.t - a.t);
+  const MAX = 500;
+  const monthName = k => new Date(k + "-15").toLocaleDateString("de-AT", { month: "long", year: "numeric" });
+  app.innerHTML = `<div class="row spread"><div><h1>Protokoll</h1><p class="sub">Alle Änderungen mit Kürzel und Uhrzeit. Gespeichert pro Monat ${S.provider.kind === "local" ? "in diesem Browser" : "in der Dropbox unter Apps › TCG Preorder › protokoll"}.</p></div></div>
+  <div class="panel"><div class="row"><input id="lq" type="search" placeholder="Suchen: Kunde, Produkt, Kürzel, Status, Datum …" value="${esc(S.lg.q)}" style="flex:1 1 260px">
+    <select id="lm">${S.lg.months.map(k => `<option value="${k}" ${k === m ? "selected" : ""}>${monthName(k)}</option>`).join("")}</select></div>
+  <p class="muted">${list === null ? "Wird geladen …" : `${rows.length} ${rows.length === 1 ? "Eintrag" : "Einträge"}${rows.length > MAX ? `, die neuesten ${MAX} werden angezeigt` : ""}`}</p>
+  <div class="tablebox"><table><thead><tr><th>Zeit</th><th>Kürzel</th><th>Bereich</th><th>Betrifft</th><th>Änderung</th></tr></thead><tbody>
+  ${rows.slice(0, MAX).map(e => `<tr><td class="nowrap">${fmtTime(e.t)}</td><td>${esc(e.staff || "")}</td><td>${esc(e.area || "")}</td><td>${e.link ? `<a href="${esc(e.link)}">${esc(e.name || "")}</a>` : esc(e.name || "")}</td><td>${esc(e.text || "")}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">${list === null ? "" : "Keine Einträge."}</td></tr>`}
+  </tbody></table></div></div>`;
+  $("#lq").oninput = e => { S.lg.q = e.target.value; render(); };
+  $("#lm").onchange = e => { S.lg.m = e.target.value; render(); };
+}
 function makeDb(doc){
+  const logged = (c, id, fn) => { const before = clone(doc.obj?.[c]?.[id]); fn(); try { logChange(c, id, before, doc.obj?.[c]?.[id]); } catch (e) { console.warn("Protokoll", e); } };
   const col = c => ({ doc: id => ({
-    set: async d => doc.update(o => { (o[c] ||= {})[id] = { ...d, updatedAt: now() }; }),
+    set: async d => logged(c, id, () => doc.update(o => { (o[c] ||= {})[id] = { ...d, updatedAt: now() }; })),
     update: async d => { const cur = doc.obj[c]?.[id]; if (!cur || cur.deleted) throw { code: "not_found", message: "Eintrag gibt es nicht mehr" };
-      doc.update(o => { o[c][id] = { ...o[c][id], ...d, updatedAt: now() }; }); },
-    delete: async () => doc.update(o => { (o[c] ||= {})[id] = { deleted: true, updatedAt: now() }; }),
+      logged(c, id, () => doc.update(o => { o[c][id] = { ...o[c][id], ...d, updatedAt: now() }; })); },
+    delete: async () => logged(c, id, () => doc.update(o => { (o[c] ||= {})[id] = { deleted: true, updatedAt: now() }; })),
   }) });
   return { collection: col };
 }
@@ -677,6 +774,7 @@ function importObj(d){
   if (!d || !Array.isArray(d.products) || !Array.isArray(d.customers) || !Array.isArray(d.orders)) { toast("Diese Datei ist keine Vorbestellungs-Sicherung."); return false; }
   const m = toMaps(d);
   S.doc.update(o => { for (const k of ["products", "customers", "orders"]) o[k] = { ...(o[k] || {}), ...m[k] }; });
+  logAdd({ area: "Import", name: "Sicherung", text: `Sicherung eingespielt: ${d.products.length} Produkte, ${d.customers.length} Kunden, ${d.orders.length} Bestellungen` });
   setGame("Alle");
   toast(`Übernommen: ${d.products.length} Produkte, ${d.customers.length} Kunden, ${d.orders.length} Bestellungen`);
   location.hash = "produkte"; return true;
@@ -863,14 +961,15 @@ async function boot(){
     if (key === seen) return; seen = key; pull(); route();
   });
   if (cached) { pull(); route(); }
+  await openLog();
   await S.doc.sync();
   if (!S.doc.obj) {
     if (S.doc.status === "ok") { S.doc.obj = emptyData(); S.doc.dirty = true; await S.doc.sync(); }
     else { app.innerHTML = `<div class="note bad">Dropbox nicht erreichbar: ${esc(S.doc.error || "unbekannter Fehler")}. <button id="rt">Erneut versuchen</button> <a class="back" href="#einstellungen">Einstellungen</a></div>`; $("#rt").onclick = () => location.reload(); return; }
   }
   if (cred.kind === "local" && !Object.keys(S.doc.obj.products || {}).length && !LS.get("vb.demo")) { LS.set("vb.demo", "1"); importObj(demoData()); }
-  setInterval(() => { if (document.visibilityState === "visible" && !S.doc.dirty) S.doc.sync(); }, 30000);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") S.doc.sync(); });
+  setInterval(() => { if (document.visibilityState === "visible" && !S.doc.dirty) S.doc.sync(); if (document.visibilityState === "visible") openLog().then(d => d.sync()); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { S.doc.sync(); S.log?.doc.sync(); } });
 }
 window.addEventListener("hashchange", route);
 // Höhe der Kopfleiste für fixierte Tabellenköpfe

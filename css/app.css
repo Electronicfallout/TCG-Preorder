@@ -100,3 +100,13 @@ tr.click:hover td:first-child{background:var(--surface2)}
 .modal-card{width:min(720px,100%);max-height:90vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.3)}
 .btn{display:inline-flex;align-items:center;font-weight:600;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:7px 12px;text-decoration:none}
 textarea{min-width:0}
+/* Auftrag-angelegt-Haken größer */
+input.auftrag{width:22px;height:22px;cursor:pointer;accent-color:var(--ok);vertical-align:middle}
+/* Nachricht-Knopf: blau = noch nicht gesendet, grün = Abholung, gelb = Warteliste, rot = Storno */
+button.msg-new{background:#1d4ed8;border-color:#1d4ed8;color:#fff}
+button.msg-ok{background:#17803d;border-color:#17803d;color:#fff}
+button.msg-wait{background:#f5c518;border-color:#d9ab00;color:#1f1a00}
+button.msg-storno{background:#b42318;border-color:#b42318;color:#fff}
+.staff input.need{border-color:var(--bad);box-shadow:0 0 0 2px var(--bad-soft);background:var(--bad-soft)}
+td.nowrap{white-space:nowrap}
+[data-copy],[data-msg]{white-space:nowrap}
