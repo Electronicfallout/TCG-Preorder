@@ -340,7 +340,7 @@ function msgOpen(list){ const os=list.filter(o=>o&&["Zugeteilt","Auftrag angeleg
 function msgClass(n, os){ if(!n || (os && msgOpen(os))) return "msg-new"; const id=notifiedTid(n); return id==="t-storno"?"msg-storno":id==="t-warteliste"?"msg-wait":"msg-ok"; }
 function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
   const q=quickTpl(os);
-  return `<span class="row" style="gap:4px;flex-wrap:nowrap">${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n, os)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button></span>`; }
+  return `<span class="row" style="gap:4px;flex-wrap:nowrap">${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n, os)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button>${S.customers[os[0].customerId]?.noWhatsapp?`<span class="pill" style="background:var(--grey-soft)" title="Kunde hat kein WhatsApp: per SMS schicken">SMS</span>`:""}</span>`; }
 const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
 const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
 const fmtTag = d => d ? WEEKDAYS[new Date(d+"T12:00:00").getDay()]+", "+fmtDate(d) : "";
@@ -362,27 +362,31 @@ function msgDialog(ids){
   const tpls=templates(); const st=autoTplId(os);
   let cur=tpls.find(t=>t.id===st)||tpls[0]; let tag=today();
   const box=document.createElement("div"); box.className="modal"; document.body.appendChild(box);
-  const cp=contactParts(c);
+  const cp=contactParts(c); let noWa=!!c.noWhatsapp;
   const draw=()=>{ box.innerHTML=`<div class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="msgh">
     <div class="row spread"><h2 id="msgh">Nachricht an ${esc(c.name||"Kunde")}</h2><span class="muted">${esc(c.contact||"kein Kontakt hinterlegt")}</span></div>
+    <label class="row muted" style="gap:6px"><input type="checkbox" id="m-nowa" ${noWa?"checked":""}> Kunde hat kein WhatsApp (wird beim Kunden gespeichert)</label>
     <label class="form" style="grid-template-columns:1fr"><span class="muted">Vorlage</span><select id="m-t">${tpls.map(t=>`<option value="${t.id}" ${t.id===cur?.id?"selected":""}>${esc(t.name)}</option>`).join("")}<option value="">Eigene Nachricht</option></select></label>
     <label class="form" style="grid-template-columns:1fr"><span class="muted">Abholbar ab {Tag}</span><input type="date" id="m-d" value="${tag}"></label>
     <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os,tag):`Hallo ${nameParts(c).first},\n\n\nLiebe Grüße\nHive Games\n${staffName()}`)}</textarea>
     ${!staff()?`<div class="note">Tipp: oben dein Kürzel eintragen, dann wird {Mitarbeiter} mit deinem Vornamen ausgefüllt.</div>`:staffRec()?"":`<div class="note">Kürzel „${esc(staff())}“ ist noch nicht unter Einstellungen → Mitarbeiter angelegt.</div>`}
     <div class="row"><button class="pri" id="m-c">Kopieren</button>
-      ${cp.wa?`<a class="btn" id="m-w" href="#" target="_blank" rel="noopener">WhatsApp öffnen</a>`:""}
+      ${cp.wa?`<a class="btn" id="m-w" href="#" target="_blank" rel="noopener" ${noWa?"hidden":""}>WhatsApp öffnen</a>`:""}
+      ${cp.tel?`<a class="btn" id="m-sms" href="#" ${noWa?"":"hidden"}>SMS öffnen</a>`:""}
       ${cp.mail?`<a class="btn" id="m-e" href="#">E-Mail öffnen</a>`:""}
       <button id="m-s">Als gesendet markieren</button><button id="m-x2">Schließen</button></div>
     <p class="muted">Kopieren und z. B. in WhatsApp oder SMS einfügen. „Als gesendet markieren“ merkt sich Datum und Vorlage bei der Bestellung.</p></div>`;
     const ta=box.querySelector("#m-x");
-    const links=()=>{ const t=encodeURIComponent(ta.value); const w=box.querySelector("#m-w"); if(w) w.href=`https://wa.me/${cp.wa}?text=${t}`;
+    const links=()=>{ const t=encodeURIComponent(ta.value); const w=box.querySelector("#m-w"); if(w) w.href=`https://wa.me/${cp.wa}?text=${t}`; const sm=box.querySelector("#m-sms"); if(sm) sm.href=`sms:${cp.tel}?&body=${t}`;
       const e=box.querySelector("#m-e"); if(e) e.href=`mailto:${cp.mail}?subject=${encodeURIComponent((cur?.name||"Info")+": "+os.map(x=>orderLabel(x)).join(", "))}&body=${t}`; };
     ta.oninput=links; links();
     box.querySelector("#m-t").onchange=e=>{ cur=tpls.find(t=>t.id===e.target.value)||null; draw(); };
     box.querySelector("#m-d").onchange=e=>{ tag=e.target.value||today(); if(cur) draw(); };
     const mark=()=>markSent(os, cur);
     box.querySelector("#m-c").onclick=async()=>{ if(needStaff()) return; if(await copyText(ta.value)){ await mark(); toast("Kopiert und als gesendet markiert"); } else { ta.select(); toast("Text markiert: mit Strg+C kopieren"); } };
-    for(const sel of ["#m-w","#m-e"]){ const a=box.querySelector(sel); if(a) a.addEventListener("click", e=>{ if(needStaff()){ e.preventDefault(); return; } mark(); }); }
+    box.querySelector("#m-nowa").onchange=async e=>{ noWa=e.target.checked; const w=box.querySelector("#m-w"), sm=box.querySelector("#m-sms"); if(w) w.hidden=noWa; if(sm) sm.hidden=!noWa;
+      if(await write("customers",c.id,{noWhatsapp:noWa})) toast(noWa?"Gespeichert: kein WhatsApp":"Gespeichert: hat WhatsApp"); };
+    for(const sel of ["#m-w","#m-e","#m-sms"]){ const a=box.querySelector(sel); if(a) a.addEventListener("click", e=>{ if(needStaff()){ e.preventDefault(); return; } mark(); }); }
     box.querySelector("#m-s").onclick=async()=>{ if(needStaff()) return; await mark(); toast("Als gesendet markiert"); box.remove(); };
     box.querySelector("#m-x2").onclick=()=>box.remove();
     box.onclick=e=>{ if(e.target===box) box.remove(); };
@@ -614,6 +618,7 @@ function renderCustomer(cid){
     <label><span>&nbsp;</span><span class="row" style="gap:6px"><button type="button" class="sm" id="cd-swap">⇄ Vertauschen</button>${nameChecked(c)?"":`<button type="button" class="sm pri" id="cd-ok">Stimmt so</button>`}</span></label>
     <label>etron-Kundennr.<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
+    <label class="row muted" style="gap:6px;align-self:end"><input type="checkbox" id="cd-nowa" ${c.noWhatsapp?"checked":""}> Kein WhatsApp</label>
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${os.map(o=>{const p=S.products[o.productId||(o.choices||[])[0]];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}"><td><a href="#produkt-${p?.id||""}">${esc(orderLabel(o))}</a><span class="gtag">${esc(gameOf(p))}</span></td><td>${esc(relTxt(p?.release))}</td>
@@ -633,6 +638,7 @@ function renderCustomer(cid){
   $("#cd-fn").onchange=$("#cd-ln").onchange=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
   $("#cd-swap").onclick=()=>saveName($("#cd-ln").value,$("#cd-fn").value);
   if($("#cd-ok")) $("#cd-ok").onclick=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
+  $("#cd-nowa").onchange=e=>write("customers",cid,{noWhatsapp:e.target.checked}).then(ok=>ok&&toast("Gespeichert"));
   $("#cd-etronId").onchange=e=>saveEtron(cid,e.target.value);
   bindRows(); bindOrderForm("cu");
   $("#mg").onclick=()=>{ const t=$("#mt").value; if(!t) return toast("Bitte Ziel-Kunde wählen."); const tn=S.customers[t].name;
@@ -722,7 +728,7 @@ function showText(t){ const ta=$("#ta"); ta.hidden=false; ta.value=t; ta.focus()
 // ---------- Änderungsprotokoll: pro Monat eine Datei protokoll/JJJJ-MM.json in der Dropbox
 const LOG_DIR = "protokoll";
 const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
-const FIELD = { firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
+const FIELD = { noWhatsapp: "Kein WhatsApp", firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
   archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronUrl: "etron-Link" };
 const LOG_SKIP = new Set(["updatedAt", "createdAt", "notDupes", "pairId", "order", "hidden"]);
@@ -731,7 +737,7 @@ function logVal(k, v){
   if (k === "productId") return S.products[v]?.name || v;
   if (k === "customerId") return S.customers[v]?.name || v;
   if (k === "choices") return (v || []).map(id => S.products[id]?.name || id).join(" oder ");
-  if (k === "archived") return v ? "ja" : "nein";
+  if (typeof v === "boolean") return v ? "ja" : "nein";
   if (typeof v === "string" && /^\d{4}-\d\d-\d\d$/.test(v)) return fmtDate(v);
   const t = typeof v === "object" ? JSON.stringify(v) : String(v);
   return t.length > 60 ? t.slice(0, 57) + "…" : t;
