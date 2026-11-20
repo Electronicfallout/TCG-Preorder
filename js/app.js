@@ -29,15 +29,35 @@ const touch = () => { lastAct = Date.now(); sess("vb.act", String(lastAct)); };
 ["pointerdown","keydown"].forEach(ev => document.addEventListener(ev, touch, { passive: true })); touch();
 setInterval(() => { if (staffEl.value && Date.now()-lastAct > STAFF_IDLE) { staffEl.value = ""; sess("vb.staff", null); markStaff(); toast("Kürzel nach 30 Minuten ohne Eingabe zurückgesetzt."); } }, 60000);
 function markStaff(){ const v=staffEl.value.toUpperCase().trim(); const known=Object.values(S.staff||{}); const rec=known.find(m=>m.kuerzel===v);
+  const btn=$("#staffbtn"), lab=$("#staffl"); if(btn){ btn.hidden=!known.length; lab.hidden=known.length>0;
+    btn.textContent = rec ? `${rec.name} (${rec.kuerzel})` : "Wer bist du?"; btn.classList.toggle("need", !rec); btn.title = rec ? "Klicken, um zu wechseln" : "Bitte deinen Namen auswählen"; }
   staffEl.classList.toggle("need", !v || (known.length>0 && !rec)); staffEl.title = rec ? `Angemeldet als ${rec.name}` : (v && known.length ? "Kürzel nicht angelegt" : ""); }
 staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); sess("vb.staff", staffEl.value); markStaff(); });
-staffEl.addEventListener("input", markStaff); markStaff();
+staffEl.addEventListener("input", markStaff); $("#staffbtn").onclick=()=>pickStaff(); markStaff();
 const staff = () => staffEl.value.toUpperCase().trim();
+function setStaff(k){ staffEl.value=k||""; sess("vb.staff", k||null); touch(); markStaff(); }
+// Namensauswahl: auf geteilten PCs klickt jeder vor dem Anlegen seinen Namen an
+function pickStaff(){
+  if(document.getElementById("pickstaff")) return;
+  const list=Object.values(S.staff||{}).sort((a,b)=>(a.name||"").localeCompare(b.name||"","de"));
+  const box=document.createElement("div"); box.className="modal"; box.id="pickstaff"; document.body.appendChild(box);
+  box.innerHTML=`<div class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="psh" style="max-width:520px">
+    <h2 id="psh">Wer bist du?</h2><p class="muted">Bitte deinen Namen anklicken. Er gilt für dieses Fenster und wird nach 30 Minuten ohne Eingabe gelöscht.</p>
+    <div class="pickgrid">${list.map(m=>`<button type="button" class="pick ${m.kuerzel===staff()?"on":""}" data-k="${esc(m.kuerzel)}"><b>${esc(m.name||m.kuerzel)}</b><span>${esc(m.kuerzel)}</span></button>`).join("")}</div>
+    <div class="row spread"><a class="back" href="#einstellungen" id="ps-set">Mitarbeiter verwalten</a><span class="row">${staff()?`<button type="button" id="ps-out">Abmelden</button>`:""}<button type="button" id="ps-x">Abbrechen</button></span></div></div>`;
+  const close=()=>box.remove();
+  box.querySelectorAll("[data-k]").forEach(b=>b.onclick=()=>{ setStaff(b.dataset.k); close(); toast(`Hallo ${staffRec()?.name||b.dataset.k}! Jetzt kannst du weitermachen.`); });
+  box.querySelector("#ps-x").onclick=close; box.querySelector("#ps-set").onclick=close;
+  const o=box.querySelector("#ps-out"); if(o) o.onclick=()=>{ setStaff(""); close(); };
+  box.onclick=e=>{ if(e.target===box) close(); };
+  box.querySelector(".pick")?.focus();
+}
 function staffRec(k){ return Object.values(S.staff||{}).find(m=>m.kuerzel===(k??staff())); }
 const staffName = () => staffRec()?.name || staff();
 function needStaff(){
+  if(Object.keys(S.staff||{}).length && !staffRec()){ pickStaff(); return true; }
   if(!staff()){ markStaff(); staffEl.focus(); toast("Bitte zuerst oben rechts dein Kürzel eintragen."); return true; }
-  if(Object.keys(S.staff||{}).length && !staffRec()){ staffEl.classList.add("need"); staffEl.focus(); toast(`Kürzel „${staff()}“ ist nicht angelegt. Bitte unter Einstellungen → Mitarbeiter anlegen.`); return true; }
+  if(Object.keys(S.staff||{}).length && !staffRec()){ pickStaff(); return true; }
   return false; }
 
 // ---------- Spiele
@@ -442,7 +462,7 @@ function staffPanel(){
 function bindStaff(){
   const f=$("#snew"); if(f) f.onsubmit=async e=>{ e.preventDefault(); const k=$("#snk").value.toUpperCase().trim(), n=$("#snn").value.trim(); if(!k||!n) return;
     if(staffRec(k)) return toast(`Kürzel „${k}“ gibt es schon.`);
-    if(await write("staff","s-"+k,{id:"s-"+k,kuerzel:k,name:n},"set")){ toast(`${n} (${k}) angelegt`); if(!staff()){ staffEl.value=k; sess("vb.staff",k); markStaff(); } } };
+    if(await write("staff","s-"+k,{id:"s-"+k,kuerzel:k,name:n},"set")){ toast(`${n} (${k}) angelegt`); if(!staff()){ setStaff(k); } } };
   app.querySelectorAll("[data-ssave]").forEach(b=>b.onclick=()=>{ const id=b.dataset.ssave; const n=$("#sn-"+id).value.trim(); if(!n) return toast("Vorname fehlt."); write("staff",id,{name:n}).then(ok=>ok&&toast("Gespeichert")); });
   app.querySelectorAll("[data-sdel]").forEach(b=>b.onclick=()=>{ const id=b.dataset.sdel; b.outerHTML=`<button class="sm danger" id="sdok-${id}">Wirklich löschen?</button>`; $("#sdok-"+id).onclick=()=>write("staff",id,{},"delete"); });
 }
@@ -946,7 +966,7 @@ const WIKI = [
   ["So funktioniert das Programm", `<p>Die App ersetzt die Excel-Warteliste. Es gibt drei Dinge: <b>Produkte</b> (z. B. ein Display oder eine ETB), <b>Kunden</b> und <b>Bestellungen</b> (Kunde X möchte Y Stück von Produkt Z).</p>
     <p>Alle Daten liegen in unserer Dropbox und gleichen sich automatisch zwischen allen Geräten ab. Oben rechts siehst du, ob gespeichert ist. Jede Änderung wird mit deinem Kürzel im <a href="#protokoll">Protokoll</a> festgehalten.</p>
     <p>Oben kannst du nach Spiel filtern (One Piece, Pokémon, Riftbound, Magic, Yu-Gi-Oh! oder Alle).</p>`],
-  ["Bevor du loslegst: Kürzel eintragen", `<p>Jeder Mitarbeiter wird einmal unter Einstellungen → <b>Mitarbeiter</b> mit Kürzel und Vorname angelegt. Der Vorname steht dann unter den Kundennachrichten, das Kürzel intern bei Bestellungen und im Protokoll.</p><p>Die PCs werden geteilt: Trag beim Arbeitsbeginn oben rechts im Feld <b>Kürzel</b> dein Kürzel ein (z. B. TT). Es gilt nur für dieses Fenster und wird nach 30 Minuten ohne Eingabe oder beim Schließen der App automatisch gelöscht. Wer übernimmt, trägt einfach sein eigenes Kürzel ein. Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden.</p>`],
+  ["Bevor du loslegst: Kürzel eintragen", `<p>Jeder Mitarbeiter wird einmal unter Einstellungen → <b>Mitarbeiter</b> mit Kürzel und Vorname angelegt. Der Vorname steht dann unter den Kundennachrichten, das Kürzel intern bei Bestellungen und im Protokoll.</p><p>Die PCs werden geteilt: Klick beim Arbeitsbeginn oben rechts auf <b>„Wer bist du?“</b> und wähle deinen Namen. Spätestens beim Anlegen einer Bestellung oder beim Senden einer Nachricht fragt die App danach. Die Auswahl gilt nur für dieses Fenster und wird nach 30 Minuten ohne Eingabe oder beim Schließen der App gelöscht. Wer übernimmt, klickt auf den Namen oben rechts und wählt sich selbst. Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden.</p>`],
   ["Neuen Artikel (Produkt) anlegen", `<ol><li>Reiter <b>Produkte</b> öffnen und ganz nach unten zu „Neues Produkt anlegen“ scrollen.</li>
     <li>Produktname eintragen, Spiel wählen, Release (Datum, „Q3 2027“ oder leer) und Einheit (Display, Case, Stück).</li>
     <li><b>Anlegen</b> klicken. Die Produktseite öffnet sich.</li></ol>

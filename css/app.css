@@ -114,3 +114,10 @@ details.wiki{border-top:1px solid var(--line);padding:8px 0}
 details.wiki summary{cursor:pointer;font-weight:600}
 details.wiki > div{padding:6px 0 2px;max-width:75ch}
 details.wiki p,details.wiki ol,details.wiki ul{margin:6px 0}
+/* Mitarbeiter-Auswahl (geteilte PCs) */
+.staffbtn{font-size:13px;padding:5px 10px;border-radius:8px}
+.staffbtn.need{background:var(--bad-soft);border-color:var(--bad);color:var(--bad);font-weight:600}
+.pickgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin:6px 0 4px}
+.pick{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px;text-align:left}
+.pick b{font-size:15px}.pick span{color:var(--muted);font-size:12px}
+.pick.on{border-color:var(--accent);background:var(--accent-soft)}
