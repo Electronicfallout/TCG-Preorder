@@ -280,10 +280,50 @@ function bindAuftrag(){
 }
 function bindRows(){
   bindAuftrag();
-  app.querySelectorAll("tr[data-o] [data-f]").forEach(el=>el.onchange=()=>{ const id=el.closest("tr").dataset.o, f=el.dataset.f;
+  app.querySelectorAll("tr[data-o] [data-f]").forEach(el=>el.onchange=async()=>{ const id=el.closest("tr").dataset.o, f=el.dataset.f;
     let v = el.type==="number"?num(el.value):el.value.trim(); const patch={[f]:v};
-    if (f==="status" && v==="Storniert") patch.alloc=null;
+    if (f==="status" && v==="Storniert") return cancelOrders([id]);
     write("orders",id,patch).then(ok=>ok&&toast("Gespeichert")); });
+}
+
+// ---------- Stornieren: frei gewordene Ware einem anderen Kunden geben
+async function cancelOrders(ids){
+  const before = ids.map(id=>({...S.orders[id]})).filter(o=>o.id);
+  await pool(ids, id=>S.db.collection("orders").doc(id).update({status:"Storniert",alloc:null}));
+  toast("Storniert");
+  const freed = {}; for (const o of before){ const pid=o.productId; if(pid) freed[pid]=(freed[pid]||0)+(o.alloc||0); }
+  for (const [pid,n] of Object.entries(freed)) await reassignDialog(pid, n, before.map(o=>o.customerId));
+}
+function candidates(pid, exclude){
+  return [...ordersOf(pid), ...flexOf(pid)].filter(o=>!exclude.includes(o.customerId) && (o.qty||0)>0 &&
+    (o.status==="Warteliste" || ((o.status==="Offen"||o.status==="Zugeteilt") && (o.alloc||0)<o.qty))).sort(sortOrders);
+}
+function reassignDialog(pid, freed, exclude){
+  return new Promise(done=>{
+    const p=S.products[pid]; if(!p) return done();
+    let left=freed;
+    const box=document.createElement("div"); box.className="modal"; document.body.appendChild(box);
+    const close=()=>{ box.remove(); done(); };
+    const draw=()=>{ const cs=candidates(pid, exclude).filter(o=>left>0||o.status==="Warteliste");
+      if (!cs.length && left<=0) return close();
+      box.innerHTML=`<div class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="mh">
+        <h2 id="mh">${left>0?`${left} Stück ${esc(p.name)} sind jetzt frei`:`${esc(p.name)}: Bestellung storniert`}</h2>
+        <p class="muted">${left>0?"Soll die Ware einem anderen Kunden zugeteilt werden? Reihenfolge nach Bestelldatum.":"Es war noch nichts zugeteilt. Soll jemand von der Warteliste nachrücken?"}</p>
+        ${cs.length?`<div class="tablebox" style="max-height:50vh"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Bestellt</th><th class="n">Zugeteilt</th><th>Status</th><th></th></tr></thead><tbody>
+        ${cs.map(o=>{const miss=o.qty-(o.alloc||0); const give=Math.min(left,miss);
+          return `<tr><td>${esc(S.customers[o.customerId]?.name||"?")}</td><td>${o.productId?"nur dieses":"egal welches"}</td><td class="n">${o.qty}</td><td class="n">${o.alloc||0}</td><td>${pill(o.status)}</td>
+          <td class="n">${left>0?`<button class="sm pri" data-give="${o.id}" data-n="${give}">${give} zuteilen</button>`:`<button class="sm" data-up="${o.id}">Nachrücken</button>`}</td></tr>`}).join("")}
+        </tbody></table></div>`:`<p>Kein anderer Kunde wartet auf dieses Produkt.</p>`}
+        <div class="row"><button id="m-no">${left>0?"Nicht neu zuteilen (bleibt frei)":"Schließen"}</button></div></div>`;
+      box.querySelector("#m-no").onclick=close;
+      box.querySelectorAll("[data-give]").forEach(b=>b.onclick=async()=>{ const o=S.orders[b.dataset.give]; const n=+b.dataset.n; b.disabled=true;
+        const pt={alloc:(o.alloc||0)+n}; if(!o.productId){ pt.productId=pid; pt.comment=[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · "); }
+        if(o.status==="Warteliste") pt.status="Offen";
+        await write("orders",o.id,pt); left-=n; toast(`${n} Stück an ${S.customers[o.customerId]?.name||"Kunde"}`); if(left<=0) close(); else draw(); });
+      box.querySelectorAll("[data-up]").forEach(b=>b.onclick=async()=>{ await write("orders",b.dataset.up,{status:"Offen"}); toast("Von der Warteliste nachgerückt"); draw(); });
+    };
+    draw();
+  });
 }
 
 function orderForm(k, pid, cid, only){
@@ -387,7 +427,8 @@ function renderSeries(anyPid){
   app.querySelectorAll("input[data-flex]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!v) return; const o=S.orders[el.dataset.flex];
     write("orders",o.id,{productId:el.dataset.pid,alloc:v,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")}).then(ok=>ok&&toast("Zugeteilt")); });
   app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const ids2=el.closest("tr").dataset.row.split(","); const v=el.value;
-    await pool(ids2, id=>S.db.collection("orders").doc(id).update(v==="Storniert"?{status:v,alloc:null}:{status:v})); toast("Gespeichert"); });
+    if (v==="Storniert") return cancelOrders(ids2);
+    await pool(ids2, id=>S.db.collection("orders").doc(id).update({status:v})); toast("Gespeichert"); });
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();};
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[key]){S.sugg[key]=seriesSuggest(sib,S.mode);render();}};
   $("#sug").onclick=()=>{ S.sugg[key]=seriesSuggest(sib,$("#mode").value); render(); };
