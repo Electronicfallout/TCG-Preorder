@@ -212,7 +212,7 @@ function renderProduct(pid){
   const s = stats(p); const sug = S.sugg[pid];
   const os = [...ordersOf(pid), ...flexOf(pid)].sort(sortOrders);
   const fstat = S.fstat||"aktiv";
-  const shown = os.filter(o => nameMatch(S.oq, S.customers[o.customerId])).filter(o => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType([o]) : fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat));
+  const shown = os.filter(o => nameMatch(S.oq, S.customers[o.customerId])).filter(o => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType([o]) : fstat==="aktiv" ? isActive(o, sug) : o.status===fstat));
   const sugSum = sug ? Object.values(sug.map).reduce((a,b)=>a+b,0) : 0;
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
@@ -252,7 +252,7 @@ function renderProduct(pid){
     ${s.rec==null?'<p class="muted">Erst den Wareneingang eintragen, dann kann ein Vorschlag berechnet werden.</p>':sug?'<p class="muted">Vorschlag steht in der Spalte „Vorschlag“. Noch nichts gespeichert.</p>':'<p class="muted">Zuteilungen können auch direkt in der Tabelle eingetragen werden. Bestellungen mit Status „Auftrag angelegt“ oder „Abgeholt“ bleiben beim Vorschlag unverändert.</p>'}
   </div>
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
-    <span class="row" style="gap:6px">${oqInput()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+    <span class="row" style="gap:6px">${oqInput()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${shown.map(o=>{const c=S.customers[o.customerId];const d=c?dupesOf(c):[];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a>${!o.productId?` <span class="pill s-Offen" title="${esc(orderLabel(o))}">egal welches</span>`:o.pairId?` <span class="gtag">Teil von „beide“</span>`:""}${d.length?` <span class="pill s-Warteliste" title="Ähnlich: ${esc(d.map(x=>x.name).join(", "))}">Dublette?</span>`:""}</td>
@@ -328,6 +328,8 @@ async function quickCopy(ids){ if(needStaff()) return; const os=ids.map(id=>S.or
   await markSent(os, t); toast(`„${t.name}“ kopiert und als gesendet markiert`); }
 const TID_BY_NAME = {Abholbereit:"t-abholbereit", Storno:"t-storno", Warteliste:"t-warteliste"};
 const MSG_OPEN = "Nachricht noch nicht gesendet";
+// „aktiv“ = noch offen: Status Offen oder Warteliste. Während ein Zuteilungsvorschlag offen ist, auch Zugeteilte (die der Vorschlag ändern kann).
+const isActive = (o, sug) => o.status==="Offen" || o.status==="Warteliste" || (!!sug && o.status==="Zugeteilt");
 const MSG_TYPES = [["","alle Nachrichtentypen"],["t-abholbereit","nur Abholung"],["t-storno","nur Storno"],["t-warteliste","nur Warteliste"]];
 const msgOpenType = list => msgOpen(list) && (!S.mtype || autoTplId(list.filter(o=>o&&["Zugeteilt","Auftrag angelegt","Storniert","Warteliste"].includes(o.status)))===S.mtype);
 const typeSel = f => f===MSG_OPEN ? `<select id="ftype" aria-label="Nachrichtentyp">${MSG_TYPES.map(([v,t])=>`<option value="${v}" ${v===(S.mtype||"")?"selected":""}>${t}</option>`).join("")}</select>` : "";
@@ -535,7 +537,7 @@ function renderSeries(anyPid){
   const rowsMap = new Map();
   for (const o of all.sort(sortOrders)){ const k = o.pairId || o.id; if(!rowsMap.has(k)) rowsMap.set(k, []); rowsMap.get(k).push(o); }
   let rows = [...rowsMap.values()];
-  rows = rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])).filter(r => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType(r) : r.some(o => fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat)));
+  rows = rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])).filter(r => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType(r) : r.some(o => fstat==="aktiv" ? isActive(o, sug) : o.status===fstat)));
   const wish = r => { const o=r[0]; if(r.length>1||o.pairId) return "beide"; if(!o.productId) return "egal"; if(o.choices) return "egal → "+(S.products[o.productId]?.name||"?"); return "nur "+(S.products[o.productId]?.name||"?"); };
   const st = sib.map(p=>({p, s:stats(p)}));
   const cell = (r, pid) => { const o = r.find(x=>x.productId===pid);
@@ -558,7 +560,7 @@ function renderSeries(anyPid){
     <button id="close">Zuteilung abschließen</button></div></div>
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
-  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${oqInput()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${oqInput()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n">${o.qty??""}</td><td>${fmtDate(o.date)}</td>
