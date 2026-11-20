@@ -801,9 +801,41 @@ function demoData(){
 }
 
 // ---------- Einstellungen
+const WIKI = [
+  ["So funktioniert das Programm", `<p>Die App ersetzt die Excel-Warteliste. Es gibt drei Dinge: <b>Produkte</b> (z. B. ein Display oder eine ETB), <b>Kunden</b> und <b>Bestellungen</b> (Kunde X möchte Y Stück von Produkt Z).</p>
+    <p>Alle Daten liegen in unserer Dropbox und gleichen sich automatisch zwischen allen Geräten ab. Oben rechts siehst du, ob gespeichert ist. Jede Änderung wird mit deinem Kürzel im <a href="#protokoll">Protokoll</a> festgehalten.</p>
+    <p>Oben kannst du nach Spiel filtern (One Piece, Pokémon, Riftbound oder Alle).</p>`],
+  ["Bevor du loslegst: Kürzel eintragen", `<p>Trag oben rechts im Feld <b>Kürzel</b> deine Initialen ein (z. B. TT). Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden. Das Kürzel bleibt auf dem Gerät gespeichert. Wenn ein Kollege am selben Gerät arbeitet, muss er es auf sein eigenes ändern.</p>`],
+  ["Neuen Artikel (Produkt) anlegen", `<ol><li>Reiter <b>Produkte</b> öffnen und ganz nach unten zu „Neues Produkt anlegen“ scrollen.</li>
+    <li>Produktname eintragen, Spiel wählen, Release (Datum, „Q3 2027“ oder leer) und Einheit (Display, Case, Stück).</li>
+    <li><b>Anlegen</b> klicken. Die Produktseite öffnet sich.</li></ol>
+    <p>Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Gehören zwei Produkte zu einem Doppel-Release, auf beiden Produktseiten unter <b>Produktdaten</b> dieselbe <b>Serie</b> eintragen. Dann gibt es eine gemeinsame Liste („Ganze Serie zuteilen“).</p>`],
+  ["Vorbestellung aufnehmen (und neuen Kunden anlegen)", `<ol><li>Produkt in der Liste anklicken (oder einen Kunden unter <b>Kunden</b> öffnen).</li>
+    <li>Unten bei „Neue Bestellung erfassen“ den Kundennamen als <b>Vorname Nachname</b> eintippen. Ist der Kunde schon da, erscheint er zur Auswahl. Bitte dann den vorhandenen Namen anklicken, damit keine Doppelten entstehen.</li>
+    <li>Gibt es den Kunden noch nicht, wird er beim Speichern automatisch angelegt. Ähnliche Namen werden als Hinweis angezeigt („Meinst du …?“).</li>
+    <li>Menge, Bestelldatum und eventuell einen Kommentar eintragen. Bei einer Serie wählen: nur dieses Produkt, „egal welches“ oder „beide“.</li>
+    <li><b>Speichern</b>.</li></ol>
+    <p>Danach beim Kunden (Reiter <b>Kunden</b>, Name anklicken) <b>Telefon/E-Mail</b> und, wenn bekannt, die <b>etron-Kundennummer</b> eintragen. Die Telefonnummer braucht man für WhatsApp-Nachrichten, die etron-Nr. für den Export.</p>
+    <p>Größere Listen können unter Einstellungen → „Excel-Liste importieren“ auf einmal eingelesen werden.</p>`],
+  ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen.</li>
+    <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Dann <b>Vorschlag berechnen</b>.</li>
+    <li>Vorschlag prüfen, eventuell einzelne Zahlen in der Tabelle ändern, dann <b>Vorschlag übernehmen</b>.</li>
+    <li><b>Zuteilung abschließen</b> setzt alle Bestellungen mit Zuteilung auf „Zugeteilt“. Wer nichts bekommt, kann auf „Warteliste“ gesetzt werden.</li></ol>`],
+  ["Auftrag in etron anlegen", `<p>Reiter <b>etron-Export</b> zeigt alle zugeteilten Bestellungen nach Kunde. Den Auftrag in etron anlegen und danach den <b>Haken</b> in der Spalte „Auftrag“ setzen. Der Haken geht auch direkt auf der Produktseite. Ohne etron-Nr. beim Kunden bitte zuerst die Nummer nachtragen.</p>`],
+  ["Kunden benachrichtigen", `<p>In jeder Bestellzeile gibt es zwei Knöpfe:</p>
+    <ul><li><b>📋 Abholung / Storno / Warteliste</b>: kopiert mit einem Klick den passenden Text (mit Spiel, Produkt und Abholdatum heute). In WhatsApp oder SMS einfügen. Die Nachricht gilt danach als gesendet.</li>
+    <li><b>Nachricht</b>: öffnet das Fenster zum Anpassen (anderes Abholdatum, andere Vorlage, eigener Text) und kann WhatsApp oder E-Mail direkt öffnen.</li></ul>
+    <p>Farbe des Nachricht-Knopfs: <span class="pill" style="background:#1d4ed8;color:#fff">blau</span> noch nichts gesendet, <span class="pill" style="background:#17803d;color:#fff">grün</span> Abholnachricht gesendet, <span class="pill" style="background:#f5c518;color:#1f1a00">gelb</span> Warteliste, <span class="pill" style="background:#b42318;color:#fff">rot</span> Storno. Die Texte lassen sich unten unter „Nachrichtenvorlagen“ ändern.</p>`],
+  ["Abholung, Storno, Doppelte", `<ul><li>Holt der Kunde ab: Status auf <b>Abgeholt</b> setzen.</li>
+    <li>Storniert ein Kunde: Status auf <b>Storniert</b>. Die App fragt dann, ob die frei gewordene Ware an jemand anderen gehen soll.</li>
+    <li>Reiter <b>Dubletten</b> zeigt Kunden, die vermutlich doppelt angelegt sind. Dort zusammenführen oder als „Kein Duplikat“ markieren.</li>
+    <li>Wer hat was geändert? Reiter <b>Protokoll</b>, oder „Verlauf“ bei Kunde oder Produkt.</li></ul>`],
+];
+const wikiPanel = () => `<div class="panel"><h2>Kurzanleitung</h2>${WIKI.map(([t,b])=>`<details class="wiki"><summary>${t}</summary><div>${b}</div></details>`).join("")}</div>`;
 function renderSettings(){
   const isDb = S.provider.kind === "dropbox";
   app.innerHTML = `<div><h1>Einstellungen</h1><p class="sub">Version ${esc(APP_VERSION)} · ${isDb ? "Daten in der Dropbox (App-Ordner, Datei vorbestellungen.json)" : "Nur ausprobieren: Daten liegen nur in diesem Browser"}</p></div>
+  ${wikiPanel()}
   <div class="panel"><h2>Speicher</h2><p>Status: <b>${esc(SYNC_TXT[S.doc.status] || S.doc.status)}</b>${S.doc.error ? ` <span class="muted">(${esc(S.doc.error)})</span>` : ""}</p>
     <div class="row"><button id="syncnow">Jetzt abgleichen</button><button id="logout" class="danger">${isDb ? "Dropbox auf diesem Gerät trennen" : "Ausprobieren beenden"}</button></div>
     <p class="muted">Trennen entfernt nur den Zugang auf diesem Gerät. Die Daten in der Dropbox bleiben.</p></div>

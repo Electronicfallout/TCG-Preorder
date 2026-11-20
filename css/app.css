@@ -110,3 +110,7 @@ button.msg-storno{background:#b42318;border-color:#b42318;color:#fff}
 .staff input.need{border-color:var(--bad);box-shadow:0 0 0 2px var(--bad-soft);background:var(--bad-soft)}
 td.nowrap{white-space:nowrap}
 [data-copy],[data-msg]{white-space:nowrap}
+details.wiki{border-top:1px solid var(--line);padding:8px 0}
+details.wiki summary{cursor:pointer;font-weight:600}
+details.wiki > div{padding:6px 0 2px;max-width:75ch}
+details.wiki p,details.wiki ol,details.wiki ul{margin:6px 0}
