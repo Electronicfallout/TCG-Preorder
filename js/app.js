@@ -740,5 +740,8 @@ async function boot(){
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") S.doc.sync(); });
 }
 window.addEventListener("hashchange", route);
+// Höhe der Kopfleiste für fixierte Tabellenköpfe
+const setHdr=()=>document.documentElement.style.setProperty("--hdr", (document.querySelector(".bar")?.offsetHeight||100)+"px");
+window.addEventListener("resize", setHdr); setHdr();
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 boot();
