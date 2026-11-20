@@ -695,12 +695,13 @@ function exportRows(){ return Object.values(S.orders).filter(o=>o.status==="Zuge
 const odooCfg = () => ({ key: "ref", ...(S.config?.odoo || {}) });
 function odooCsv(rows){
   const cfg=odooCfg(); const q=v=>{v=String(v??"");return /[,"\n]/.test(v)?`"${v.replace(/"/g,'""')}"`:v};
-  const head=[cfg.key==="id"?"partner_id/.id":"partner_id","client_order_ref","order_line/product_id","order_line/product_uom_qty"];
+  const tag=(cfg.tag||"").split(",").map(x=>x.trim()).filter(Boolean).join(",");
+  const head=[cfg.key==="id"?"partner_id/.id":"partner_id","client_order_ref",...(tag?["tag_ids"]:[]),"order_line/product_id","order_line/product_uom_qty"];
   const byC={}; rows.forEach(o=>(byC[o.customerId]=byC[o.customerId]||[]).push(o));
   const out=[head];
   for(const [cid,list] of Object.entries(byC)){ const c=S.customers[cid]||{}; if(!c.etronId) continue;
     list.forEach((o,i)=>{ const p=S.products[o.productId]||{};
-      out.push([i?"":(c.etronId||""), i?"":`Vorbestellung ${fmtDate(today())}`, p.articleNo||p.name||"", o.alloc]); }); }
+      out.push([i?"":(c.etronId||""), i?"":`Vorbestellung ${fmtDate(today())}`, ...(tag?[i?"":tag]:[]), p.articleNo||p.name||"", o.alloc]); }); }
   return "\ufeff"+out.map(r=>r.map(q).join(",")).join("\r\n");
 }
 function odooPanel(rows){
@@ -711,12 +712,15 @@ function odooPanel(rows){
     <li>Oben „Test“ klicken. Meldet Odoo keine Fehler, auf „Importieren“ klicken.</li><li>Danach hier „Alle als ‚Auftrag angelegt‘ markieren“.</li></ol>
     <p>Pro Kunde entsteht ein Auftrag mit allen zugeteilten Positionen. Der Kunde wird über die etron-Kundennr. gefunden, das Produkt über die Artikelnummer (sonst über den Produktnamen).</p>
     <label class="row muted" style="gap:6px">etron-Kundennr. ist in Odoo <select id="odoo-key"><option value="ref" ${cfg.key==="ref"?"selected":""}>die Referenz des Kontakts</option><option value="id" ${cfg.key==="id"?"selected":""}>die interne ID des Kontakts</option></select></label>
+    <label class="row muted" style="gap:6px">Stichwörter für die Aufträge <input id="odoo-tag" list="odoo-tags" value="${esc(cfg.tag||"")}" placeholder="z. B. Lager" style="width:220px"><datalist id="odoo-tags"><option value="Lager"><option value="Séparée"><option value="Büro"></datalist></label>
+    <p class="muted">Mehrere Stichwörter mit Komma trennen. Sie müssen in etron schon genau so angelegt sein (Verkauf → Konfiguration → Stichwörter), sonst meldet der Test einen Fehler. Leer = keine Stichwörter.</p>
     ${noC.length?`<div class="note bad">Ohne etron-Kundennr., kommen nicht in die Datei (erst unter Kunden nachtragen): ${noC.map(esc).join(", ")}</div>`:""}
     ${noA.length?`<div class="note">Ohne Artikelnummer, es wird der Produktname verwendet: ${noA.map(esc).join(", ")}</div>`:""}
     <div class="row"><button id="odl" class="pri" ${rows.length?"":"disabled"}>Odoo-Import herunterladen</button></div></div></details>`;
 }
 function bindOdoo(rows){
   const k=$("#odoo-key"); if(k) k.onchange=e=>write("config","odoo",{...odooCfg(),key:e.target.value},"set").then(ok=>ok&&toast("Gespeichert"));
+  const t=$("#odoo-tag"); if(t) t.onchange=e=>write("config","odoo",{...odooCfg(),tag:e.target.value.trim()},"set").then(ok=>ok&&toast("Stichwort gespeichert"));
   const b=$("#odl"); if(b) b.onclick=async()=>{ const data=odooCsv(rows); const name=`odoo-auftraege-${today()}.csv`;
     if(S.downloads){ try{ await S.downloads.save({filename:name,data:new Blob([data],{type:"text/csv;charset=utf-8"})}); return; }catch(e){ if(e&&e.code==="dismissed") return; } }
     showText(data); };
