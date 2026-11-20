@@ -231,7 +231,7 @@ function renderProduct(pid){
   </div>
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
     <select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
-  <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Kommentar</th></tr></thead><tbody>
+  <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${shown.map(o=>{const c=S.customers[o.customerId];const d=c?dupesOf(c):[];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a>${!o.productId?` <span class="pill s-Offen" title="${esc(orderLabel(o))}">egal welches</span>`:o.pairId?` <span class="gtag">Teil von „beide“</span>`:""}${d.length?` <span class="pill s-Warteliste" title="Ähnlich: ${esc(d.map(x=>x.name).join(", "))}">Dublette?</span>`:""}</td>
     <td class="n"><input type="number" min="0" data-f="qty" id="q-${o.id}" value="${o.qty??""}"></td>
@@ -240,7 +240,7 @@ function renderProduct(pid){
     <td><select data-f="status" id="s-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
     <td class="n"><input type="number" min="0" data-f="alloc" id="a-${o.id}" value="${o.alloc??""}"></td>
     ${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.map[o.id]??""}</td>`:""}
-    <td style="text-align:center">${auftragBox([o])}</td>
+    <td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td>
     <td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("") || `<tr><td colspan="8" class="empty">Noch keine Bestellungen. Unten die erste erfassen.</td></tr>`}
   </tbody></table></div>
   ${orderForm("pr", pid)}`;
@@ -273,6 +273,7 @@ function auftragBox(list){
   return `<input type="checkbox" class="auftrag" data-auftrag="${os.map(o=>o.id).join(",")}" id="au-${os[0].id}" ${on?"checked":""} title="${on?"Auftrag in etron angelegt":"Haken setzen, wenn der Auftrag in etron angelegt ist"}">`;
 }
 function bindAuftrag(){
+  app.querySelectorAll("[data-msg]").forEach(b=>b.onclick=()=>msgDialog(b.dataset.msg.split(",")));
   app.querySelectorAll("[data-auftrag]").forEach(el=>el.onchange=async()=>{ const ids=el.dataset.auftrag.split(","); const on=el.checked;
     ids.forEach(id=>on?S.doneNow.add(id):S.doneNow.delete(id));
     await pool(ids, id=>S.db.collection("orders").doc(id).update({status:on?"Auftrag angelegt":"Zugeteilt"}));
@@ -284,6 +285,71 @@ function bindRows(){
     let v = el.type==="number"?num(el.value):el.value.trim(); const patch={[f]:v};
     if (f==="status" && v==="Storniert") return cancelOrders([id]);
     write("orders",id,patch).then(ok=>ok&&toast("Gespeichert")); });
+}
+
+// ---------- Nachrichten an Kunden
+const DEFAULT_TEMPLATES = [
+  { id: "t-abholbereit", name: "Abholbereit", text: "Hallo {Vorname},\nDeine Vorbestellung von {Produkt} ist angekommen.\nDu kannst sie im Shop abholen.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
+  { id: "t-storno", name: "Storno", text: "Hallo {Vorname},\nleider müssen wir deine Vorbestellung von {Produkt} stornieren, da wir nicht genug Ware bekommen haben. Das tut uns sehr leid.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
+  { id: "t-warteliste", name: "Warteliste", text: "Hallo {Vorname},\nvon {Produkt} haben wir leider nicht genug für alle Vorbestellungen bekommen. Du stehst auf der Warteliste und wir melden uns, sobald eine Nachlieferung kommt.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
+];
+function templates(){ const all = Object.values(S.templates||{}); const ids = new Set(all.map(t=>t.id)); const own = all.filter(t=>!t.hidden); return [...own, ...DEFAULT_TEMPLATES.filter(t=>!ids.has(t.id))].sort((a,b)=>(a.order??99)-(b.order??99)||a.name.localeCompare(b.name)); }
+function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
+  return `<button class="sm" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Nachricht an den Kunden"}">${n?"✓ ":""}Nachricht</button>`; }
+const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
+function fillTemplate(text, os){
+  const o=os[0], c=S.customers[o.customerId]||{}; const parts=(c.name||"").trim().split(/\s+/);
+  const prod=os.map(x=>orderLabel(x)).join(" und ");
+  const menge=os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ");
+  const map={ Vorname: parts[0]||"", Nachname: parts.slice(1).join(" "), Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staff(), Datum: fmtDate(today()) };
+  return text.replace(/\{(\w+)\}/g, (m,k)=> k in map ? map[k] : m);
+}
+function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]+@[^\s·,;]+/)||[])[0]||"";
+  let tel=(t.replace(mail,"").match(/\+?[\d][\d\s/()-]{5,}/)||[])[0]||""; tel=tel.replace(/[^\d+]/g,"");
+  const wa = tel ? (tel.startsWith("+") ? tel.slice(1) : tel.startsWith("00") ? tel.slice(2) : tel.startsWith("0") ? "43"+tel.slice(1) : tel) : "";
+  return { mail, tel, wa }; }
+function msgDialog(ids){
+  const os=ids.map(id=>S.orders[id]).filter(Boolean); if(!os.length) return; const c=S.customers[os[0].customerId]||{};
+  const tpls=templates(); const st=os.find(o=>o.status==="Storniert")?"t-storno":os.find(o=>o.status==="Warteliste")?"t-warteliste":"t-abholbereit";
+  let cur=tpls.find(t=>t.id===st)||tpls[0];
+  const box=document.createElement("div"); box.className="modal"; document.body.appendChild(box);
+  const cp=contactParts(c);
+  const draw=()=>{ box.innerHTML=`<div class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="msgh">
+    <div class="row spread"><h2 id="msgh">Nachricht an ${esc(c.name||"Kunde")}</h2><span class="muted">${esc(c.contact||"kein Kontakt hinterlegt")}</span></div>
+    <label class="form" style="grid-template-columns:1fr"><span class="muted">Vorlage</span><select id="m-t">${tpls.map(t=>`<option value="${t.id}" ${t.id===cur?.id?"selected":""}>${esc(t.name)}</option>`).join("")}<option value="">Eigene Nachricht</option></select></label>
+    <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os):`Hallo ${firstName(c.name)},\n\n\nLiebe Grüße\nHive Games\n${staff()}`)}</textarea>
+    ${staff()?"":`<div class="note">Tipp: oben dein Kürzel eintragen, dann wird {Mitarbeiter} ausgefüllt.</div>`}
+    <div class="row"><button class="pri" id="m-c">Kopieren</button>
+      ${cp.wa?`<a class="btn" id="m-w" href="#" target="_blank" rel="noopener">WhatsApp öffnen</a>`:""}
+      ${cp.mail?`<a class="btn" id="m-e" href="#">E-Mail öffnen</a>`:""}
+      <button id="m-s">Als gesendet markieren</button><button id="m-x2">Schließen</button></div>
+    <p class="muted">Kopieren und z. B. in WhatsApp oder SMS einfügen. „Als gesendet markieren“ merkt sich Datum und Vorlage bei der Bestellung.</p></div>`;
+    const ta=box.querySelector("#m-x");
+    const links=()=>{ const t=encodeURIComponent(ta.value); const w=box.querySelector("#m-w"); if(w) w.href=`https://wa.me/${cp.wa}?text=${t}`;
+      const e=box.querySelector("#m-e"); if(e) e.href=`mailto:${cp.mail}?subject=${encodeURIComponent((cur?.name||"Info")+": "+os.map(x=>orderLabel(x)).join(", "))}&body=${t}`; };
+    ta.oninput=links; links();
+    box.querySelector("#m-t").onchange=e=>{ cur=tpls.find(t=>t.id===e.target.value)||null; draw(); };
+    box.querySelector("#m-c").onclick=async()=>{ try{ await navigator.clipboard.writeText(ta.value); toast("Kopiert"); }catch(e){ ta.select(); toast("Text markiert: mit Strg+C kopieren"); } };
+    const mark=async()=>{ const n={date:today(),template:cur?.name||"Eigene Nachricht",staff:staff()}; await pool(os,o=>S.db.collection("orders").doc(o.id).update({notified:n})); toast("Als gesendet markiert"); };
+    box.querySelector("#m-s").onclick=async()=>{ await mark(); box.remove(); };
+    box.querySelector("#m-x2").onclick=()=>box.remove();
+    box.onclick=e=>{ if(e.target===box) box.remove(); };
+  };
+  draw();
+}
+function templatesPanel(){
+  return `<div class="panel"><h2>Nachrichtenvorlagen</h2>
+    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Produkt} {Menge} {Mitarbeiter} {Datum}. Die Vorlagen gelten für alle Geräte.</p>
+    ${templates().map(t=>`<div class="panel" style="gap:8px"><div class="row"><input id="tn-${t.id}" value="${esc(t.name)}" style="flex:1 1 200px"><button class="sm" data-tsave="${t.id}">Speichern</button><button class="sm danger" data-tdel="${t.id}">Löschen</button></div>
+      <textarea id="tt-${t.id}" rows="7" style="width:100%">${esc(t.text)}</textarea></div>`).join("")}
+    <div class="row"><button id="tnew">Neue Vorlage</button></div></div>`;
+}
+function bindTemplates(){
+  app.querySelectorAll("[data-tsave]").forEach(b=>b.onclick=()=>{ const id=b.dataset.tsave; const name=$("#tn-"+id).value.trim()||"Vorlage";
+    write("templates",id,{id,name,text:$("#tt-"+id).value, order:templates().findIndex(t=>t.id===id)},"set").then(ok=>ok&&toast("Vorlage gespeichert")); });
+  app.querySelectorAll("[data-tdel]").forEach(b=>b.onclick=()=>{ const id=b.dataset.tdel; b.outerHTML=`<button class="sm danger" id="tdok-${id}">Wirklich löschen?</button>`;
+    $("#tdok-"+id).onclick=()=>{ if(DEFAULT_TEMPLATES.some(t=>t.id===id)) write("templates",id,{id,name:"(gelöscht)",text:"",hidden:true},"set"); else write("templates",id,{},"delete"); }; });
+  const n=$("#tnew"); if(n) n.onclick=()=>{ const id=newId("t"); write("templates",id,{id,name:"Neue Vorlage",text:"Hallo {Vorname},\n\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}",order:99},"set"); };
 }
 
 // ---------- Stornieren: frei gewordene Ware einem anderen Kunden geben
@@ -415,11 +481,11 @@ function renderSeries(anyPid){
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
-  <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Kommentar</th></tr></thead><tbody>
+  <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n">${o.qty??""}</td><td>${fmtDate(o.date)}</td>
     <td><select data-rs id="ss-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
-    ${sib.map(p=>cell(r,p.id)).join("")}<td style="text-align:center">${auftragBox(r)}</td><td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
+    ${sib.map(p=>cell(r,p.id)).join("")}<td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
   </tbody></table></div>
   ${orderForm("se", null, null, ids)}`;
   app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
@@ -472,11 +538,11 @@ function renderCustomer(cid){
     <label>etron-Kundennr.<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
-  <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Auftrag</th><th>Kommentar</th></tr></thead><tbody>
+  <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${os.map(o=>{const p=S.products[o.productId||(o.choices||[])[0]];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}"><td><a href="#produkt-${p?.id||""}">${esc(orderLabel(o))}</a><span class="gtag">${esc(gameOf(p))}</span></td><td>${esc(relTxt(p?.release))}</td>
     <td class="n"><input type="number" min="0" data-f="qty" id="q-${o.id}" value="${o.qty??""}"></td><td>${fmtDate(o.date)}</td>
     <td><select data-f="status" id="s-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
-    <td class="n">${o.alloc??""}</td><td style="text-align:center">${auftragBox([o])}</td><td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("")||`<tr><td colspan="8" class="empty">Keine Bestellungen.</td></tr>`}
+    <td class="n">${o.alloc??""}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td><td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("")||`<tr><td colspan="8" class="empty">Keine Bestellungen.</td></tr>`}
   </tbody></table></div>
   ${orderForm("cu", null, cid)}
   <div class="panel"><h2>Mit anderem Kunden zusammenführen</h2>
@@ -552,7 +618,7 @@ function renderExport(){
   ${Object.keys(byC).some(id=>!S.customers[id]?.etronId)?`<div class="note">${Object.keys(byC).filter(id=>!S.customers[id]?.etronId).length} Kunden haben noch keine etron-Nr. Bitte vor dem Anlegen der Aufträge unter Kunden eintragen.</div>`:""}
   <div class="row"><button class="pri" id="dl" ${rows.length?"":"disabled"}>CSV herunterladen</button><button id="cp" ${rows.length?"":"disabled"}>Als Text kopieren</button><button id="mk" ${rows.length&&S.canWrite?"":"disabled"}>Alle als „Auftrag angelegt“ markieren</button><span id="mkc"></span></div>
   ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2><a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
-    <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
+    <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th><th>Nachricht</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
   <div class="panel"><h2>Gesamtsicherung</h2><p class="muted">Alle Produkte, Kunden und Bestellungen als eine JSON-Datei, z. B. für den Umzug in die Dropbox.</p><div class="row"><button id="bk">Alle Daten exportieren (JSON)</button></div></div>
   <textarea id="ta" hidden rows="6" style="width:100%"></textarea>`;
   $("#bk").onclick=backup; bindAuftrag();
@@ -586,7 +652,7 @@ S.downloads = { save: async ({ filename, data }) => saveFile(filename, data) };
 const live = m => Object.fromEntries(Object.entries(m || {}).filter(([, v]) => v && !v.deleted).map(([id, v]) => [id, { id, ...v }]));
 function pull(){
   const o = S.doc.obj || {};
-  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders);
+  S.products = live(o.products); S.customers = live(o.customers); S.orders = live(o.orders); S.templates = live(o.templates);
   S.loaded = { p: true, c: true, o: true };
 }
 const SYNC_TXT = { idle: "–", syncing: "Speichert …", ok: "Gespeichert", offline: "Offline, wird nachgeholt", error: "Fehler beim Speichern" };
@@ -641,6 +707,7 @@ function renderSettings(){
   ${isDb ? `<div class="panel"><h2>Kollegen einladen</h2>
     <p class="muted">Mit diesem Code kann ein weiteres Gerät auf denselben Dropbox-App-Ordner zugreifen (nicht auf den Rest der Dropbox). Nur an Mitarbeiter weitergeben.</p>
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
+  ${templatesPanel()}
   <div class="panel"><h2>Sicherung</h2>
     <div class="row"><button id="bk2">Alle Daten herunterladen (JSON)</button></div>
     <p class="muted">Importieren ergänzt bzw. überschreibt Einträge mit gleicher ID. Dropbox hebt frühere Versionen der Datei 30 Tage auf.</p>
@@ -649,7 +716,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync();
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates();
   $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
