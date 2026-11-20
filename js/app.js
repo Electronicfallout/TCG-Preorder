@@ -176,7 +176,7 @@ function renderProducts(){
       <label>Einheit<input id="np-unit" placeholder="Display, Case, Stück"></label>
       <button class="pri" ${S.canWrite?"":"disabled"}>Anlegen</button>
     </form><p class="muted">Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Dann zählt jede Variante getrennt.</p></div>`;
-  $("#pq").oninput = e => { S.pq=e.target.value; renderProducts(); };
+  $("#pq").oninput = e => { S.pq=e.target.value; render(); };
   const sa=$("#showall"); if(sa) sa.onclick=()=>setGame("Alle");
   $("#parch").onchange = e => { S.parch=e.target.checked; renderProducts(); };
   app.querySelectorAll("tr[data-go]").forEach(tr=>tr.onclick=e=>{ if(e.target.tagName!=="A") location.hash=tr.dataset.go; });
@@ -408,7 +408,7 @@ function renderCustomers(){
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>etron-Nr.</th><th>Kontakt</th><th class="n">Bestellungen</th><th class="n">Stück offen</th><th>Ähnlich</th></tr></thead><tbody>
   ${cs.map(c=>`<tr class="click" data-go="kunde-${c.id}"><td><a href="#kunde-${c.id}">${esc(c.name)}</a></td><td><input data-cf="${c.id}" id="e-${c.id}" style="width:110px" value="${esc(c.etronId||"")}" placeholder="fehlt"></td><td>${esc(c.contact||"")}</td><td class="n">${counts[c.id]?.n||0}</td><td class="n">${counts[c.id]?.open||""}</td><td>${c.d.map(x=>esc(x.name)).join(", ")}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Kein Kunde gefunden.</td></tr>`}
   </tbody></table></div>`;
-  $("#cq").oninput=e=>{S.cq=e.target.value;renderCustomers();};
+  $("#cq").oninput=e=>{S.cq=e.target.value;render();};
   $("#cdup").onchange=e=>{S.cdup=e.target.checked;renderCustomers();};
   $("#cnoe").onchange=e=>{S.cnoe=e.target.checked;renderCustomers();};
   app.querySelectorAll("[data-cf]").forEach(el=>{ el.onclick=e=>e.stopPropagation(); el.onchange=()=>saveEtron(el.dataset.cf, el.value); });
