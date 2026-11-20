@@ -180,7 +180,8 @@ function renderProduct(pid){
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
   <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub">${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
-   <div class="row"><button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button></div></div>
+   <div class="row"><button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button><button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
+  ${p.archived?`<div class="note">Dieses Produkt ist archiviert und erscheint nur mit „Archivierte zeigen“ in der Produktliste.</div>`:""}
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
     ${s.flex?`<div class="tile"><b>+${s.flex}</b><span>egal welches (Serie)</span></div>`:""}
@@ -227,6 +228,12 @@ function renderProduct(pid){
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
   ["release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
+  $("#del").onclick=()=>{ const own=ordersOf(pid), fl=flexOf(pid);
+    $("#delc").innerHTML=` <button class="sm danger" id="delok">Ja: Produkt und ${own.length} Bestellungen endgültig löschen</button>`;
+    $("#delok").onclick=()=>{ const t=now(); S.doc.update(o=>{ o.products[pid]={deleted:true,updatedAt:t};
+        for(const x of own) o.orders[x.id]={deleted:true,updatedAt:t};
+        for(const x of fl){ const ch=(o.orders[x.id].choices||[]).filter(c=>c!==pid); o.orders[x.id]= ch.length>1 ? {...o.orders[x.id],choices:ch,updatedAt:t} : ch.length===1 ? {...o.orders[x.id],choices:undefined,productId:ch[0],updatedAt:t} : {deleted:true,updatedAt:t}; } });
+      toast("Produkt gelöscht"); location.hash="produkte"; }; };
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();};
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,S.mode)};render();}};
   $("#sug").onclick=()=>{ S.sugg[pid]={map:suggest(p,$("#mode").value)}; render(); };
@@ -574,24 +581,49 @@ function renderSettings(){
 
 // ---------- Excel-Import (läuft nur im Browser, nichts verlässt das Gerät außer in die Dropbox)
 function loadXlsx(){ return window.XLSX ? Promise.resolve() : new Promise((ok, no) => { const sc = document.createElement("script"); sc.src = "vendor/xlsx.full.min.js"; sc.onload = ok; sc.onerror = () => no(new Error("Excel-Bibliothek nicht ladbar")); document.head.appendChild(sc); }); }
-async function xlStart(file){
+// CSV selbst zerlegen (Trennzeichen ; , oder Tab, Anführungszeichen erlaubt)
+function parseCsv(text){
+  text = text.replace(/^\uFEFF/, ""); const first = text.split(/\r?\n/)[0] || "";
+  const sep = [";", "\t", ","].sort((x, y) => first.split(y).length - first.split(x).length)[0];
+  const rows = []; let row = [], cur = "", q = false;
+  for (let i = 0; i < text.length; i++) { const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true; else if (ch === sep) { row.push(cur); cur = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cur); rows.push(row); row = []; cur = ""; }
+    else cur += ch; }
+  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+async function xlStart(file, sheetName){
   if (!file) return; const ui = $("#xlui");
-  try { await loadXlsx(); } catch (e) { ui.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
-  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true }).filter(r => r.some(v => String(v).trim() !== ""));
-  if (rows.length < 2) { ui.innerHTML = `<div class="note bad">Die erste Tabelle der Datei ist leer.</div>`; return; }
-  const head = rows[0].map(h => String(h).trim()); const X = { head, rows: rows.slice(1) };
+  let sheets = {};
+  try {
+    if (/\.csv$|\.txt$/i.test(file.name)) sheets = { CSV: parseCsv(await file.text()) };
+    else { await loadXlsx(); const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      for (const n of wb.SheetNames) sheets[n] = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", raw: true }); }
+  } catch (e) { ui.innerHTML = `<div class="note bad">Datei nicht lesbar: ${esc(e.message)}</div>`; return; }
+  const names = Object.keys(sheets).filter(n => sheets[n].some(r => r.some(v => String(v).trim() !== "")));
+  if (!names.length) { ui.innerHTML = `<div class="note bad">In der Datei steht nichts.</div>`; return; }
+  const sn = sheetName && names.includes(sheetName) ? sheetName : names[0];
+  let rows = sheets[sn].filter(r => r.some(v => String(v).trim() !== ""));
+  // Eine Excel-Zeile mit Semikolons in einer Zelle (z. B. "Name;Telefon;…") aufteilen
+  if (rows.length && rows[0].filter(v => String(v).trim() !== "").length === 1 && String(rows[0][0]).includes(";")) rows = rows.map(r => String(r[0] ?? "").split(";"));
+  // Kopfzeile = erste Zeile, in der „Name“ vorkommt (Titelzeilen darüber werden übersprungen)
+  let hi = rows.slice(0, 15).findIndex(r => r.some(v => /name/i.test(String(v)))); if (hi < 0) hi = 0;
+  const head = rows[hi].map(h => String(h).trim()); const X = { file, sheet: sn, sheets: names, head, rows: rows.slice(hi + 1) };
+  if (!X.rows.length) { ui.innerHTML = `<div class="note bad">Unter der Kopfzeile stehen keine Einträge.</div>`; return; }
   const find = re => head.findIndex(h => re.test(h));
   X.cName = find(/name/i); X.cTel = find(/tel|handy|phone|nummer/i); X.cMail = find(/mail/i);
-  X.prodCols = head.map((h, i) => i).filter(i => ![X.cName, X.cTel, X.cMail].includes(i));
+  X.prodCols = head.map((h, i) => i).filter(i => ![X.cName, X.cTel, X.cMail].includes(i) && (head[i] || X.rows.some(r => String(r[i] ?? "").trim() !== "")));
   S.xl = X; xlDraw();
 }
 function xlDraw(){
   const X = S.xl, ui = $("#xlui"); if (!X) return;
   const colSel = (id, cur) => `<select id="${id}"><option value="-1">–</option>${X.head.map((h, i) => `<option value="${i}" ${i === cur ? "selected" : ""}>${esc(h || "Spalte " + (i + 1))}</option>`).join("")}</select>`;
   const prods = Object.values(S.products).filter(p => !p.archived).sort((a, b) => a.name.localeCompare(b.name));
-  ui.innerHTML = `<div class="form">
+  ui.innerHTML = `${X.sheets.length > 1 ? `<div class="row"><label class="row">Tabellenblatt <select id="xl-sh">${X.sheets.map(n => `<option ${n === X.sheet ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label></div>` : ""}
+    <p class="muted">Gefunden: ${X.rows.length} Zeilen, Spalten: ${X.head.map(h => esc(h || "?")).join(" · ")}</p>
+    <div class="form">
       <label>Spalte Name${colSel("xl-n", X.cName)}</label><label>Spalte Telefon${colSel("xl-t", X.cTel)}</label><label>Spalte E-Mail${colSel("xl-m", X.cMail)}</label>
       <label>Serie<input id="xl-s" placeholder="z. B. Mega Evolution" value="${esc(X.series || "")}"></label>
       <label>Spiel<select id="xl-g">${GAMES.map(g => `<option ${g === (X.game || "Pokémon") ? "selected" : ""}>${g}</option>`).join("")}</select></label>
@@ -599,7 +631,7 @@ function xlDraw(){
     </div>
     <h2 style="margin-top:12px">Produktspalten</h2>
     <div class="form">${X.prodCols.map(i => `<label>${esc(X.head[i] || "Spalte " + (i + 1))}<select data-pc="${i}"><option value="">nicht importieren</option><option value="new" ${(X.map?.[i] ?? "new") === "new" ? "selected" : ""}>neu anlegen: ${esc(X.head[i])}</option>${prods.map(p => `<option value="${p.id}" ${X.map?.[i] === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>`).join("")}</div>
-    <p class="muted" id="xl-sum"></p>
+    <p class="muted" id="xl-sum"></p><div id="xl-err"></div>
     <div class="row"><button class="pri" id="xl-go">Importieren</button><button id="xl-x">Abbrechen</button></div>`;
   const read = () => { X.cName = +$("#xl-n").value; X.cTel = +$("#xl-t").value; X.cMail = +$("#xl-m").value; X.series = $("#xl-s").value.trim(); X.game = $("#xl-g").value; X.rule = $("#xl-r").value;
     X.map = {}; ui.querySelectorAll("[data-pc]").forEach(el => X.map[el.dataset.pc] = el.value); };
@@ -613,18 +645,23 @@ function xlDraw(){
   const sum = () => { const { items, skip } = plan(); const multi = items.filter(x => x.hit.length > 1).length; const nw = items.filter(x => !custByName(x.name)).length;
     $("#xl-sum").textContent = `${items.length} Zeilen werden übernommen (${multi} mit mehreren Produkten, ${nw} neue Kunden). ${skip} Zeilen ohne Name oder Produkt werden übersprungen.`; };
   ui.querySelectorAll("select,input").forEach(el => el.onchange = sum); sum();
+  const sh = $("#xl-sh"); if (sh) sh.onchange = () => xlStart(X.file, sh.value);
+  const err = m => { $("#xl-err").innerHTML = `<div class="note bad">${esc(m)}</div>`; };
   $("#xl-x").onclick = () => { S.xl = null; ui.innerHTML = ""; $("#xlf").value = ""; };
   $("#xl-go").onclick = async () => {
-    const { cols, items } = plan(); if (!items.length) return toast("Nichts zu importieren.");
-    if (cols.length > 1 && !X.series) return toast("Bitte einen Serien-Namen eintragen.");
-    if (!staff()) { staffEl.focus(); return toast("Bitte oben dein Kürzel eintragen."); }
+    const { cols, items } = plan();
+    if (X.cName < 0) return err("Bitte die Spalte mit dem Namen auswählen.");
+    if (!cols.length) return err("Bitte mindestens eine Produktspalte auf „neu anlegen“ oder ein Produkt stellen.");
+    if (!items.length) return err("Keine Zeile hat einen Namen und einen Eintrag in einer Produktspalte.");
+    if (cols.length > 1 && !X.series) { $("#xl-s").focus(); return err("Bitte einen Serien-Namen eintragen, z. B. „Mega Evolution“."); }
+    if (!staff()) { staffEl.focus(); return err("Bitte oben rechts dein Kürzel eintragen, dann noch einmal auf Importieren klicken."); }
     $("#xl-go").disabled = true;
     const pid = {};
     for (const i of cols) { const v = X.map[i];
       if (v === "new") { const name = X.head[i] || "Produkt " + (i + 1); const ex = Object.values(S.products).find(p => p.name.toLowerCase() === name.toLowerCase());
-        if (ex) { pid[i] = ex.id; if (X.series && !ex.series) await write("products", ex.id, { series: X.series }); }
+        if (ex) { pid[i] = ex.id; const pt = {}; if (X.series && !ex.series) pt.series = X.series; if (ex.archived) pt.archived = false; if (Object.keys(pt).length) await write("products", ex.id, pt); }
         else { pid[i] = newId("p"); await write("products", pid[i], { name, group: X.series || name, variant: "", series: X.series, game: X.game, release: "", unit: "", received: null, supplierOrdered: null, supplierConfirmed: null, archived: false }, "set"); } }
-      else { pid[i] = v; if (X.series && seriesOf(S.products[v]) !== X.series) await write("products", v, { series: X.series }); } }
+      else { pid[i] = v; const pt = {}; if (X.series && seriesOf(S.products[v]) !== X.series) pt.series = X.series; if (S.products[v]?.archived) pt.archived = false; if (Object.keys(pt).length) await write("products", v, pt); } }
     let n = 0;
     for (const it of items) {
       let c = custByName(it.name); let cid = c?.id;
