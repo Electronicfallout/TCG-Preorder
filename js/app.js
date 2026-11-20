@@ -33,7 +33,7 @@ function needStaff(){
   return false; }
 
 // ---------- Spiele
-const GAMES = ["One Piece","Pokémon","Riftbound"];
+const GAMES = ["One Piece","Pokémon","Riftbound","Magic","Yu-Gi-Oh!"];
 const gameOf = p => p?.game || "One Piece";
 S.game = store("game") || "Alle"; if (S.game!=="Alle" && !GAMES.includes(S.game)) S.game="Alle";
 const inGame = p => S.game==="Alle" || gameOf(p)===S.game;
@@ -906,7 +906,7 @@ function demoData(){
 const WIKI = [
   ["So funktioniert das Programm", `<p>Die App ersetzt die Excel-Warteliste. Es gibt drei Dinge: <b>Produkte</b> (z. B. ein Display oder eine ETB), <b>Kunden</b> und <b>Bestellungen</b> (Kunde X möchte Y Stück von Produkt Z).</p>
     <p>Alle Daten liegen in unserer Dropbox und gleichen sich automatisch zwischen allen Geräten ab. Oben rechts siehst du, ob gespeichert ist. Jede Änderung wird mit deinem Kürzel im <a href="#protokoll">Protokoll</a> festgehalten.</p>
-    <p>Oben kannst du nach Spiel filtern (One Piece, Pokémon, Riftbound oder Alle).</p>`],
+    <p>Oben kannst du nach Spiel filtern (One Piece, Pokémon, Riftbound, Magic, Yu-Gi-Oh! oder Alle).</p>`],
   ["Bevor du loslegst: Kürzel eintragen", `<p>Jeder Mitarbeiter wird einmal unter Einstellungen → <b>Mitarbeiter</b> mit Kürzel und Vorname angelegt. Der Vorname steht dann unter den Kundennachrichten, das Kürzel intern bei Bestellungen und im Protokoll.</p><p>Trag oben rechts im Feld <b>Kürzel</b> dein Kürzel ein (z. B. TT). Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden. Das Kürzel bleibt auf dem Gerät gespeichert. Wenn ein Kollege am selben Gerät arbeitet, muss er es auf sein eigenes ändern.</p>`],
   ["Neuen Artikel (Produkt) anlegen", `<ol><li>Reiter <b>Produkte</b> öffnen und ganz nach unten zu „Neues Produkt anlegen“ scrollen.</li>
     <li>Produktname eintragen, Spiel wählen, Release (Datum, „Q3 2027“ oder leer) und Einheit (Display, Case, Stück).</li>
