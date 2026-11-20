@@ -12,7 +12,7 @@ const $ = s => document.querySelector(s);
 const app = $("#app");
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = v => (v === "" || v == null || isNaN(+v)) ? null : +v;
-const today = () => new Date().toISOString().slice(0,10);
+const today = () => { const d=new Date(); return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,10); };
 const fmtDate = d => d ? d.split("-").reverse().join(".") : "";
 const pill = s => `<span class="pill s-${esc((s||"").split(" ")[0])}">${esc(s)}</span>`;
 function toast(t){const el=$("#toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,2600)}
@@ -289,7 +289,7 @@ function bindRows(){
 
 // ---------- Nachrichten an Kunden
 const DEFAULT_TEMPLATES = [
-  { id: "t-abholbereit", name: "Abholbereit", text: "Hallo {Vorname},\nDeine Vorbestellung von {Produkt} ist angekommen.\nDu kannst sie im Shop abholen.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
+  { id: "t-abholbereit", name: "Abholbereit", text: "Hallo {Vorname},\nDeine Vorbestellung von {Spiel} {Produkt} ist angekommen.\nDu kannst sie ab {Tag} im Shop abholen.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
   { id: "t-storno", name: "Storno", text: "Hallo {Vorname},\nleider müssen wir deine Vorbestellung von {Produkt} stornieren, da wir nicht genug Ware bekommen haben. Das tut uns sehr leid.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
   { id: "t-warteliste", name: "Warteliste", text: "Hallo {Vorname},\nvon {Produkt} haben wir leider nicht genug für alle Vorbestellungen bekommen. Du stehst auf der Warteliste und wir melden uns, sobald eine Nachlieferung kommt.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
 ];
@@ -297,11 +297,14 @@ function templates(){ const all = Object.values(S.templates||{}); const ids = ne
 function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
   return `<button class="sm" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Nachricht an den Kunden"}">${n?"✓ ":""}Nachricht</button>`; }
 const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
-function fillTemplate(text, os){
+const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+const fmtTag = d => d ? WEEKDAYS[new Date(d+"T12:00:00").getDay()]+", "+fmtDate(d) : "";
+const spielOf = os => [...new Set(os.map(o=>gameOf(S.products[o.productId||(o.choices||[])[0]])))].join(" und ");
+function fillTemplate(text, os, tag){
   const o=os[0], c=S.customers[o.customerId]||{}; const parts=(c.name||"").trim().split(/\s+/);
   const prod=os.map(x=>orderLabel(x)).join(" und ");
   const menge=os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ");
-  const map={ Vorname: parts[0]||"", Nachname: parts.slice(1).join(" "), Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staff(), Datum: fmtDate(today()) };
+  const map={ Vorname: parts[0]||"", Nachname: parts.slice(1).join(" "), Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staff(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
   return text.replace(/\{(\w+)\}/g, (m,k)=> k in map ? map[k] : m);
 }
 function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]+@[^\s·,;]+/)||[])[0]||"";
@@ -311,13 +314,14 @@ function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]
 function msgDialog(ids){
   const os=ids.map(id=>S.orders[id]).filter(Boolean); if(!os.length) return; const c=S.customers[os[0].customerId]||{};
   const tpls=templates(); const st=os.find(o=>o.status==="Storniert")?"t-storno":os.find(o=>o.status==="Warteliste")?"t-warteliste":"t-abholbereit";
-  let cur=tpls.find(t=>t.id===st)||tpls[0];
+  let cur=tpls.find(t=>t.id===st)||tpls[0]; let tag=today();
   const box=document.createElement("div"); box.className="modal"; document.body.appendChild(box);
   const cp=contactParts(c);
   const draw=()=>{ box.innerHTML=`<div class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="msgh">
     <div class="row spread"><h2 id="msgh">Nachricht an ${esc(c.name||"Kunde")}</h2><span class="muted">${esc(c.contact||"kein Kontakt hinterlegt")}</span></div>
     <label class="form" style="grid-template-columns:1fr"><span class="muted">Vorlage</span><select id="m-t">${tpls.map(t=>`<option value="${t.id}" ${t.id===cur?.id?"selected":""}>${esc(t.name)}</option>`).join("")}<option value="">Eigene Nachricht</option></select></label>
-    <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os):`Hallo ${firstName(c.name)},\n\n\nLiebe Grüße\nHive Games\n${staff()}`)}</textarea>
+    <label class="form" style="grid-template-columns:1fr"><span class="muted">Abholbar ab {Tag}</span><input type="date" id="m-d" value="${tag}"></label>
+    <textarea id="m-x" rows="9" style="width:100%">${esc(cur?fillTemplate(cur.text,os,tag):`Hallo ${firstName(c.name)},\n\n\nLiebe Grüße\nHive Games\n${staff()}`)}</textarea>
     ${staff()?"":`<div class="note">Tipp: oben dein Kürzel eintragen, dann wird {Mitarbeiter} ausgefüllt.</div>`}
     <div class="row"><button class="pri" id="m-c">Kopieren</button>
       ${cp.wa?`<a class="btn" id="m-w" href="#" target="_blank" rel="noopener">WhatsApp öffnen</a>`:""}
@@ -329,6 +333,7 @@ function msgDialog(ids){
       const e=box.querySelector("#m-e"); if(e) e.href=`mailto:${cp.mail}?subject=${encodeURIComponent((cur?.name||"Info")+": "+os.map(x=>orderLabel(x)).join(", "))}&body=${t}`; };
     ta.oninput=links; links();
     box.querySelector("#m-t").onchange=e=>{ cur=tpls.find(t=>t.id===e.target.value)||null; draw(); };
+    box.querySelector("#m-d").onchange=e=>{ tag=e.target.value||today(); if(cur) draw(); };
     box.querySelector("#m-c").onclick=async()=>{ try{ await navigator.clipboard.writeText(ta.value); toast("Kopiert"); }catch(e){ ta.select(); toast("Text markiert: mit Strg+C kopieren"); } };
     const mark=async()=>{ const n={date:today(),template:cur?.name||"Eigene Nachricht",staff:staff()}; await pool(os,o=>S.db.collection("orders").doc(o.id).update({notified:n})); toast("Als gesendet markiert"); };
     box.querySelector("#m-s").onclick=async()=>{ await mark(); box.remove(); };
@@ -339,7 +344,7 @@ function msgDialog(ids){
 }
 function templatesPanel(){
   return `<div class="panel"><h2>Nachrichtenvorlagen</h2>
-    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Produkt} {Menge} {Mitarbeiter} {Datum}. Die Vorlagen gelten für alle Geräte.</p>
+    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Menge} {Tag} {Mitarbeiter} {Datum}. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
     ${templates().map(t=>`<div class="panel" style="gap:8px"><div class="row"><input id="tn-${t.id}" value="${esc(t.name)}" style="flex:1 1 200px"><button class="sm" data-tsave="${t.id}">Speichern</button><button class="sm danger" data-tdel="${t.id}">Löschen</button></div>
       <textarea id="tt-${t.id}" rows="7" style="width:100%">${esc(t.text)}</textarea></div>`).join("")}
     <div class="row"><button id="tnew">Neue Vorlage</button></div></div>`;
