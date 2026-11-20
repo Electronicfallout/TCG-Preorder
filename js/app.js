@@ -222,6 +222,8 @@ function renderProduct(pid){
   ${s.over?`<div class="note bad">Es sind ${s.alloc-s.rec} Stück mehr zugeteilt als geliefert. Bitte Zuteilungen reduzieren.</div>`:""}
   <div class="panel"><h2>Produktdaten</h2>
     <div class="form">
+      <label class="wide">Produktname<input id="pd-name" value="${esc(p.name||"")}"></label>
+      <label class="wide">Name in Kundennachrichten<input id="pd-msgName" value="${esc(p.msgName||"")}" placeholder="leer = Produktname, z. B. ${esc(p.name||"")} ohne Artikelnummer"></label>
       <label>Release<input id="pd-release" value="${esc(p.release||"")}" placeholder="JJJJ-MM-TT, Q2 2027"></label>
       <label>Serie<input id="pd-series" value="${esc(p.series||"")}" placeholder="z. B. Mega Evolution"></label>
       <label>Spiel<select id="pd-game">${GAMES.map(g=>`<option ${g===gameOf(p)?"selected":""}>${g}</option>`).join("")}</select></label>
@@ -256,7 +258,7 @@ function renderProduct(pid){
   ${orderForm("pr", pid)}`;
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
-  ["release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  ["name","msgName","release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
   $("#del").onclick=()=>{ const own=ordersOf(pid), fl=flexOf(pid);
     $("#delc").innerHTML=` <button class="sm danger" id="delok">Ja: Produkt und ${own.length} Bestellungen endgültig löschen</button>`;
@@ -331,7 +333,8 @@ const fmtTag = d => d ? WEEKDAYS[new Date(d+"T12:00:00").getDay()]+", "+fmtDate(
 const spielOf = os => [...new Set(os.map(o=>gameOf(S.products[o.productId||(o.choices||[])[0]])))].join(" und ");
 function fillTemplate(text, os, tag){
   const o=os[0], c=S.customers[o.customerId]||{}; const parts=(c.name||"").trim().split(/\s+/);
-  const prod=os.map(x=>orderLabel(x)).join(" und ");
+  const mn=id=>{ const p=S.products[id]; return p?(p.msgName||p.name):"?"; };
+  const prod=os.map(x=>x.productId?mn(x.productId):(x.choices||[]).map(mn).join(" oder ")).join(" und ");
   const menge=os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ");
   const map={ Vorname: parts[0]||"", Nachname: parts.slice(1).join(" "), Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
   return text.replace(/\{(\w+)\}/g, (m,k)=> k in map ? map[k] : m);
@@ -691,7 +694,7 @@ const LOG_DIR = "protokoll";
 const AREA = { orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
 const FIELD = { status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
-  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text" };
+  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten" };
 const LOG_SKIP = new Set(["updatedAt", "createdAt", "notDupes", "pairId", "order", "hidden"]);
 function logVal(k, v){
   if (v == null || v === "") return "–";
