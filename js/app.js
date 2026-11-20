@@ -130,6 +130,22 @@ function renderImport(){
   $("#start").onclick = () => { S.skipImport=true; location.hash="produkte"; renderProducts(); };
   const d=$("#demo"); if(d) d.onclick=()=>importObj(demoData());
 }
+// Produkte einer Serie (mind. 2 aktive) als eine Zeile zeigen
+function listRows(ps){
+  const out=[]; const done=new Set();
+  for (const p of ps){ const sib=siblings(p).filter(x=>ps.includes(x));
+    if (seriesOf(p) && !p.archived && sib.length>1){ if(done.has(seriesOf(p))) continue; done.add(seriesOf(p)); out.push({isSeries:true, sib}); }
+    else out.push(p); }
+  return out;
+}
+function seriesRow({sib}){
+  const st=sib.map(stats); const sum=k=>st.reduce((a,s)=>a+(s[k]||0),0); const flex=Math.max(...st.map(s=>s.flex||0));
+  const rec=st.some(s=>s.rec!=null)?sum("rec"):null; const pre=sum("pre")+flex; const pct=rec&&pre?Math.min(100,Math.round(rec/pre*100)):0; const free=rec==null?null:rec-sum("alloc");
+  return `<tr class="click" data-go="serie-${sib[0].id}"><td><a href="#serie-${sib[0].id}"><b>Serie ${esc(seriesOf(sib[0]))}</b></a> <span class="muted">${sib.map(x=>esc(x.name)).join(" + ")}</span>${S.game==="Alle"?`<span class="gtag">${esc(gameOf(sib[0]))}</span>`:""}</td>
+    <td>${esc(relTxt(sib[0].release))}</td><td class="n">${pre}</td><td class="n">${sum("n")+(flex?Object.values(S.orders).filter(o=>!o.productId&&COUNTS(o.status)&&(o.choices||[]).some(c=>sib.some(x=>x.id===c))).length:0)}</td>
+    <td class="n">${rec??"–"}</td><td class="n">${sum("alloc")||""}</td>
+    <td>${rec==null?'<span class="muted">Ware fehlt</span>':`<div class="bar-meter" title="${pct}% gedeckt"><i style="width:${pct}%"></i></div>`}</td><td class="n">${free??""}</td></tr>`;
+}
 function renderProducts(){
   const q = (S.pq||"").toLowerCase(); const showArch = S.parch;
   const ps = Object.values(S.products).filter(p=>inGame(p) && (showArch||!p.archived) && (!q || p.name.toLowerCase().includes(q))).sort((a,b)=>relKey(a.release).localeCompare(relKey(b.release))||a.name.localeCompare(b.name));
@@ -146,7 +162,7 @@ function renderProducts(){
   <div class="row"><input id="pq" class="search" placeholder="Produkt suchen, z. B. OP19" value="${esc(S.pq||"")}"><label class="row muted"><input type="checkbox" id="parch" ${showArch?"checked":""}> Archivierte zeigen</label></div>
   ${(()=>{const hid=Object.values(S.products).filter(p=>!p.archived&&!inGame(p)).length; return hid?`<div class="note">${hid} Produkte anderer Spiele sind ausgeblendet. <button class="sm" id="showall">Alle Spiele zeigen</button></div>`:"";})()}
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Vorbestellt</th><th class="n">Bestellungen</th><th class="n">Wareneingang</th><th class="n">Zugeteilt</th><th>Deckung</th><th class="n">Frei</th></tr></thead><tbody>
-  ${ps.map(p=>{const s=stats(p);const pct=s.rec&&s.pre?Math.min(100,Math.round(s.rec/s.pre*100)):0;return `<tr class="click ${p.archived?"dim":""}" data-go="produkt-${p.id}">
+  ${listRows(ps).map(p=>{ if(p.isSeries) return seriesRow(p); const s=stats(p);const pct=s.rec&&s.pre?Math.min(100,Math.round(s.rec/s.pre*100)):0;return `<tr class="click ${p.archived?"dim":""}" data-go="produkt-${p.id}">
     <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${seriesOf(p)?` <a class="gtag" href="#serie-${p.id}">Serie ${esc(seriesOf(p))}</a>`:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(archiviert)</span>':""}</td><td>${esc(relTxt(p.release))}</td>
     <td class="n">${s.pre}${s.flex?`<span class="gtag" title="Kunden, denen egal ist, welches Produkt der Serie">+${s.flex} egal</span>`:""}</td><td class="n">${s.n}</td><td class="n">${s.rec??"–"}</td><td class="n">${s.alloc||""}</td>
     <td>${s.rec==null?'<span class="muted">Ware fehlt</span>':`<div class="bar-meter ${s.over?"over":""}" title="${pct}% der Vorbestellung gedeckt"><i style="width:${pct}%"></i></div>`}</td>
@@ -673,7 +689,7 @@ function xlDraw(){
       else if (X.rule === "any") { await saveOrder({ ...base, productId: null, qty: Math.max(...it.hit.map(h => h.q)) }, "any", it.hit.map(h => pid[h.i])); n++; }
       else { const g = newId("g"); for (const h of it.hit) { await write("orders", newId("o"), { ...base, productId: pid[h.i], qty: h.q, pairId: g }, "set"); n++; } }
     }
-    S.xl = null; setGame("Alle"); toast(`${n} Bestellungen importiert`); location.hash = "produkte";
+    S.xl = null; setGame("Alle"); toast(`${n} Bestellungen importiert`); location.hash = cols.length > 1 ? "serie-" + pid[cols[0]] : "produkt-" + pid[cols[0]];
   };
 }
 
