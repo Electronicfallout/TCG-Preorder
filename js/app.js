@@ -19,10 +19,18 @@ function toast(t){const el=$("#toast");el.textContent=t;el.hidden=false;clearTim
 const store = (k,v) => { try { if (v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v);} catch(e){ return null; } };
 
 // ---------- Kürzel
-const staffEl = $("#staff"); staffEl.value = store("staff") || "";
+// Kürzel gilt nur für dieses App-Fenster (geteilte Flex-PCs): sessionStorage + Rücksetzen nach 30 Min. ohne Eingabe
+const STAFF_IDLE = 30*60*1000;
+const sess = (k,v) => { try { if (v===undefined) return sessionStorage.getItem(k); if (v===null) sessionStorage.removeItem(k); else sessionStorage.setItem(k,v); } catch(e){ return null; } };
+try { localStorage.removeItem("staff"); } catch(e){}
+let lastAct = Number(sess("vb.act")) || 0;
+const staffEl = $("#staff"); staffEl.value = (Date.now()-lastAct < STAFF_IDLE && sess("vb.staff")) || "";
+const touch = () => { lastAct = Date.now(); sess("vb.act", String(lastAct)); };
+["pointerdown","keydown"].forEach(ev => document.addEventListener(ev, touch, { passive: true })); touch();
+setInterval(() => { if (staffEl.value && Date.now()-lastAct > STAFF_IDLE) { staffEl.value = ""; sess("vb.staff", null); markStaff(); toast("Kürzel nach 30 Minuten ohne Eingabe zurückgesetzt."); } }, 60000);
 function markStaff(){ const v=staffEl.value.toUpperCase().trim(); const known=Object.values(S.staff||{}); const rec=known.find(m=>m.kuerzel===v);
   staffEl.classList.toggle("need", !v || (known.length>0 && !rec)); staffEl.title = rec ? `Angemeldet als ${rec.name}` : (v && known.length ? "Kürzel nicht angelegt" : ""); }
-staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); store("staff", staffEl.value); markStaff(); });
+staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); sess("vb.staff", staffEl.value); markStaff(); });
 staffEl.addEventListener("input", markStaff); markStaff();
 const staff = () => staffEl.value.toUpperCase().trim();
 function staffRec(k){ return Object.values(S.staff||{}).find(m=>m.kuerzel===(k??staff())); }
@@ -434,7 +442,7 @@ function staffPanel(){
 function bindStaff(){
   const f=$("#snew"); if(f) f.onsubmit=async e=>{ e.preventDefault(); const k=$("#snk").value.toUpperCase().trim(), n=$("#snn").value.trim(); if(!k||!n) return;
     if(staffRec(k)) return toast(`Kürzel „${k}“ gibt es schon.`);
-    if(await write("staff","s-"+k,{id:"s-"+k,kuerzel:k,name:n},"set")){ toast(`${n} (${k}) angelegt`); if(!staff()){ staffEl.value=k; store("staff",k); markStaff(); } } };
+    if(await write("staff","s-"+k,{id:"s-"+k,kuerzel:k,name:n},"set")){ toast(`${n} (${k}) angelegt`); if(!staff()){ staffEl.value=k; sess("vb.staff",k); markStaff(); } } };
   app.querySelectorAll("[data-ssave]").forEach(b=>b.onclick=()=>{ const id=b.dataset.ssave; const n=$("#sn-"+id).value.trim(); if(!n) return toast("Vorname fehlt."); write("staff",id,{name:n}).then(ok=>ok&&toast("Gespeichert")); });
   app.querySelectorAll("[data-sdel]").forEach(b=>b.onclick=()=>{ const id=b.dataset.sdel; b.outerHTML=`<button class="sm danger" id="sdok-${id}">Wirklich löschen?</button>`; $("#sdok-"+id).onclick=()=>write("staff",id,{},"delete"); });
 }
@@ -938,7 +946,7 @@ const WIKI = [
   ["So funktioniert das Programm", `<p>Die App ersetzt die Excel-Warteliste. Es gibt drei Dinge: <b>Produkte</b> (z. B. ein Display oder eine ETB), <b>Kunden</b> und <b>Bestellungen</b> (Kunde X möchte Y Stück von Produkt Z).</p>
     <p>Alle Daten liegen in unserer Dropbox und gleichen sich automatisch zwischen allen Geräten ab. Oben rechts siehst du, ob gespeichert ist. Jede Änderung wird mit deinem Kürzel im <a href="#protokoll">Protokoll</a> festgehalten.</p>
     <p>Oben kannst du nach Spiel filtern (One Piece, Pokémon, Riftbound, Magic, Yu-Gi-Oh! oder Alle).</p>`],
-  ["Bevor du loslegst: Kürzel eintragen", `<p>Jeder Mitarbeiter wird einmal unter Einstellungen → <b>Mitarbeiter</b> mit Kürzel und Vorname angelegt. Der Vorname steht dann unter den Kundennachrichten, das Kürzel intern bei Bestellungen und im Protokoll.</p><p>Trag oben rechts im Feld <b>Kürzel</b> dein Kürzel ein (z. B. TT). Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden. Das Kürzel bleibt auf dem Gerät gespeichert. Wenn ein Kollege am selben Gerät arbeitet, muss er es auf sein eigenes ändern.</p>`],
+  ["Bevor du loslegst: Kürzel eintragen", `<p>Jeder Mitarbeiter wird einmal unter Einstellungen → <b>Mitarbeiter</b> mit Kürzel und Vorname angelegt. Der Vorname steht dann unter den Kundennachrichten, das Kürzel intern bei Bestellungen und im Protokoll.</p><p>Die PCs werden geteilt: Trag beim Arbeitsbeginn oben rechts im Feld <b>Kürzel</b> dein Kürzel ein (z. B. TT). Es gilt nur für dieses Fenster und wird nach 30 Minuten ohne Eingabe oder beim Schließen der App automatisch gelöscht. Wer übernimmt, trägt einfach sein eigenes Kürzel ein. Solange das Feld rot ist, kannst du keine Bestellungen anlegen und keine Nachrichten senden.</p>`],
   ["Neuen Artikel (Produkt) anlegen", `<ol><li>Reiter <b>Produkte</b> öffnen und ganz nach unten zu „Neues Produkt anlegen“ scrollen.</li>
     <li>Produktname eintragen, Spiel wählen, Release (Datum, „Q3 2027“ oder leer) und Einheit (Display, Case, Stück).</li>
     <li><b>Anlegen</b> klicken. Die Produktseite öffnet sich.</li></ol>
