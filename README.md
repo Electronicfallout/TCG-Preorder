@@ -7,6 +7,8 @@ Vorbestellungen, Wartelisten und Zuteilungen für One Piece, Pokémon und Riftbo
 ## Was die App kann
 
 - **Produkte** pro Spiel (One Piece, Pokémon, Riftbound), sortiert nach Release, mit Vorbestellt, Wareneingang, Zugeteilt, Frei und Fehlmenge.
+- **Serien** (z. B. zwei Pokémon-Produkte einer Serie): Kunden bestellen „nur A“, „nur B“, „egal welches“ oder „beide“. „Egal welches“-Bestellungen bekommen bei der Zuteilung das Produkt, von dem nach den festen Wünschen noch etwas übrig ist.
+- **Excel-Import** (Einstellungen): Spalten wie Name, Telefon, E-Mail, Produkt A, Produkt B werden direkt im Browser eingelesen. Die Datei wird nirgends hochgeladen.
 - **Bestellungen** mit Status: Offen, Zugeteilt, Auftrag angelegt, Abgeholt, Warteliste, Storniert. Stornierte und Wartelisten-Einträge zählen nicht zur Vorbestellsumme.
 - **Zuteilung** per Vorschlag: proportional (Reststücke nach größtem Rest, bei Gleichstand die frühere Bestellung) oder nach Bestelldatum.
 - **Kunden** mit etron-Kundennummer und Kontakt. Die App warnt bei ähnlichen Namen und zeigt mögliche **Dubletten** zum Zusammenführen.
@@ -47,6 +49,6 @@ Unter **Einstellungen → Kollegen einladen** den Einladungscode anzeigen und am
 
 ## Technik
 
-Statische Web-App ohne Server (HTML, CSS, JavaScript-Module), gehostet über GitHub Pages. Daten über die Dropbox-API (OAuth mit PKCE), gleicher Aufbau wie beim Dienstplaner.
+Statische Web-App ohne Server (HTML, CSS, JavaScript-Module), gehostet über GitHub Pages. Daten über die Dropbox-API (OAuth mit PKCE), gleicher Aufbau wie beim Dienstplaner. Mitgeliefert: [SheetJS](https://sheetjs.com) (Apache-2.0) für den Excel-Import.
 
 Lokal starten: `python3 -m http.server` im Projektordner, dann http://localhost:8000 öffnen und „Ausprobieren“ wählen (speichert nur im Browser, mit Beispieldaten).

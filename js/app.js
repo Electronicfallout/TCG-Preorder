@@ -50,6 +50,11 @@ const custByName = n => Object.values(S.customers).find(c => norm(c.name)===norm
 
 // ---------- derived numbers
 function ordersOf(pid){ return Object.values(S.orders).filter(o=>o.productId===pid); }
+// „Egal welches“-Bestellungen einer Serie: productId ist leer, choices nennt die möglichen Produkte
+function flexOf(pid){ return Object.values(S.orders).filter(o=>!o.productId && (o.choices||[]).includes(pid)); }
+const seriesOf = p => (p?.series||"").trim();
+const siblings = p => seriesOf(p) ? Object.values(S.products).filter(x=>!x.archived && seriesOf(x)===seriesOf(p)).sort((a,b)=>a.name.localeCompare(b.name)) : (p?[p]:[]);
+const orderLabel = o => o.productId ? (S.products[o.productId]?.name||"?") : (o.choices||[]).map(id=>S.products[id]?.name||"?").join(" oder ");
 function stats(p){
   const os = ordersOf(p.id);
   const pre = os.filter(o=>COUNTS(o.status)).reduce((s,o)=>s+(o.qty||0),0);
@@ -57,7 +62,8 @@ function stats(p){
   const open = os.filter(o=>o.status==="Offen" && (o.qty||0)>0).length;
   const wait = os.filter(o=>o.status==="Warteliste").length;
   const rec = num(p.received);
-  return { pre, alloc, open, wait, rec, free: rec==null?null:rec-alloc, n: os.filter(o=>COUNTS(o.status)).length, over: rec!=null && alloc>rec };
+  const flex = flexOf(p.id).filter(o=>COUNTS(o.status)).reduce((s,o)=>s+(o.qty||0),0);
+  return { flex, pre, alloc, open, wait, rec, free: rec==null?null:rec-alloc, n: os.filter(o=>COUNTS(o.status)).length, over: rec!=null && alloc>rec };
 }
 const relKey = r => { if(!r) return "9999"; if(/^\d{4}-\d{2}-\d{2}$/.test(r)) return r; const q=r.match(/Q(\d)\s*(\d{4})/i); if(q) return `${q[2]}-${String(q[1]*3).padStart(2,"0")}-31`; const y=r.match(/^(\d{4})$/); if(y) return `${y[1]}-12-31z`; return "9998"; };
 const relTxt = r => /^\d{4}-\d{2}-\d{2}$/.test(r||"") ? fmtDate(r) : (r || "offen");
@@ -70,12 +76,17 @@ function suggest(p, mode){
   let avail = (num(p.received)||0) - fixed.reduce((s,o)=>s+(o.alloc||0),0);
   const res = {}; avail = Math.max(0, avail);
   const want = flex.reduce((s,o)=>s+o.qty,0);
-  if (want <= avail){ flex.forEach(o=>res[o.id]=o.qty); return res; }
-  if (mode==="fifo"){ for(const o of flex){ const g=Math.min(o.qty,avail); res[o.id]=g; avail-=g; } return res; }
-  let used=0; const rest=[];
-  flex.forEach((o,i)=>{ const exact=o.qty*avail/want; const b=Math.floor(exact+1e-9); res[o.id]=b; used+=b; rest.push({o,r:exact-b,i}); });
-  rest.sort((x,y)=> y.r-x.r || x.i-y.i);
-  for (const {o} of rest){ if(used>=avail) break; if(res[o.id]<o.qty){ res[o.id]++; used++; } }
+  if (want <= avail){ flex.forEach(o=>res[o.id]=o.qty); }
+  else if (mode==="fifo"){ let a=avail; for(const o of flex){ const g=Math.min(o.qty,a); res[o.id]=g; a-=g; } }
+  else {
+    let used=0; const rest=[];
+    flex.forEach((o,i)=>{ const exact=o.qty*avail/want; const b=Math.floor(exact+1e-9); res[o.id]=b; used+=b; rest.push({o,r:exact-b,i}); });
+    rest.sort((x,y)=> y.r-x.r || x.i-y.i);
+    for (const {o} of rest){ if(used>=avail) break; if(res[o.id]<o.qty){ res[o.id]++; used++; } }
+  }
+  // Was übrig bleibt, geht an „egal welches“-Bestellungen der Serie (nach Bestelldatum)
+  let left = avail - Object.values(res).reduce((a,b)=>a+b,0);
+  for (const o of flexOf(p.id).filter(o=>o.status==="Offen" && (o.qty||0)>0).sort(sortOrders)){ if(left<=0) break; const g=Math.min(o.qty,left); res[o.id]=g; left-=g; }
   return res;
 }
 
@@ -132,8 +143,8 @@ function renderProducts(){
   <div class="row"><input id="pq" class="search" placeholder="Produkt suchen, z. B. OP19" value="${esc(S.pq||"")}"><label class="row muted"><input type="checkbox" id="parch" ${showArch?"checked":""}> Archivierte zeigen</label></div>
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Vorbestellt</th><th class="n">Bestellungen</th><th class="n">Wareneingang</th><th class="n">Zugeteilt</th><th>Deckung</th><th class="n">Frei</th></tr></thead><tbody>
   ${ps.map(p=>{const s=stats(p);const pct=s.rec&&s.pre?Math.min(100,Math.round(s.rec/s.pre*100)):0;return `<tr class="click ${p.archived?"dim":""}" data-go="produkt-${p.id}">
-    <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(archiviert)</span>':""}</td><td>${esc(relTxt(p.release))}</td>
-    <td class="n">${s.pre}</td><td class="n">${s.n}</td><td class="n">${s.rec??"–"}</td><td class="n">${s.alloc||""}</td>
+    <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${seriesOf(p)?`<span class="gtag">Serie ${esc(seriesOf(p))}</span>`:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(archiviert)</span>':""}</td><td>${esc(relTxt(p.release))}</td>
+    <td class="n">${s.pre}${s.flex?`<span class="gtag" title="Kunden, denen egal ist, welches Produkt der Serie">+${s.flex} egal</span>`:""}</td><td class="n">${s.n}</td><td class="n">${s.rec??"–"}</td><td class="n">${s.alloc||""}</td>
     <td>${s.rec==null?'<span class="muted">Ware fehlt</span>':`<div class="bar-meter ${s.over?"over":""}" title="${pct}% der Vorbestellung gedeckt"><i style="width:${pct}%"></i></div>`}</td>
     <td class="n" style="${s.over?"color:var(--bad);font-weight:700":""}">${s.free??""}</td></tr>`}).join("") || `<tr><td colspan="8" class="empty">Kein Produkt passt zur Suche.</td></tr>`}
   </tbody></table></div>
@@ -157,7 +168,7 @@ function renderProducts(){
 function renderProduct(pid){
   const p = S.products[pid]; if(!p){ app.innerHTML=`<a class="back" href="#produkte">← Produkte</a><div class="empty">Dieses Produkt gibt es nicht mehr.</div>`; return; }
   const s = stats(p); const sug = S.sugg[pid];
-  const os = ordersOf(pid).sort(sortOrders);
+  const os = [...ordersOf(pid), ...flexOf(pid)].sort(sortOrders);
   const fstat = S.fstat||"aktiv";
   const shown = os.filter(o => fstat==="alle" || (fstat==="aktiv" ? o.status!=="Storniert" : o.status===fstat));
   const sugSum = sug ? Object.values(sug.map).reduce((a,b)=>a+b,0) : 0;
@@ -167,6 +178,7 @@ function renderProduct(pid){
    <div class="row"><button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button></div></div>
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
+    ${s.flex?`<div class="tile"><b>+${s.flex}</b><span>egal welches (Serie)</span></div>`:""}
     <div class="tile"><b>${s.rec??"–"}</b><span>Wareneingang</span></div>
     <div class="tile"><b>${s.alloc}</b><span>zugeteilt</span></div>
     <div class="tile ${s.over?"bad":s.free===0?"ok":""}"><b>${s.free??"–"}</b><span>noch frei</span></div>
@@ -176,6 +188,7 @@ function renderProduct(pid){
   <div class="panel"><h2>Produktdaten</h2>
     <div class="form">
       <label>Release<input id="pd-release" value="${esc(p.release||"")}" placeholder="JJJJ-MM-TT, Q2 2027"></label>
+      <label>Serie<input id="pd-series" value="${esc(p.series||"")}" placeholder="z. B. Mega Evolution"></label>
       <label>Spiel<select id="pd-game">${GAMES.map(g=>`<option ${g===gameOf(p)?"selected":""}>${g}</option>`).join("")}</select></label>
       <label>Einheit<input id="pd-unit" value="${esc(p.unit||"")}"></label>
       <label>Beim Lieferanten bestellt<input id="pd-supplierOrdered" type="number" min="0" value="${p.supplierOrdered??""}"></label>
@@ -195,7 +208,7 @@ function renderProduct(pid){
     <select id="fstat">${["aktiv","alle",...STATUSES].map(x=>`<option ${x===fstat?"selected":""}>${x}</option>`).join("")}</select></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Kommentar</th></tr></thead><tbody>
   ${shown.map(o=>{const c=S.customers[o.customerId];const d=c?dupesOf(c):[];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}">
-    <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a>${d.length?` <span class="pill s-Warteliste" title="Ähnlich: ${esc(d.map(x=>x.name).join(", "))}">Dublette?</span>`:""}</td>
+    <td><a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a>${!o.productId?` <span class="pill s-Offen" title="${esc(orderLabel(o))}">egal welches</span>`:o.pairId?` <span class="gtag">Teil von „beide“</span>`:""}${d.length?` <span class="pill s-Warteliste" title="Ähnlich: ${esc(d.map(x=>x.name).join(", "))}">Dublette?</span>`:""}</td>
     <td class="n"><input type="number" min="0" data-f="qty" id="q-${o.id}" value="${o.qty??""}"></td>
     <td><input type="date" data-f="date" id="d-${o.id}" value="${esc(o.date||"")}"></td>
     <td class="mono">${esc(o.staff||"")}</td>
@@ -207,15 +220,15 @@ function renderProduct(pid){
   ${orderForm("pr", pid)}`;
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
-  ["release","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  ["release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();};
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,S.mode)};render();}};
   $("#sug").onclick=()=>{ S.sugg[pid]={map:suggest(p,$("#mode").value)}; render(); };
   if (sug){ $("#dis").onclick=()=>{delete S.sugg[pid];render();};
-    $("#apply").onclick=async()=>{ const b=$("#apply"); b.disabled=true; const ch=Object.entries(sug.map).filter(([id,v])=>S.orders[id] && S.orders[id].alloc!==v);
-      try{ await pool(ch, ([id,v])=>S.db.collection("orders").doc(id).update({alloc:v})); delete S.sugg[pid]; toast(`${ch.length} Zuteilungen gespeichert`); render(); }catch(e){ toast("Nicht alles gespeichert: "+(e.message||e.code)); b.disabled=false; } }; }
-  $("#close").onclick=async()=>{ const ch=os.filter(o=>o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
+    $("#apply").onclick=async()=>{ const b=$("#apply"); b.disabled=true; const ch=Object.entries(sug.map).filter(([id,v])=>S.orders[id] && (S.orders[id].alloc!==v || !S.orders[id].productId) && !(!S.orders[id].productId && !v));
+      try{ await pool(ch, ([id,v])=>S.db.collection("orders").doc(id).update(S.orders[id].productId?{alloc:v}:{alloc:v,productId:pid,comment:[S.orders[id].comment,`war: ${orderLabel(S.orders[id])}`].filter(Boolean).join(" · ")})); delete S.sugg[pid]; toast(`${ch.length} Zuteilungen gespeichert`); render(); }catch(e){ toast("Nicht alles gespeichert: "+(e.message||e.code)); b.disabled=false; } }; }
+  $("#close").onclick=async()=>{ const ch=ordersOf(pid).filter(o=>o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
     try{ await pool(ch,o=>S.db.collection("orders").doc(o.id).update({status:"Zugeteilt"})); toast(`${ch.length} Bestellungen auf Zugeteilt gesetzt. Jetzt im etron-Export.`);}catch(e){toast("Fehler: "+(e.message||e.code));} };
   bindRows(); bindOrderForm("pr");
 }
@@ -233,6 +246,7 @@ function orderForm(k, pid, cid){
   <form class="form" id="${k}-f">
     ${pid?"":`<label class="wide">Produkt<select id="${k}-p" required><option value="">Produkt wählen</option>${prods.map(p=>`<option value="${p.id}">${S.game==="Alle"?esc(gameOf(p))+" · ":""}${esc(p.name)}</option>`).join("")}</select></label>`}
     ${cid?"":`<label class="wide">Kunde<input id="${k}-c" list="${k}-cl" required autocomplete="off" placeholder="Vorname Nachname"><datalist id="${k}-cl">${Object.values(S.customers).map(c=>`<option value="${esc(c.name)}">`).join("")}</datalist></label>`}
+    <label class="wide" id="${k}-ml" hidden>Bei dieser Serie<select id="${k}-m"></select></label>
     <label>Menge (Stück)<input id="${k}-q" type="number" min="1" required></label>
     <label>Bestelldatum<input id="${k}-d" type="date" value="${today()}"></label>
     <label class="wide">Kommentar<input id="${k}-k" placeholder="z. B. 1 Case = 12 Stück"></label>
@@ -241,19 +255,32 @@ function orderForm(k, pid, cid){
   </form><div id="${k}-hint"></div>
   <p class="muted">Nachbestellung = neue Zeile mit der zusätzlichen Menge. Cases vorher in Stück umrechnen.</p></div>`;
 }
+// mode: one = nur dieses Produkt, any = egal welches der Serie, all = je eine Bestellung pro Produkt der Serie
+async function saveOrder(o, mode, sib){
+  if (mode==="any") return write("orders",newId("o"),{...o,productId:null,choices:sib},"set");
+  if (mode==="all"){ const pair=newId("g"); let ok=true; for(const id of sib) ok = await write("orders",newId("o"),{...o,productId:id,pairId:pair},"set") && ok; return ok; }
+  return write("orders",newId("o"),o,"set");
+}
 function bindOrderForm(k){
   const f=$("#"+k+"-f"); if(!f) return; const ci=$("#"+k+"-c"), hint=$("#"+k+"-hint");
   const check=()=>{ if(!ci) return; const n=ci.value.trim(); if(!n||custByName(n)){hint.innerHTML="";return;}
     const d=Object.values(S.customers).filter(c=>similar(c.name,n)); hint.innerHTML = d.length?`<div class="note">„${esc(n)}“ ist neu. Meinst du ${d.map(c=>`<button type="button" class="sm" data-n="${esc(c.name)}">${esc(c.name)}</button>`).join(" ")}? Sonst wird ein neuer Kunde angelegt.</div>`:`<p class="muted">Neuer Kunde „${esc(n)}“ wird angelegt.</p>`;
     hint.querySelectorAll("[data-n]").forEach(b=>b.onclick=()=>{ci.value=b.dataset.n;check();}); };
   if(ci) ci.oninput=check;
+  const curPid=()=>{ const h=(location.hash||"").slice(1); return h.startsWith("produkt-")?h.slice(8):($("#"+k+"-p")?.value||""); };
+  const modeUi=()=>{ const p=S.products[curPid()]; const sib=siblings(p); const ml=$("#"+k+"-ml"); if(!ml) return;
+    ml.hidden = sib.length<2; if(sib.length<2) return;
+    const others=sib.filter(x=>x.id!==p.id).map(x=>x.name).join(", ");
+    $("#"+k+"-m").innerHTML=`<option value="one">nur ${esc(p.name)}</option><option value="any">egal welches: ${esc(sib.map(x=>x.name).join(" oder "))}</option><option value="all">alle: ${esc(p.name)} und ${esc(others)}</option>`; };
+  const ps=$("#"+k+"-p"); if(ps) ps.onchange=modeUi; modeUi();
   f.onsubmit=async e=>{ e.preventDefault();
     const h=(location.hash||"").slice(1); const pid=h.startsWith("produkt-")?h.slice(8):$("#"+k+"-p").value; if(!pid) return toast("Bitte Produkt wählen.");
     let cid = h.startsWith("kunde-")?h.slice(6):null;
     if(!staff()){ staffEl.focus(); return toast("Bitte oben dein Kürzel eintragen."); }
     if(!cid){ const n=ci.value.trim(); const ex=custByName(n); if(ex) cid=ex.id; else { cid=newId("c"); if(!await write("customers",cid,{name:n,contact:"",note:""},"set")) return; } }
     const o={productId:pid,customerId:cid,qty:num($("#"+k+"-q").value),date:$("#"+k+"-d").value,staff:staff(),status:$("#"+k+"-s").value,alloc:null,comment:$("#"+k+"-k").value.trim(),createdAt:new Date().toISOString()};
-    if(await write("orders",newId("o"),o,"set")){ toast("Bestellung gespeichert"); f.reset(); $("#"+k+"-d").value=today(); hint.innerHTML=""; }
+    const mode=$("#"+k+"-ml")?.hidden===false ? $("#"+k+"-m").value : "one";
+    if(await saveOrder(o, mode, siblings(S.products[pid]).map(x=>x.id))){ toast("Bestellung gespeichert"); f.reset(); $("#"+k+"-d").value=today(); hint.innerHTML=""; }
   };
 }
 
@@ -288,7 +315,7 @@ function renderCustomer(cid){
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Kommentar</th></tr></thead><tbody>
-  ${os.map(o=>{const p=S.products[o.productId];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}"><td><a href="#produkt-${o.productId}">${esc(p?.name||"?")}</a><span class="gtag">${esc(gameOf(p))}</span></td><td>${esc(relTxt(p?.release))}</td>
+  ${os.map(o=>{const p=S.products[o.productId||(o.choices||[])[0]];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}"><td><a href="#produkt-${p?.id||""}">${esc(orderLabel(o))}</a><span class="gtag">${esc(gameOf(p))}</span></td><td>${esc(relTxt(p?.release))}</td>
     <td class="n"><input type="number" min="0" data-f="qty" id="q-${o.id}" value="${o.qty??""}"></td><td>${fmtDate(o.date)}</td>
     <td><select data-f="status" id="s-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
     <td class="n">${o.alloc??""}</td><td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("")||`<tr><td colspan="7" class="empty">Keine Bestellungen.</td></tr>`}
@@ -456,12 +483,84 @@ function renderSettings(){
   <div class="panel"><h2>Sicherung</h2>
     <div class="row"><button id="bk2">Alle Daten herunterladen (JSON)</button></div>
     <p class="muted">Importieren ergänzt bzw. überschreibt Einträge mit gleicher ID. Dropbox hebt frühere Versionen der Datei 30 Tage auf.</p>
-    <div class="row"><input type="file" id="impf2" accept=".json,application/json"><span id="impst2" class="muted"></span></div></div>`;
+    <div class="row"><input type="file" id="impf2" accept=".json,application/json"><span id="impst2" class="muted"></span></div></div>
+  <div class="panel"><h2>Excel-Liste importieren</h2>
+    <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
+    <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
+  $("#xlf").onchange = e => xlStart(e.target.files[0]);
   $("#syncnow").onclick = () => S.doc.sync();
   $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
   $("#impf2").onchange = e => importFile(e.target.files[0], $("#impst2"));
+}
+
+// ---------- Excel-Import (läuft nur im Browser, nichts verlässt das Gerät außer in die Dropbox)
+function loadXlsx(){ return window.XLSX ? Promise.resolve() : new Promise((ok, no) => { const sc = document.createElement("script"); sc.src = "vendor/xlsx.full.min.js"; sc.onload = ok; sc.onerror = () => no(new Error("Excel-Bibliothek nicht ladbar")); document.head.appendChild(sc); }); }
+async function xlStart(file){
+  if (!file) return; const ui = $("#xlui");
+  try { await loadXlsx(); } catch (e) { ui.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true }).filter(r => r.some(v => String(v).trim() !== ""));
+  if (rows.length < 2) { ui.innerHTML = `<div class="note bad">Die erste Tabelle der Datei ist leer.</div>`; return; }
+  const head = rows[0].map(h => String(h).trim()); const X = { head, rows: rows.slice(1) };
+  const find = re => head.findIndex(h => re.test(h));
+  X.cName = find(/name/i); X.cTel = find(/tel|handy|phone|nummer/i); X.cMail = find(/mail/i);
+  X.prodCols = head.map((h, i) => i).filter(i => ![X.cName, X.cTel, X.cMail].includes(i));
+  S.xl = X; xlDraw();
+}
+function xlDraw(){
+  const X = S.xl, ui = $("#xlui"); if (!X) return;
+  const colSel = (id, cur) => `<select id="${id}"><option value="-1">–</option>${X.head.map((h, i) => `<option value="${i}" ${i === cur ? "selected" : ""}>${esc(h || "Spalte " + (i + 1))}</option>`).join("")}</select>`;
+  const prods = Object.values(S.products).filter(p => !p.archived).sort((a, b) => a.name.localeCompare(b.name));
+  ui.innerHTML = `<div class="form">
+      <label>Spalte Name${colSel("xl-n", X.cName)}</label><label>Spalte Telefon${colSel("xl-t", X.cTel)}</label><label>Spalte E-Mail${colSel("xl-m", X.cMail)}</label>
+      <label>Serie<input id="xl-s" placeholder="z. B. Mega Evolution" value="${esc(X.series || "")}"></label>
+      <label>Spiel<select id="xl-g">${GAMES.map(g => `<option ${g === (X.game || "Pokémon") ? "selected" : ""}>${g}</option>`).join("")}</select></label>
+      <label class="wide">Mehrere Produkte angekreuzt bedeutet<select id="xl-r"><option value="any" ${X.rule !== "all" ? "selected" : ""}>egal welches (Kunde bekommt eines davon)</option><option value="all" ${X.rule === "all" ? "selected" : ""}>beide (Kunde bekommt alle angekreuzten)</option></select></label>
+    </div>
+    <h2 style="margin-top:12px">Produktspalten</h2>
+    <div class="form">${X.prodCols.map(i => `<label>${esc(X.head[i] || "Spalte " + (i + 1))}<select data-pc="${i}"><option value="">nicht importieren</option><option value="new" ${(X.map?.[i] ?? "new") === "new" ? "selected" : ""}>neu anlegen: ${esc(X.head[i])}</option>${prods.map(p => `<option value="${p.id}" ${X.map?.[i] === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>`).join("")}</div>
+    <p class="muted" id="xl-sum"></p>
+    <div class="row"><button class="pri" id="xl-go">Importieren</button><button id="xl-x">Abbrechen</button></div>`;
+  const read = () => { X.cName = +$("#xl-n").value; X.cTel = +$("#xl-t").value; X.cMail = +$("#xl-m").value; X.series = $("#xl-s").value.trim(); X.game = $("#xl-g").value; X.rule = $("#xl-r").value;
+    X.map = {}; ui.querySelectorAll("[data-pc]").forEach(el => X.map[el.dataset.pc] = el.value); };
+  const plan = () => { read(); const cols = Object.entries(X.map).filter(([, v]) => v).map(([i]) => +i);
+    const items = []; let skip = 0;
+    for (const r of X.rows) { const name = String(r[X.cName] ?? "").trim(); if (!name) { skip++; continue; }
+      const hit = cols.map(i => ({ i, v: r[i] })).filter(x => String(x.v ?? "").trim() !== "" && !/^(0|nein|-)$/i.test(String(x.v).trim()));
+      if (!hit.length) { skip++; continue; }
+      items.push({ name, tel: X.cTel >= 0 ? String(r[X.cTel] ?? "").trim() : "", mail: X.cMail >= 0 ? String(r[X.cMail] ?? "").trim() : "", hit: hit.map(x => ({ i: x.i, q: typeof x.v === "number" && x.v > 0 ? Math.round(x.v) : (parseInt(x.v, 10) > 0 ? parseInt(x.v, 10) : 1) })) }); }
+    return { cols, items, skip }; };
+  const sum = () => { const { items, skip } = plan(); const multi = items.filter(x => x.hit.length > 1).length; const nw = items.filter(x => !custByName(x.name)).length;
+    $("#xl-sum").textContent = `${items.length} Zeilen werden übernommen (${multi} mit mehreren Produkten, ${nw} neue Kunden). ${skip} Zeilen ohne Name oder Produkt werden übersprungen.`; };
+  ui.querySelectorAll("select,input").forEach(el => el.onchange = sum); sum();
+  $("#xl-x").onclick = () => { S.xl = null; ui.innerHTML = ""; $("#xlf").value = ""; };
+  $("#xl-go").onclick = async () => {
+    const { cols, items } = plan(); if (!items.length) return toast("Nichts zu importieren.");
+    if (cols.length > 1 && !X.series) return toast("Bitte einen Serien-Namen eintragen.");
+    if (!staff()) { staffEl.focus(); return toast("Bitte oben dein Kürzel eintragen."); }
+    $("#xl-go").disabled = true;
+    const pid = {};
+    for (const i of cols) { const v = X.map[i];
+      if (v === "new") { const name = X.head[i] || "Produkt " + (i + 1); const ex = Object.values(S.products).find(p => p.name.toLowerCase() === name.toLowerCase());
+        if (ex) { pid[i] = ex.id; if (X.series && !ex.series) await write("products", ex.id, { series: X.series }); }
+        else { pid[i] = newId("p"); await write("products", pid[i], { name, group: X.series || name, variant: "", series: X.series, game: X.game, release: "", unit: "", received: null, supplierOrdered: null, supplierConfirmed: null, archived: false }, "set"); } }
+      else { pid[i] = v; if (X.series && seriesOf(S.products[v]) !== X.series) await write("products", v, { series: X.series }); } }
+    let n = 0;
+    for (const it of items) {
+      let c = custByName(it.name); let cid = c?.id;
+      const contact = [it.tel, it.mail].filter(Boolean).join(" · ");
+      if (!cid) { cid = newId("c"); await write("customers", cid, { name: it.name, contact, note: "" }, "set"); }
+      else if (!c.contact && contact) await write("customers", cid, { contact });
+      const base = { customerId: cid, date: today(), staff: staff(), status: "Offen", alloc: null, comment: "Excel-Import", createdAt: new Date().toISOString() };
+      if (it.hit.length === 1) { await saveOrder({ ...base, productId: pid[it.hit[0].i], qty: it.hit[0].q }, "one"); n++; }
+      else if (X.rule === "any") { await saveOrder({ ...base, productId: null, qty: Math.max(...it.hit.map(h => h.q)) }, "any", it.hit.map(h => pid[h.i])); n++; }
+      else { const g = newId("g"); for (const h of it.hit) { await write("orders", newId("o"), { ...base, productId: pid[h.i], qty: h.q, pairId: g }, "set"); n++; } }
+    }
+    S.xl = null; toast(`${n} Bestellungen importiert`); location.hash = "produkte";
+  };
 }
 
 // ---------- Start: Verbinden
