@@ -349,9 +349,12 @@ function bindAuftrag(){
 function bindRows(){
   bindAuftrag();
   app.querySelectorAll("tr[data-o] [data-f]").forEach(el=>el.onchange=async()=>{ const id=el.closest("tr").dataset.o, f=el.dataset.f;
-    let v = el.type==="number"?num(el.value):el.value.trim(); const patch={[f]:v};
+    let v = el.type==="number"?num(el.value):el.value.trim();
     if (f==="status" && v==="Storniert") return cancelOrders([id]);
-    write("orders",id,patch).then(ok=>ok&&toast("Gespeichert")); });
+    if (f==="alloc") return saveAlloc(id, v);
+    const o=S.orders[id]; const patch={[f]:v};
+    if (f==="status" && v==="Offen" && o && isResolvedFlex(o) && !(o.alloc>0)) Object.assign(patch, unflex(o), {status:"Offen"});
+    write("orders",id,patch).then(ok=>ok&&toast(patch.productId===null?"Wieder offen: „egal welches“":"Gespeichert")); });
 }
 
 // ---------- Nachrichten an Kunden
@@ -515,6 +518,14 @@ function bindTemplates(){
   const n=$("#tnew"); if(n) n.onclick=()=>{ const id=newId("t"); write("templates",id,{id,name:"Neue Vorlage",text:"Hallo {Vorname},\n\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}",order:99},"set"); };
 }
 
+// ---------- Zuteilung löschen: eine „egal welches“-Bestellung wird wieder frei (nicht an ein Produkt gebunden, Status Offen)
+const isResolvedFlex = o => !!(o && o.productId && (o.choices||[]).length>1 && !LOCKED.has(o.status));
+const unflex = o => ({ productId:null, alloc:null, comment:(o.comment||"").split(" · ").filter(x=>!x.startsWith("war: ")).join(" · ") });
+function saveAlloc(id, v){ const o=S.orders[id]; if(!o) return;
+  if(!(v>0) && isResolvedFlex(o)) return write("orders",id,{...unflex(o), status:(o.status==="Zugeteilt"||o.status==="Warteliste")?"Offen":o.status}).then(ok=>ok&&toast("Zuteilung gelöscht: wieder „egal welches“, Status Offen"));
+  const patch={alloc:v}; if(!(v>0) && o.status==="Zugeteilt") patch.status="Offen";
+  return write("orders",id,patch).then(ok=>ok&&toast(patch.status?"Zuteilung gelöscht, Status wieder Offen":"Gespeichert")); }
+
 // ---------- Stornieren: frei gewordene Ware einem anderen Kunden geben
 async function cancelOrders(ids){
   const before = ids.map(id=>({...S.orders[id]})).filter(o=>o.id);
@@ -657,7 +668,7 @@ function renderSeries(anyPid){
   </tbody></table></div>
   ${orderForm("se", null, null, ids)}`;
   app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
-  app.querySelectorAll("input[data-oid]").forEach(el=>el.onchange=()=>write("orders",el.dataset.oid,{alloc:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
+  app.querySelectorAll("input[data-oid]").forEach(el=>el.onchange=()=>saveAlloc(el.dataset.oid, num(el.value)));
   app.querySelectorAll("input[data-flex]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!v) return; const o=S.orders[el.dataset.flex];
     write("orders",o.id,{productId:el.dataset.pid,alloc:v,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")}).then(ok=>ok&&toast("Zugeteilt")); });
   app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const ids2=el.closest("tr").dataset.row.split(","); const v=el.value;
