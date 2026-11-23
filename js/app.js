@@ -509,13 +509,69 @@ function bindEtron(){ const b=$("#et-save"); if(!b) return; b.onclick=()=>{ let 
 const ETRON_API_FILE = "etron-api.json";
 async function etronApiLoad(){ try{ const r=await S.provider.read(ETRON_API_FILE); return r ? { ...r.data, _rev:r.rev } : null; }catch(e){ return { _err:e.message||String(e) }; } }
 // Schritte und Fehler ins Log des Programms (logs\<PC>.log). Nur IDs, Artikelnummern, Anzahlen, keine Namen/Telefonnummern.
-function dlog(level, msg){ if(!S.desktop) return; try{ desk("/api/clientlog",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level,msg:String(msg).slice(0,1500)})}).catch(()=>{}); }catch(e){} }
+const redactTxt = t => String(t).replace(/[^\s"'<>,;:]+@[^\s"'<>,;:]+\.[A-Za-z]{2,}/g,"[E-Mail]").replace(/\+?\d[\d /().-]{6,}\d/g,"[Nummer]").replace(/[\r\n]+/g," ");
+function dlog(level, msg){ msg=String(msg).slice(0,1500);
+  if(S.desktop){ try{ desk("/api/clientlog",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level,msg})}).catch(()=>{}); }catch(e){} return; }
+  try{ const k="vb.dlog"; const a=JSON.parse(localStorage.getItem(k)||"[]"); const d=new Date(); a.push(`${d.toLocaleDateString("de-AT")} ${d.toLocaleTimeString("de-AT")}.${String(d.getMilliseconds()).padStart(3,"0")} ${level.padEnd(5)} ${redactTxt(msg)}`); if(a.length>3000) a.splice(0,a.length-3000); localStorage.setItem(k,JSON.stringify(a)); }catch(e){} }
 // etron-Anfragen laufen über das Programm (Vorbestellungen.exe) direkt zu etron. Der Zugang liegt in etron-zugang.json im Dropbox-Ordner.
 async function etronCall(action, data){
-  if(!S.desktop) throw new Error("etron geht nur im Programm (Vorbestellungen.exe).");
+  if(!S.desktop) return etronWeb(action, data||{});
   const r=await desk("/api/etron",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...(data||{})})});
   let j=null; try{ j=await r.json(); }catch(e){}
   if(!r.ok){ const x=new Error((j&&j.error)||("HTTP "+r.status)); x.http=r.status; x.etron=j&&j.status; throw x; } return j; }
+const etronOn = () => !!(S.desktop || S.extOk);
+
+// ---------- etron in der Web-Version: über die Chrome-Erweiterung „TCG Vorbestellungen – etron-Verbindung“ (Ordner erweiterung/)
+// Die Erweiterung reicht nur Anfragen an https://<instanz>.wawi.onretail.eu/api/… weiter. Zugang (Adresse, Key, Secret) liegt in der Dropbox.
+const ETRON_EXT_ID = "fcfmfmnppjflcimfmfeajncklmodkdel";
+const ETRON_FILE = "etron-zugang.json";
+function extSend(msg){ return new Promise((ok,no)=>{ const rt=globalThis.chrome?.runtime; const miss=()=>no(Object.assign(new Error("Die etron-Erweiterung ist in diesem Browser nicht installiert oder ausgeschaltet (siehe Einstellungen → etron-Schnittstelle)."),{noext:true}));
+  if(!rt?.sendMessage) return miss(); try{ rt.sendMessage(ETRON_EXT_ID,msg,r=>{ if(rt.lastError||!r) return miss(); ok(r); }); }catch(e){ miss(); } }); }
+async function extCheck(){ try{ const r=await extSend({type:"hello"}); S.extOk=r?.version||true; }catch(e){ S.extOk=false; } return S.extOk; }
+const EW = { tok:null, until:0, cfg:null };
+async function ewCfg(force){ if(EW.cfg&&!force) return EW.cfg; const r=await S.provider.read(ETRON_FILE); EW.cfg=r&&r.data&&r.data.key?{...r.data}:null; EW.rev=r?r.rev:null; return EW.cfg; }
+const ewBase = c => { let u=String(c.url||"").trim().replace(/\/+$/,""); const i=u.indexOf("/api/"); if(i>0) u=u.slice(0,i); return u+"/api/v2"; };
+async function ewFetch(url,opt){ const r=await extSend({type:"fetch",url,...opt}); if(r.error) throw new Error("etron nicht erreichbar: "+r.error); return r; }
+function ewShape(t){ let v; try{ v=JSON.parse(t); }catch(e){ return `kein JSON (${String(t).length} Zeichen)`; } const f=(x,d)=>x===null?"null":Array.isArray(x)?`Liste(${x.length})${x.length&&d<2?" von "+f(x[0],d+1):""}`:typeof x==="object"?"{"+Object.keys(x).sort().map(k=>k==="id"?"id="+x[k]:k==="error"?"error="+redactTxt(JSON.stringify(x[k])).slice(0,200):k).join(", ")+"}":typeof x==="number"?"Zahl "+x:typeof x==="string"?`Text(${x.length})`:String(x); return f(v,0); }
+async function ewToken(c,force){ if(!force&&EW.tok&&Date.now()<EW.until) return EW.tok;
+  const r=await ewFetch(ewBase(c)+"/authentication/oauth2/token",{method:"POST",headers:{Authorization:"Basic "+btoa(c.key+":"+c.secret),"Content-Type":"application/x-www-form-urlencoded"},body:"grant_type=client_credentials"});
+  dlog("INFO",`ETRON Anmeldung -> HTTP ${r.status}`);
+  if(r.status!==200) throw Object.assign(new Error(`etron-Anmeldung abgelehnt (HTTP ${r.status}): ${r.text.slice(0,200)}`),{etron:r.status});
+  const j=JSON.parse(r.text); if(!j.access_token) throw new Error("etron-Anmeldung: unerwartete Antwort"); EW.tok=j.access_token; EW.until=Date.now()+Math.max(60,(j.expires_in||3600)-60)*1000; return EW.tok; }
+const ewQuery = p => p ? "?"+Object.keys(p).sort().map(k=>k+"="+encodeURIComponent(typeof p[k]==="string"?p[k]:JSON.stringify(p[k]))).join("&") : "";
+async function ewCall(c,method,path,params,body){
+  for(let a=0;a<2;a++){ const t=await ewToken(c,a>0); const t0=Date.now();
+    const r=await ewFetch(ewBase(c)+path+ewQuery(params),{method,headers:{Authorization:"Bearer "+t,...(body?{"Content-Type":"application/json"}:{})},body:body?JSON.stringify(body):undefined});
+    dlog("INFO",`ETRON ${method} ${path} -> HTTP ${r.status}, ${Date.now()-t0} ms, Antwort: ${ewShape(r.text)}`);
+    if(r.status===401&&a===0) continue;
+    if(r.status>=300){ dlog("WARN","ETRON Fehlertext: "+r.text.slice(0,600)); throw Object.assign(new Error(`etron HTTP ${r.status}: ${r.text.slice(0,300)}`),{etron:r.status}); }
+    try{ return JSON.parse(r.text); }catch(e){ return r.text; } }
+  throw new Error("etron: Anmeldung abgelaufen"); }
+const ewList = v => Array.isArray(v)?v:(v&&(v.data||v.result||v.records))||[];
+const ewStr = (v,n=120) => String(v??"").trim().slice(0,n);
+const EW_PARTNER_FIELDS = ["id","name","firstname","lastname","ref","phone","mobile","email"];
+const EW_ACTIONS = {
+  async ping(c){ await ewToken(c,true); const r=await ewCall(c,"GET","/search_extract/res.partner",{fields:["id"],limit:1}); return {ok:true,read:ewList(r).length}; },
+  async partner_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
+    const domain=/^\d+$/.test(q)?["|","|","|",["id","=",+q],["ref","=",q],["phone","ilike",q],["mobile","ilike",q]]:["|","|","|",["name","ilike",q],["email","ilike",q],["phone","ilike",q],["mobile","ilike",q]];
+    return {items:ewList(await ewCall(c,"GET","/search_extract/res.partner",{domain,fields:EW_PARTNER_FIELDS,limit:15,order:"name"}))}; },
+  async partner_create(c,b){ const firstname=ewStr(b.firstname), lastname=ewStr(b.lastname); if(!firstname||!lastname) throw new Error("Vor- und Nachname fehlen");
+    const values={firstname,lastname,type:"contact",customer_rank:1}; if(ewStr(b.phone)) values.mobile=ewStr(b.phone,40); if(ewStr(b.email)) values.email=ewStr(b.email);
+    return {result:await ewCall(c,"POST","/create/res.partner",null,{values})}; },
+  async product_find(c,b){ const codes=(b.codes||[]).map(x=>ewStr(x,60)).filter(Boolean).slice(0,50); if(!codes.length) return {items:[]};
+    return {items:ewList(await ewCall(c,"GET","/search_read/product.product",{domain:[["default_code","in",codes]],fields:["id","default_code","name"]}))}; },
+  async order_create(c,b){ const partner=parseInt(b.partner_id,10); if(!partner) throw new Error("etron-Kundennummer fehlt");
+    const lines=(b.lines||[]).slice(0,50).map(l=>({product_id:parseInt(l.product_id,10),product_uom_qty:Math.max(1,Math.min(9999,parseInt(l.qty,10)||0))})).filter(l=>l.product_id);
+    if(!lines.length) throw new Error("Keine Auftragszeilen");
+    const values={partner_id:partner,origin:ewStr(b.origin,60)||"Vorbestellung",order_line:lines.map(l=>[0,0,l])}; if(ewStr(b.note)) values.note=ewStr(b.note,500);
+    const names=ewStr(b.tag,200).split(",").map(x=>x.trim()).filter(Boolean);
+    if(names.length){ const tags=ewList(await ewCall(c,"GET","/search_read/crm.tag",{domain:[["name","in",names]],fields:["id","name"]})); const ids=tags.map(t=>parseInt(t.id,10)).filter(Boolean);
+      if(ids.length<names.length) throw new Error(`Stichwort „${names.join(", ")}“ gibt es in etron nicht (genaue Schreibweise prüfen)`); values.tag_ids=[[6,0,ids]]; }
+    return {result:await ewCall(c,"POST","/create/sale.order",null,{values})}; },
+};
+async function etronWeb(action, data){ const c=await ewCfg(); if(!c||!c.key||!c.secret||!c.url) throw new Error("etron-Zugang ist nicht eingerichtet (Einstellungen → etron-Schnittstelle).");
+  const f=EW_ACTIONS[action]; if(!f) throw new Error("unbekannte Aktion");
+  try{ return await f(c,data); }catch(e){ dlog("ERROR",`ETRON ${action} FEHLER: ${e.message||e}`); throw e; } }
 // ---------- etron direkt (nur im Programm): Kunden suchen/anlegen, Aufträge anlegen
 // Antwort von create: Zahl, [Zahl] oder {id: Zahl}
 function etronIdOf(r){ const v=r?.result??r; if(typeof v==="number") return v; if(Array.isArray(v)) return etronIdOf(v[0]); if(v&&typeof v==="object") return etronIdOf(v.id??v.result??v.data); const n=parseInt(v,10); return n>0?n:null; }
@@ -541,7 +597,7 @@ async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronI
   dlog("INFO",`Auftrag angelegt: Kunde ${cid}, etron-Auftrag ${oid}`);
   await pool(list,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid})); return oid; }
 function etronApiPanel(){
-  if(!S.desktop) return `<div class="panel"><h2>etron-Schnittstelle</h2><p class="muted">Die direkte Verbindung zu etron gibt es nur im Programm <b>Vorbestellungen.exe</b> aus dem Dropbox-Ordner, nicht in der Web-Version.</p></div>`;
+  if(!S.desktop) return etronWebPanel();
   return `<div class="panel"><h2>etron-Schnittstelle</h2>
     <p class="muted">Zugang aus etron (API &amp; Hooks → Authentication → Client Credentials, mit einem Benutzer mit wenig Rechten). Er wird nur im Dropbox-Ordner des Programms gespeichert (<span class="mono">etron-zugang.json</span>), nie im Programmcode. Das Programm spricht direkt mit etron, nichts läuft über fremde Server.</p>
     <div class="form">
@@ -550,7 +606,33 @@ function etronApiPanel(){
       <label>Client Secret<input id="ea-sec" type="password" autocomplete="new-password" spellcheck="false"></label>
       <button id="ea-save" class="pri">Speichern</button><button id="ea-test">Verbindung testen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
     </div><div id="ea-st" class="muted">Lade …</div><div id="ea-res"></div></div>`; }
-function bindEtronApi(){ const st=$("#ea-st"); if(!st) return; let cur={};
+function etronWebPanel(){
+  return `<div class="panel"><h2>etron-Schnittstelle</h2>
+    <p class="muted">Für etron braucht jeder PC einmal die Chrome-Erweiterung „TCG Vorbestellungen – etron-Verbindung“ (Ordner <span class="mono">erweiterung</span>, Anleitung in der Wiki). Sie darf nur mit eurer etron-Adresse sprechen und nur Anfragen von dieser App annehmen. Der Zugang aus etron (API &amp; Hooks → Authentication, Benutzer mit wenig Rechten) liegt in eurer Dropbox (<span class="mono">${ETRON_FILE}</span>), nie im Programmcode.</p>
+    <p id="ea-ext" class="muted">Prüfe Erweiterung …</p>
+    <div class="form">
+      <label class="wide">etron-Adresse<input id="ea-url" placeholder="https://xxxxxx.wawi.onretail.eu" autocomplete="off"></label>
+      <label>Client Key<input id="ea-key" autocomplete="off" spellcheck="false"></label>
+      <label>Client Secret<input id="ea-sec" type="password" autocomplete="new-password" spellcheck="false"></label>
+      <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
+    </div><div id="ea-st" class="muted">Lade …</div><div id="ea-res"></div>
+    <div class="row" style="margin-top:8px"><button class="sm" id="ea-log">Log herunterladen</button><span class="muted">Schritte und Fehler dieses Browsers, ohne Kundennamen/Telefonnummern.</span></div></div>`; }
+function bindEtronWeb(){ const st=$("#ea-st"); if(!st) return;
+  extCheck().then(v=>{ const e=$("#ea-ext"); if(e) e.innerHTML = v ? `<span class="ok">✓ Erweiterung aktiv (Version ${esc(String(v))}).</span>` : `<span class="bad">✗ Erweiterung nicht gefunden.</span> In Chrome: <span class="mono">chrome://extensions</span> → oben rechts „Entwicklermodus“ ein → „Entpackte Erweiterung laden“ → den Ordner <span class="mono">erweiterung</span> aus dem Dropbox-Ordner wählen. Danach diese Seite neu laden.`; });
+  const show=()=>{ const c=EW.cfg; st.innerHTML = c ? `Zugang gespeichert (Key …${esc(String(c.key).slice(-4))}${c.savedAt?", "+esc(c.savedAt):""}${c.savedBy?" von "+esc(c.savedBy):""}). Key/Secret leer lassen = unverändert.` : "Noch kein Zugang gespeichert.";
+    if(c?.url) $("#ea-url").value=c.url; $("#ea-key").placeholder=c?"gespeichert":""; $("#ea-sec").placeholder=c?"gespeichert":""; };
+  ewCfg(true).then(show).catch(e=>{ st.textContent="Dropbox nicht lesbar: "+(e.message||e); });
+  $("#ea-save").onclick=async()=>{ if(needStaff()) return; const c=EW.cfg||{}; const url=$("#ea-url").value.trim()||c.url||"", key=$("#ea-key").value.trim()||c.key||"", secret=$("#ea-sec").value.trim()||c.secret||"";
+    if(!/^https:\/\/[^/]+\.wawi\.onretail\.eu/.test(url)) return toast("Bitte die etron-Adresse eintragen: https://xxxxxx.wawi.onretail.eu"); if(!key||!secret) return toast("Bitte Client Key und Client Secret eintragen.");
+    const data={url,key,secret,savedAt:new Date().toLocaleString("de-AT"),savedBy:staff()};
+    try{ await ewCfg(true); const r=await S.provider.write(ETRON_FILE,data,EW.rev||null); EW.cfg=data; EW.rev=r.rev; EW.tok=null; $("#ea-key").value=""; $("#ea-sec").value=""; show(); toast("etron-Zugang in der Dropbox gespeichert"); }
+    catch(e){ toast(e.conflict?"Wurde gerade woanders geändert. Bitte nochmal speichern.":"Nicht gespeichert: "+(e.message||e)); } };
+  $("#ea-del").onclick=async()=>{ if(!EW.cfg) return toast("Es ist kein Zugang gespeichert."); try{ await ewCfg(true); const r=await S.provider.write(ETRON_FILE,{},EW.rev); EW.cfg=null; EW.rev=r.rev; EW.tok=null; show(); toast("Zugang gelöscht"); }catch(e){ toast("Nicht gelöscht: "+(e.message||e)); } };
+  $("#ea-test").onclick=async()=>{ const res=$("#ea-res"); res.innerHTML=`<ul class="eatest"><li>… teste</li></ul>`;
+    try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Erweiterung aktiv.</li><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li></ul>`; }
+    catch(e){ res.innerHTML=`<ul class="eatest"><li class="bad">✗ ${esc(e.message||e)}</li></ul>`; } };
+  $("#ea-log").onclick=()=>{ let a=[]; try{ a=JSON.parse(localStorage.getItem("vb.dlog")||"[]"); }catch(e){} saveFile(`vorbestellungen-log-${today()}.txt`, new Blob([a.join("\r\n")||"(leer)"],{type:"text/plain;charset=utf-8"})); }; }
+function bindEtronApi(){ if(!S.desktop) return bindEtronWeb(); const st=$("#ea-st"); if(!st) return; let cur={};
   const load=async()=>{ try{ cur=await (await desk("/api/etron/config")).json(); }catch(e){ cur={}; }
     st.innerHTML = cur.set ? `Zugang gespeichert (Key …${esc(cur.keyTail||"")}${cur.savedAt?", "+esc(cur.savedAt):""}${cur.savedBy?" von "+esc(cur.savedBy):""}). Key/Secret leer lassen = unverändert.` : "Noch kein Zugang gespeichert.";
     if(cur.url) $("#ea-url").value=cur.url; $("#ea-key").placeholder=cur.set?"gespeichert":""; $("#ea-sec").placeholder=cur.set?"gespeichert":""; };
@@ -791,9 +873,9 @@ function custNewForm(k, pre){ const [fn,...rest]=(pre||"").trim().split(/\s+/);
     <label>E-Mail<input id="${k}-nmail" type="email" autocomplete="off"></label>
     <label>etron-Nr.<input id="${k}-net" autocomplete="off" placeholder="falls bekannt"></label>
     <label class="row muted" style="align-self:end"><input type="checkbox" id="${k}-nwa"> kein WhatsApp</label>
-    ${S.desktop?`<label class="row muted" style="align-self:end" id="${k}-necl"><input type="checkbox" id="${k}-nec" checked> auch in etron anlegen</label>`:""}
+    ${etronOn()?`<label class="row muted" style="align-self:end" id="${k}-necl"><input type="checkbox" id="${k}-nec" checked> auch in etron anlegen</label>`:""}
     <button class="pri" id="${k}-nok" ${S.canWrite?"":"disabled"}>Kunden anlegen</button><button type="button" id="${k}-nx">Abbrechen</button>
-  </form><div id="${k}-nh"></div>${S.desktop?`<div id="${k}-neh" class="muted"></div>`:""}</div>`; }
+  </form><div id="${k}-nh"></div>${etronOn()?`<div id="${k}-neh" class="muted"></div>`:""}</div>`; }
 // onPick(cid, created) wird mit bestehendem oder neu angelegtem Kunden aufgerufen
 function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); const v=id=>$("#"+k+"-"+id).value.trim(); let okFor=null;
   const ok=$("#"+k+"-nok"), h=$("#"+k+"-nh");
@@ -818,7 +900,7 @@ function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); co
   $("#"+k+"-nform").onsubmit=async e=>{ e.preventDefault(); if(needStaff()) return; const r=check(); if(!r.fn||!r.ln) return toast("Bitte Vor- und Nachname eintragen."); if(r.ex) return;
     if(r.d.length && okFor!==r.key){ okFor=r.key; check(); return toast("Bitte die ähnlichen Kunden prüfen, dann nochmal klicken."); }
     const cid=newId("c"); const et=v("net"); const rec={name:r.fn+" "+r.ln,firstName:r.fn,lastName:r.ln,contact:joinContact(r.tel,v("nmail"),null),note:""};
-    if(!et && S.desktop && $("#"+k+"-nec")?.checked){ ok.disabled=true; try{ const id=await etronCreatePartner(r.fn,r.ln,r.tel,v("nmail")); rec.etronId=String(id); toast(`In etron angelegt: Nr. ${id}`); }
+    if(!et && etronOn() && $("#"+k+"-nec")?.checked){ ok.disabled=true; try{ const id=await etronCreatePartner(r.fn,r.ln,r.tel,v("nmail")); rec.etronId=String(id); toast(`In etron angelegt: Nr. ${id}`); }
       catch(e){ ok.disabled=false; return toast("In etron nicht angelegt: "+(e.message||e)+". Haken „auch in etron anlegen“ entfernen, um nur hier anzulegen."); } }
     if(et) rec.etronId=et; if($("#"+k+"-nwa").checked) rec.noWhatsapp=true; if(r.d.length) rec.notDupes=r.d.map(c=>c.id);
     if(await write("customers",cid,rec,"set")){ toast("Kunde angelegt"); box.innerHTML=""; onPick(cid,true); } };
@@ -968,7 +1050,7 @@ function renderCustomer(cid){
     <label>etron-Kundennr.${etronLink(c)?` <span style="float:right">${etronLink(c)}</span>`:""}<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="row muted" style="gap:6px;align-self:end"><input type="checkbox" id="cd-wa" ${c.noWhatsapp?"":"checked"}> Hat WhatsApp</label>
-    ${S.desktop&&!c.etronId?`<div class="wide" id="cd-et"><button type="button" class="sm" id="cd-ets">etron-Kunde suchen oder anlegen</button> <span id="cd-eth" class="muted"></span></div>`:""}
+    ${etronOn()&&!c.etronId?`<div class="wide" id="cd-et"><button type="button" class="sm" id="cd-ets">etron-Kunde suchen oder anlegen</button> <span id="cd-eth" class="muted"></span></div>`:""}
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
   ${orderForm("cu", null, cid)}
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
@@ -1099,12 +1181,12 @@ function renderExport(){
   <div class="tiles"><div class="tile"><b>${new Set(rows.map(o=>o.customerId)).size}</b><span>Kunden offen</span></div><div class="tile"><b>${rows.length}</b><span>Positionen</span></div><div class="tile"><b>${rows.reduce((s,o)=>s+o.alloc,0)}</b><span>Stück</span></div></div>
   ${Object.keys(byC).some(id=>!S.customers[id]?.etronId)?`<div class="note">${Object.keys(byC).filter(id=>!S.customers[id]?.etronId).length} Kunden haben noch keine etron-Nr. Bitte vor dem Anlegen der Aufträge unter Kunden eintragen.</div>`:""}
   <div class="row">${oqInput()}</div>
-  ${S.desktop&&rows.length?`<div class="panel"><h2>Aufträge direkt in etron anlegen</h2><p class="muted">Legt pro Kunde einen Auftrag als <b>Entwurf</b> an (Artikel über die Artikelnummer, Stichwort aus den Einstellungen unten) und setzt die Positionen auf „Auftrag angelegt“. In etron prüfen und bestätigen.</p>
+  ${etronOn()&&rows.length?`<div class="panel"><h2>Aufträge direkt in etron anlegen</h2><p class="muted">Legt pro Kunde einen Auftrag als <b>Entwurf</b> an (Artikel über die Artikelnummer, Stichwort aus den Einstellungen unten) und setzt die Positionen auf „Auftrag angelegt“. In etron prüfen und bestätigen.</p>
     <div class="row"><button class="pri" id="eall">Alle ${new Set(rows.filter(o=>S.customers[o.customerId]?.etronId).map(o=>o.customerId)).size} Kunden in etron anlegen</button><span id="eallc"></span></div><div id="eres">${(S.etRes||[]).join("")}</div></div>`:""}
-  ${S.desktop&&!rows.length&&S.etRes?.length?`<div class="panel"><h2>etron-Ergebnis</h2>${S.etRes.join("")}</div>`:""}
+  ${etronOn()&&!rows.length&&S.etRes?.length?`<div class="panel"><h2>etron-Ergebnis</h2>${S.etRes.join("")}</div>`:""}
   ${odooPanel(rows)}
   <div class="row"><button class="pri" id="dl" ${rows.length?"":"disabled"}>CSV herunterladen</button><button id="cp" ${rows.length?"":"disabled"}>Als Text kopieren</button><button id="mk" ${rows.length&&S.canWrite?"":"disabled"}>Alle als „Auftrag angelegt“ markieren</button><span id="mkc"></span></div>
-  ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2>${custFlags({...c,id:cid})}<a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${S.desktop&&c.etronId&&list.some(o=>o.status==="Zugeteilt")?`<button class="sm" data-eone="${cid}">In etron anlegen</button> `:""}${c.etronId?"etron-Nr. "+esc(c.etronId)+" "+etronLink({...c,id:cid}):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
+  ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2>${custFlags({...c,id:cid})}<a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${etronOn()&&c.etronId&&list.some(o=>o.status==="Zugeteilt")?`<button class="sm" data-eone="${cid}">In etron anlegen</button> `:""}${c.etronId?"etron-Nr. "+esc(c.etronId)+" "+etronLink({...c,id:cid}):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
     <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th><th>Nachricht</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}${S.products[o.productId]?.articleNo?` <span class="muted">Art.-Nr. ${esc(S.products[o.productId].articleNo)}</span>`:""}${/^https?:\/\//.test(S.products[o.productId]?.etronUrl||"")?` <a href="${esc(S.products[o.productId].etronUrl)}" target="_blank" rel="noopener">etron</a>`:""}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
   <div class="panel"><h2>Gesamtsicherung</h2><p class="muted">Alle Produkte, Kunden und Bestellungen als eine JSON-Datei, z. B. für den Umzug in die Dropbox.</p><div class="row"><button id="bk">Alle Daten exportieren (JSON)</button></div></div>
   <textarea id="ta" hidden rows="6" style="width:100%"></textarea>`;
@@ -1292,6 +1374,10 @@ const WIKI = [
     <li><b>Speichern</b>.</li></ol>
     <p>Danach beim Kunden (Reiter <b>Kunden</b>, Name anklicken) <b>Telefon/E-Mail</b> und, wenn bekannt, die <b>etron-Kundennummer</b> eintragen. Die Telefonnummer braucht man für WhatsApp-Nachrichten, die etron-Nr. für den Export.</p>
     <p>Größere Listen können unter Einstellungen → „Excel-Liste importieren“ auf einmal eingelesen werden.</p>`],
+  ["etron auf einem PC einrichten (einmalig)", `<ol><li>Die App in <b>Chrome</b> öffnen (https://electronicfallout.github.io/TCG-Preorder/) und mit der Dropbox verbinden (Einladungscode aus Einstellungen → Kollegen einladen).</li>
+    <li>Als App installieren: Chrome-Menü ⋮ → „Streamen, speichern und teilen“ → „Seite als App installieren“. Dann gibt es ein eigenes Fenster und ein Symbol auf dem Desktop.</li>
+    <li>Erweiterung laden: in Chrome <span class="mono">chrome://extensions</span> öffnen → oben rechts <b>Entwicklermodus</b> einschalten → <b>Entpackte Erweiterung laden</b> → den Ordner <span class="mono">erweiterung</span> aus dem Dropbox-Ordner wählen. Den Ordner danach nicht verschieben.</li>
+    <li>App neu laden. Unter Einstellungen → etron-Schnittstelle steht dann „✓ Erweiterung aktiv“. Den Zugang muss nur ein PC einmal speichern (liegt in der Dropbox).</li></ol>`],
   ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen. Ist eine <b>Verpackungseinheit</b> hinterlegt (z. B. 8 Displays pro Karton), kann die Menge auch direkt in VE eingetragen werden; die Stückzahl wird dann ausgerechnet.</li>
     <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Dann <b>Vorschlag berechnen</b>.</li>
     <li>Vorschlag prüfen, eventuell einzelne Zahlen in der Tabelle ändern, dann <b>Vorschlag übernehmen</b>.</li>
@@ -1468,6 +1554,10 @@ async function boot(){
   if (!cred) return renderConnect();
   S.cred = cred;
   S.provider = cred.kind === "disk" ? new DiskProvider() : cred.kind === "dropbox" ? new DropboxProvider(cred) : new LocalProvider();
+  addEventListener("error", e => dlog("ERROR", `${e.message} (${(e.filename||"").split("/").pop()}:${e.lineno})`));
+  addEventListener("unhandledrejection", e => dlog("ERROR", "Unbehandelt: " + (e.reason?.message || e.reason)));
+  dlog("INFO", `Fenster geöffnet, Version ${APP_VERSION}, ${S.desktop ? "Programm" : "Web"}, Kürzel ${staff() || "-"}`);
+  if (!S.desktop) extCheck().then(v => { if (v) { dlog("INFO", "etron-Erweiterung aktiv " + v); if (S.loaded?.p) render(); } });
   if (S.desktop) { document.title = "TCG Vorbestellungen";
     // beim Programm an- und abmelden, damit es sich beendet, sobald kein Fenster mehr offen ist
     const wid = Math.random().toString(36).slice(2, 12); const ping = () => desk("/api/ping?id=" + wid).catch(() => {});
@@ -1476,9 +1566,6 @@ async function boot(){
     document.addEventListener("click", e => { const a = e.target.closest && e.target.closest("a[href]"); if (!a) return; const href = a.getAttribute("href") || "";
       if (!/^(https?:|mailto:|sms:|tel:|whatsapp:)/i.test(href) || href.startsWith(location.origin)) return;
       e.preventDefault(); desk("/api/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: a.href }) }).then(r => { if (!r.ok) toast("Link konnte nicht geöffnet werden."); }).catch(() => toast("Link konnte nicht geöffnet werden.")); }, true);
-    addEventListener("error", e => dlog("ERROR", `${e.message} (${(e.filename||"").split("/").pop()}:${e.lineno})`));
-    addEventListener("unhandledrejection", e => dlog("ERROR", "Unbehandelt: " + (e.reason?.message || e.reason)));
-    dlog("INFO", `Fenster geöffnet, Version ${APP_VERSION}, Kürzel ${staff() || "-"}`);
     addEventListener("pagehide", () => { try { navigator.sendBeacon("/api/bye?id=" + wid); } catch (e) {} }); }
   S.doc = new SyncDoc(S.provider, DATA_PATH, null, "vb.cache");
   const cached = await S.doc.loadCache();

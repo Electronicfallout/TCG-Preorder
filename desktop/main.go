@@ -51,8 +51,14 @@ func main() {
 		fatal(err)
 	}
 	baseDir = filepath.Dir(exe)
-	if d := os.Getenv("VB_DIR"); d != "" { // nur für Tests
+	fromDir := argDir()
+	if fromDir != "" {
+		baseDir = fromDir
+	} else if d := os.Getenv("VB_DIR"); d != "" { // nur für Tests
 		baseDir = d
+	} else if runtime.GOOS == "windows" && runShadow(exe) {
+		// Läuft als Kopie in %LOCALAPPDATA%: die EXE im Dropbox-Ordner bleibt frei und kann jederzeit ersetzt werden.
+		return
 	}
 	webDir = filepath.Join(baseDir, "programm")
 	setupLog()
@@ -60,12 +66,27 @@ func main() {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
 	if err != nil {
-		// Läuft schon? Dann nur das Fenster öffnen.
-		if alreadyRunning() {
-			openWindow(url)
+		running := runningBuild()
+		if running != "" && running == build {
+			openWindow(url) // läuft schon in dieser Version: nur das Fenster öffnen
 			return
 		}
-		fatal(fmt.Errorf("Port %s ist belegt: %v", port, err))
+		if running != "" {
+			// ältere Version läuft noch: beenden und selbst übernehmen
+			log.Printf("UPDATE laufende Version %s wird durch %s ersetzt", running, build)
+			quitRunning()
+			for i := 0; i < 30 && err != nil; i++ {
+				time.Sleep(200 * time.Millisecond)
+				ln, err = net.Listen("tcp", "127.0.0.1:"+port)
+			}
+		}
+		if err != nil {
+			if runningBuild() != "" {
+				openWindow(url)
+				return
+			}
+			fatal(fmt.Errorf("Port %s ist belegt: %v", port, err))
+		}
 	}
 	if _, err := os.Stat(filepath.Join(webDir, "index.html")); err != nil {
 		fatal(fmt.Errorf("Ordner „programm“ fehlt neben der EXE (%s)", webDir))
@@ -126,17 +147,74 @@ func fatal(err error) {
 
 func jsString(s string) string { b, _ := json.Marshal(s); return string(b) }
 
-func alreadyRunning() bool {
+// Version des bereits laufenden Programms ("" = keins)
+func runningBuild() string {
 	req, _ := http.NewRequest("GET", "http://127.0.0.1:"+port+"/api/info", nil)
 	req.Header.Set("X-VB", "1")
 	c := http.Client{Timeout: 2 * time.Second}
 	r, err := c.Do(req)
 	if err != nil {
-		return false
+		return ""
 	}
 	defer r.Body.Close()
 	var j map[string]any
-	return json.NewDecoder(r.Body).Decode(&j) == nil && j["app"] == "vorbestellungen"
+	if json.NewDecoder(r.Body).Decode(&j) != nil || j["app"] != "vorbestellungen" {
+		return ""
+	}
+	if b, _ := j["build"].(string); b != "" {
+		return b
+	}
+	return "?"
+}
+
+func quitRunning() {
+	req, _ := http.NewRequest("POST", "http://127.0.0.1:"+port+"/api/quit", nil)
+	req.Header.Set("X-VB", "1")
+	c := http.Client{Timeout: 2 * time.Second}
+	if r, err := c.Do(req); err == nil {
+		r.Body.Close()
+	}
+}
+
+func argDir() string {
+	for _, a := range os.Args[1:] {
+		if strings.HasPrefix(a, "--dir=") {
+			return strings.TrimPrefix(a, "--dir=")
+		}
+	}
+	return ""
+}
+
+// Kopiert die EXE nach %LOCALAPPDATA%\TCG-Vorbestellungen und startet sie dort mit --dir=<Dropbox-Ordner>.
+// Gibt false zurück, wenn das nicht geht (dann läuft das Programm direkt).
+func runShadow(exe string) bool {
+	b, err := os.ReadFile(exe)
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(b)
+	dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "TCG-Vorbestellungen")
+	if os.Getenv("LOCALAPPDATA") == "" || os.MkdirAll(dir, 0o755) != nil {
+		return false
+	}
+	name := "Vorbestellungen-" + hex.EncodeToString(sum[:6]) + ".exe"
+	dst := filepath.Join(dir, name)
+	if _, err := os.Stat(dst); err != nil {
+		tmp := dst + ".tmp"
+		if os.WriteFile(tmp, b, 0o755) != nil || os.Rename(tmp, dst) != nil {
+			os.Remove(tmp)
+			return false
+		}
+	}
+	// alte Kopien aufräumen (laufende sind gesperrt und bleiben einfach liegen)
+	if old, _ := filepath.Glob(filepath.Join(dir, "Vorbestellungen-*.exe")); len(old) > 0 {
+		for _, o := range old {
+			if !strings.EqualFold(filepath.Base(o), name) {
+				os.Remove(o)
+			}
+		}
+	}
+	return exec.Command(dst, "--dir="+filepath.Dir(exe)).Start() == nil
 }
 
 func openWindow(url string) {

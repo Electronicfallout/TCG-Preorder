@@ -7,3 +7,4 @@
 daten/
 .DS_Store
 dist/
+!erweiterung/manifest.json
