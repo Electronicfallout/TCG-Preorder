@@ -505,46 +505,45 @@ function bindEtron(){ const b=$("#et-save"); if(!b) return; b.onclick=()=>{ let 
   write("config","etron",{...(S.config?.etron||{}),customerUrl:v},"set").then(ok=>ok&&toast("Gespeichert")); }; }
 // ---------- etron-API: Zugang (nur in der Dropbox, nie im Code) und Verbindungstest
 const ETRON_API_FILE = "etron-api.json";
-function etronApiBase(u){ u=(u||"").trim().replace(/\/+$/,""); if(!/^https?:\/\//.test(u)) return null; const m=u.match(/^(https?:\/\/[^/]+)(\/api\/v\d+)?/); return m ? m[1]+(m[2]||"/api/v2") : null; }
 async function etronApiLoad(){ try{ const r=await S.provider.read(ETRON_API_FILE); return r ? { ...r.data, _rev:r.rev } : null; }catch(e){ return { _err:e.message||String(e) }; } }
-async function etronToken(cfg){ const base=etronApiBase(cfg.url); const url=base+"/authentication/oauth2/token";
-  const tries=[ { headers:{ "Authorization":"Basic "+btoa(cfg.key+":"+cfg.secret), "Content-Type":"application/x-www-form-urlencoded" }, body:"grant_type=client_credentials" },
-    { headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body:new URLSearchParams({grant_type:"client_credentials",client_id:cfg.key,client_secret:cfg.secret}).toString() } ];
-  let last; for(const t of tries){ const r=await fetch(url,{method:"POST",...t}); if(r.ok){ const j=await r.json(); if(j.access_token) return j; last={status:r.status,text:JSON.stringify(j).slice(0,200)}; continue; } last={status:r.status,text:(await r.text()).slice(0,200)}; }
-  const e=new Error("Anmeldung abgelehnt (HTTP "+last.status+"): "+last.text); e.http=last.status; throw e; }
+// Aufruf über den Vermittler (Cloudflare Worker, Code in proxy/etron-worker.js). Zugang liegt in der Dropbox.
+async function etronCall(action, data, cfg){ cfg = cfg || S.etronApi || (S.etronApi = await etronApiLoad());
+  if(!cfg?.proxy || !cfg?.appToken) throw new Error("etron-Schnittstelle ist nicht eingerichtet (Einstellungen).");
+  let r; try{ r=await fetch(cfg.proxy,{method:"POST",headers:{"Content-Type":"application/json","X-App-Token":cfg.appToken},body:JSON.stringify({action,...(data||{})})}); }
+  catch(e){ const x=new Error("Vermittler nicht erreichbar. Adresse prüfen."); x.net=true; throw x; }
+  let j=null; try{ j=await r.json(); }catch(e){}
+  if(!r.ok){ const x=new Error((j&&j.error)||("HTTP "+r.status)); x.http=r.status; throw x; } return j; }
 function etronApiPanel(){
-  return `<div class="panel"><h2>etron-Schnittstelle (Test)</h2>
-    <p class="muted">Zugang aus etron (API &amp; Hooks → Authentication → Client Credentials). Er wird nur in eurer Dropbox gespeichert (<span class="mono">${ETRON_API_FILE}</span>), nie im Programmcode. Bitte einen eigenen Zugang mit einem Benutzer mit wenig Rechten verwenden.</p>
+  return `<div class="panel"><h2>etron-Schnittstelle</h2>
+    <p class="muted">Die App spricht über einen kleinen Vermittler (Cloudflare Worker) mit etron. Der etron-Zugang (Key und Secret) liegt nur im Worker. Hier kommen nur die Adresse des Workers und der App-Schlüssel hinein; beides wird in eurer Dropbox gespeichert (<span class="mono">${ETRON_API_FILE}</span>), nie im Programmcode.</p>
     <div class="form">
-      <label class="wide">etron-Adresse<input id="ea-url" placeholder="https://xxxxxx.wawi.onretail.eu" autocomplete="off"></label>
-      <label>Client Key<input id="ea-key" autocomplete="off" spellcheck="false"></label>
-      <label>Client Secret<input id="ea-sec" type="password" autocomplete="new-password" spellcheck="false"></label>
+      <label class="wide">Adresse des Vermittlers<input id="ea-proxy" placeholder="https://etron-vorbestellungen.….workers.dev" autocomplete="off"></label>
+      <label class="wide">App-Schlüssel<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="ea-tok" type="password" autocomplete="new-password" spellcheck="false" style="flex:1"><button type="button" class="sm" id="ea-gen">Neuen erzeugen</button></span></label>
       <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
     </div><div id="ea-st" class="muted">Lade …</div><div id="ea-res"></div></div>`; }
 function bindEtronApi(){ const st=$("#ea-st"); if(!st) return; let cur=null;
-  const show=()=>{ st.innerHTML = cur?._err ? `Dropbox nicht lesbar: ${esc(cur._err)}` : cur?.key ? `Zugang gespeichert (Key …${esc(String(cur.key).slice(-4))}, gespeichert ${esc(cur.savedAt||"")}${cur.savedBy?" von "+esc(cur.savedBy):""}). Felder leer lassen = unverändert.` : "Noch kein Zugang gespeichert.";
-    if(cur?.url) $("#ea-url").value=cur.url; $("#ea-key").placeholder=cur?.key?"gespeichert":""; $("#ea-sec").placeholder=cur?.secret?"gespeichert":""; };
+  const show=()=>{ st.innerHTML = cur?._err ? `Dropbox nicht lesbar: ${esc(cur._err)}` : cur?.proxy ? `Gespeichert: ${esc(cur.proxy)} (${esc(cur.savedAt||"")}${cur.savedBy?" von "+esc(cur.savedBy):""}). App-Schlüssel leer lassen = unverändert.` : "Noch nicht eingerichtet.";
+    if(cur?.secret) st.innerHTML+=` <b>In der Dropbox liegt noch ein altes etron-Secret. Es wird beim nächsten Speichern entfernt.</b>`;
+    if(cur?.proxy) $("#ea-proxy").value=cur.proxy; $("#ea-tok").placeholder=cur?.appToken?"gespeichert":""; };
   etronApiLoad().then(c=>{ cur=c; show(); });
-  const form=()=>({ url:$("#ea-url").value.trim()||cur?.url||"", key:$("#ea-key").value.trim()||cur?.key||"", secret:$("#ea-sec").value.trim()||cur?.secret||"" });
-  $("#ea-save").onclick=async()=>{ if(needStaff()) return; const f=form(); if(!etronApiBase(f.url)) return toast("Bitte die etron-Adresse mit https:// eintragen."); if(!f.key||!f.secret) return toast("Bitte Client Key und Client Secret eintragen.");
-    const data={url:f.url,key:f.key,secret:f.secret,savedAt:new Date().toLocaleString("de-AT"),savedBy:staff()};
-    try{ const r=await S.provider.write(ETRON_API_FILE,data,cur&&!cur._err?cur._rev:null); cur={...data,_rev:r.rev}; $("#ea-key").value=""; $("#ea-sec").value=""; show(); toast("Zugang in der Dropbox gespeichert"); }
+  const form=()=>({ proxy:$("#ea-proxy").value.trim()||cur?.proxy||"", appToken:$("#ea-tok").value.trim()||cur?.appToken||"" });
+  $("#ea-gen").onclick=()=>{ const a=new Uint8Array(24); crypto.getRandomValues(a); const t=[...a].map(x=>x.toString(16).padStart(2,"0")).join("");
+    const el=$("#ea-tok"); el.type="text"; el.value=t; el.select(); copyText(t).then(()=>toast("Neuer App-Schlüssel kopiert. In Cloudflare als APP_TOKEN eintragen und hier speichern.")); };
+  $("#ea-save").onclick=async()=>{ if(needStaff()) return; const f=form(); if(!/^(https:\/\/|http:\/\/localhost)/.test(f.proxy)) return toast("Bitte die Adresse des Vermittlers mit https:// eintragen."); if(f.appToken.length<16) return toast("Bitte den App-Schlüssel eintragen (mindestens 16 Zeichen).");
+    const data={proxy:f.proxy.replace(/\/+$/,""),appToken:f.appToken,savedAt:new Date().toLocaleString("de-AT"),savedBy:staff()};
+    try{ const r=await S.provider.write(ETRON_API_FILE,data,cur&&!cur._err?cur._rev:null); cur={...data,_rev:r.rev}; S.etronApi=cur; $("#ea-tok").value=""; $("#ea-tok").type="password"; show(); toast("In der Dropbox gespeichert"); }
     catch(e){ toast(e.conflict?"Wurde gerade woanders geändert. Seite neu laden.":"Nicht gespeichert: "+(e.message||e)); } };
-  $("#ea-del").onclick=async()=>{ if(!cur?.key) return toast("Es ist kein Zugang gespeichert."); try{ const r=await S.provider.write(ETRON_API_FILE,{},cur._rev); cur={_rev:r.rev}; show(); toast("Zugang gelöscht"); }catch(e){ toast("Nicht gelöscht: "+(e.message||e)); } };
-  $("#ea-test").onclick=async()=>{ const f=form(); const res=$("#ea-res"); const base=etronApiBase(f.url);
-    if(!base) return toast("Bitte die etron-Adresse mit https:// eintragen."); if(!f.key||!f.secret) return toast("Bitte Client Key und Client Secret eintragen oder speichern.");
-    const lines=[]; const out=(ok,t)=>{ lines.push(`<li class="${ok===true?"ok":ok===false?"bad":""}">${ok===true?"✓":ok===false?"✗":"…"} ${t}</li>`); res.innerHTML=`<ul class="eatest">${lines.join("")}</ul>`; };
-    out(null,`Adresse: <span class="mono">${esc(base)}</span>`);
-    let tok;
-    try{ tok=await etronToken(f); out(true,`Anmeldung erfolgreich (Token gültig ${tok.expires_in?Math.round(tok.expires_in/60)+" Minuten":"– Dauer unbekannt"}).`); }
-    catch(e){ if(e.http){ out(false,esc(e.message)+". Key/Secret prüfen."); return; }
-      let reach=false; try{ await fetch(base+"/authentication/oauth2/token",{method:"POST",mode:"no-cors"}); reach=true; }catch(x){}
-      out(false, reach ? "etron ist erreichbar, aber blockiert Anfragen aus dem Browser (CORS). Direkt aus der App geht es also nicht; dafür braucht es den kleinen Vermittler (Proxy)." : "etron-Adresse nicht erreichbar. Adresse prüfen (nur https://xxxxxx.wawi.onretail.eu, ohne weiteren Pfad)."); return; }
-    try{ const r=await fetch(base+'/search_extract/res.partner?fields=["id"]&limit=1',{headers:{Authorization:"Bearer "+tok.access_token}});
-      if(!r.ok){ out(false,`Kunden lesen abgelehnt (HTTP ${r.status}): ${esc((await r.text()).slice(0,200))}. Der etron-Benutzer braucht Leserechte auf Kontakte.`); return; }
-      const j=await r.json(); const n=Array.isArray(j)?j.length:Array.isArray(j?.data)?j.data.length:Array.isArray(j?.result)?j.result.length:null;
-      out(true,`Kunden lesen funktioniert${n!=null?` (${n} Testdatensatz abgerufen, Inhalt wird nicht angezeigt)`:""}. Die App kann direkt mit etron sprechen.`); }
-    catch(e){ out(false,"Kunden lesen fehlgeschlagen: "+esc(e.message||e)); } }; }
+  $("#ea-del").onclick=async()=>{ if(!cur || cur._err || !cur._rev) return toast("Es ist nichts gespeichert."); try{ const r=await S.provider.write(ETRON_API_FILE,{},cur._rev); cur={_rev:r.rev}; S.etronApi=null; show(); toast("Zugang gelöscht"); }catch(e){ toast("Nicht gelöscht: "+(e.message||e)); } };
+  $("#ea-test").onclick=async()=>{ const f=form(); const res=$("#ea-res");
+    if(!/^(https:\/\/|http:\/\/localhost)/.test(f.proxy)||!f.appToken) return toast("Bitte Adresse und App-Schlüssel eintragen.");
+    res.innerHTML=`<ul class="eatest"><li>… teste</li></ul>`;
+    try{ const j=await etronCall("ping",{},f); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Vermittler erreicht, App-Schlüssel stimmt.</li><li class="ok">✓ Anmeldung bei etron und Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li></ul>`; }
+    catch(e){ const why = e.net ? "Vermittler nicht erreichbar. Adresse prüfen; in Cloudflare muss der Worker „Deployed“ sein."
+        : e.http===401 ? "App-Schlüssel stimmt nicht mit APP_TOKEN in Cloudflare überein."
+        : e.http===403 ? "Der Vermittler lässt diese Seite nicht zu (ALLOWED_ORIGIN prüfen)."
+        : e.http===500 ? esc(e.message)
+        : "Vermittler erreicht, aber etron meldet: "+esc(e.message);
+      res.innerHTML=`<ul class="eatest">${e.http&&e.http!==500&&e.http!==401&&e.http!==403?'<li class="ok">✓ Vermittler erreicht, App-Schlüssel stimmt.</li>':""}<li class="bad">✗ ${why}</li></ul>`; } }; }
 function gamesPanel(){
   const cnt={}; Object.values(S.products).forEach(p=>{ const g=gameOf(p); cnt[g]=(cnt[g]||0)+1; });
   return `<div class="panel"><h2>Spielsysteme</h2>
