@@ -298,6 +298,7 @@ function renderProduct(pid){
       <button id="sug" ${s.rec==null?"disabled":""}>Vorschlag berechnen</button>
       ${sug?`<button class="pri" id="apply" ${S.canWrite?"":"disabled"}>Vorschlag übernehmen (${sugSum} Stück)</button><button id="dis">Verwerfen</button>`:""}
       <button id="close" ${s.alloc?"":"disabled"} title="Alle offenen Bestellungen mit Zuteilung auf Zugeteilt setzen">Zuteilung abschließen</button>
+      <button id="rest" title="Alle offenen Bestellungen ohne Zuteilung auf Warteliste setzen">Rest auf Warteliste</button>
     </div></div>
     ${s.rec==null?'<p class="muted">Erst den Wareneingang eintragen, dann kann ein Vorschlag berechnet werden.</p>':sug?'<p class="muted">Vorschlag steht in der Spalte „Vorschlag“. Noch nichts gespeichert.</p>':'<p class="muted">Zuteilungen können auch direkt in der Tabelle eingetragen werden. Bestellungen mit Status „Auftrag angelegt“ oder „Abgeholt“ bleiben beim Vorschlag unverändert.</p>'}
   </div>
@@ -332,6 +333,7 @@ function renderProduct(pid){
   if (sug){ $("#dis").onclick=()=>{delete S.sugg[pid];render();};
     $("#apply").onclick=async()=>{ const b=$("#apply"); b.disabled=true; const ch=Object.entries(sug.map).filter(([id,v])=>S.orders[id] && (S.orders[id].alloc!==v || !S.orders[id].productId) && !(!S.orders[id].productId && !v));
       try{ await pool(ch, ([id,v])=>S.db.collection("orders").doc(id).update(S.orders[id].productId?{alloc:v}:{alloc:v,productId:pid,comment:[S.orders[id].comment,`war: ${orderLabel(S.orders[id])}`].filter(Boolean).join(" · ")})); delete S.sugg[pid]; toast(`${ch.length} Zuteilungen gespeichert`); render(); }catch(e){ toast("Nicht alles gespeichert: "+(e.message||e.code)); b.disabled=false; } }; }
+  bindRest(()=>ordersOf(pid)); // „egal welches“ nur auf der Serienseite
   $("#close").onclick=async()=>{ const ch=ordersOf(pid).filter(o=>o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
     try{ await pool(ch,o=>S.db.collection("orders").doc(o.id).update({status:"Zugeteilt"})); toast(`${ch.length} Bestellungen auf Zugeteilt gesetzt. Jetzt im etron-Export.`);}catch(e){toast("Fehler: "+(e.message||e.code));} };
   bindRows(); bindOrderForm("pr");
@@ -532,6 +534,13 @@ function saveAlloc(id, v){ const o=S.orders[id]; if(!o) return;
   const patch={alloc:v}; if(!(v>0) && o.status==="Zugeteilt") patch.status="Offen";
   return write("orders",id,patch).then(ok=>ok&&toast(patch.status?"Zuteilung gelöscht, Status wieder Offen":"Gespeichert")); }
 
+// ---------- Nach der Zuteilung: alle offenen Bestellungen ohne Zuteilung auf einmal auf Warteliste
+function bindRest(getOrders){ const b=$("#rest"); if(!b) return;
+  b.onclick=()=>{ const list=getOrders().filter(o=>o.status==="Offen"&&!((o.alloc||0)>0)); if(!list.length) return toast("Keine offene Bestellung ohne Zuteilung.");
+    if(needStaff()) return;
+    b.outerHTML=`<button id="restok" class="danger">${list.length} Bestellung${list.length===1?"":"en"} auf Warteliste setzen?</button>`;
+    $("#restok").onclick=async()=>{ const n=await pool(list,o=>S.db.collection("orders").doc(o.id).update({status:"Warteliste"})); toast(`${n} auf Warteliste gesetzt`); render(); }; }; }
+
 // ---------- Stornieren: frei gewordene Ware einem anderen Kunden geben
 async function cancelOrders(ids){
   const before = ids.map(id=>({...S.orders[id]})).filter(o=>o.id);
@@ -663,7 +672,7 @@ function renderSeries(anyPid){
     <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum</option></select>
     <button id="sug" ${st.some(x=>x.s.rec==null)?"disabled":""}>Vorschlag berechnen</button>
     ${sug?`<button class="pri" id="apply">Vorschlag übernehmen (${sugSum} Stück)</button><button id="dis">Verwerfen</button>`:""}
-    <button id="close">Zuteilung abschließen</button></div></div>
+    <button id="close">Zuteilung abschließen</button><button id="rest" title="Alle offenen Bestellungen ohne Zuteilung auf Warteliste setzen">Rest auf Warteliste</button></div></div>
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
@@ -689,6 +698,7 @@ function renderSeries(anyPid){
       const ch=[...Object.entries(sug.res).filter(([id,v])=>S.orders[id]&&S.orders[id].alloc!==v).map(([id,v])=>[id,{alloc:v}]),
                 ...Object.entries(sug.flex).filter(([id])=>S.orders[id]&&!S.orders[id].productId).map(([id,f])=>[id,{productId:f.pid,alloc:f.n,comment:[S.orders[id].comment,`war: ${orderLabel(S.orders[id])}`].filter(Boolean).join(" · ")}])];
       try{ await pool(ch,([id,pt])=>S.db.collection("orders").doc(id).update(pt)); delete S.sugg[key]; toast(`${ch.length} Zuteilungen gespeichert`); render(); }catch(e){ toast("Fehler: "+(e.message||e.code)); } }; }
+  bindRest(()=>all);
   $("#close").onclick=async()=>{ const ch=all.filter(o=>o.productId&&o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
     await pool(ch,o=>S.db.collection("orders").doc(o.id).update({status:"Zugeteilt"})); toast(`${ch.length} Bestellungen auf Zugeteilt gesetzt.`); };
   bindAuftrag(); bindOrderForm("se");
