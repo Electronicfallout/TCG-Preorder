@@ -770,6 +770,7 @@ func handleEtron(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := etronAction(c, str(b["action"], 40), b)
 	if err != nil {
+		log.Println("etron", str(b["action"], 40), "Fehler:", err)
 		st := 0
 		var ee *etronErr
 		if errors.As(err, &ee) {
