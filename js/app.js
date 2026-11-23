@@ -1126,10 +1126,10 @@ function bindCet(){ const x=$("#cet-x"); if(x) x.onclick=()=>{ S.cet=null; drawC
   app.querySelectorAll("[data-cet]").forEach(el=>el.onchange=()=>{ const r=S.cet.rows.find(r=>r.cid===el.dataset.cet); if(r) r.pick=el.value?+el.value:null; const b=$("#cet-ok"); if(b){ const n=S.cet.rows.filter(r=>r.pick).length; b.textContent=`${n} etron-Nr. übernehmen`; b.disabled=!n; } });
   const cp=$("#cet-cp"); if(cp) cp.onclick=async()=>{ const t=cetMultiText(); try{ await navigator.clipboard.writeText(t); toast("Liste kopiert. Jetzt einfügen, z. B. im Asana-Task."); }catch(e){ const ta=$("#cet-ta"); ta.hidden=false; ta.value=t; ta.focus(); ta.select(); toast("Kopieren nicht möglich: Text unten markieren und kopieren."); } };
   const ok=$("#cet-ok"); if(ok) ok.onclick=async()=>{ if(needStaff()) return; ok.disabled=true; const rows=S.cet.rows.filter(r=>r.pick&&S.customers[r.cid]&&!String(S.customers[r.cid].etronId||"").trim());
-    const used=new Map(Object.values(S.customers).filter(c=>c.etronId).map(c=>[String(c.etronId).trim(),c.id])); let n=0, dup=0;
-    for(const r of rows){ const id=String(r.pick); if(used.has(id)&&used.get(id)!==r.cid) dup++; const p=r.cands.find(x=>x.p.id===r.pick)?.p; if(await write("customers",r.cid,{etronId:id,...(p?.ref?{etronRef:String(p.ref)}:{})})){ n++; used.set(id,r.cid); } }
+    const used=new Map(Object.values(S.customers).filter(c=>c.etronId).map(c=>[String(c.etronId).trim(),c.id])); let n=0, dup=0, nf=0, nd=0;
+    for(const r of rows){ const id=String(r.pick); if(used.has(id)&&used.get(id)!==r.cid) dup++; const p=r.cands.find(x=>x.p.id===r.pick)?.p; if(await write("customers",r.cid,{etronId:id,...(p?.ref?{etronRef:String(p.ref)}:{})})){ n++; used.set(id,r.cid); const fr=p?await etronFillContact(r.cid,p):null; if(fr){ nf+=fr.filled.length?1:0; nd+=fr.differ.length?1:0; } } }
     dlog("INFO",`etron-Abgleich übernommen: ${n} Kunden${dup?`, ${dup} mit schon vergebener Nr.`:""}`);
-    S.cet.rows=S.cet.rows.filter(r=>!rows.includes(r)); toast(`${n} etron-Nummern gespeichert${dup?`. Achtung: ${dup} Nummern sind schon bei einem anderen Kunden eingetragen (siehe Dubletten).`:""}`, dup?9000:4000); drawCet(); }; }
+    S.cet.rows=S.cet.rows.filter(r=>!rows.includes(r)); toast(`${n} etron-Nummern gespeichert${nf?`, bei ${nf} Kontakt aus etron ergänzt`:""}${nd?`, bei ${nd} weicht der Kontakt von etron ab (beim Kunden abgleichen)`:""}${dup?`. Achtung: ${dup} Nummern sind schon bei einem anderen Kunden eingetragen (siehe Dubletten).`:""}`, dup?9000:4000); drawCet(); }; }
 
 function renderCustomers(){
   const q=norm(S.cq||""); const onlyD=S.cdup;
@@ -1166,6 +1166,7 @@ function renderCustomer(cid){
     <label>etron-Kundennr.${etronLink(c)?` <span style="float:right">${etronLink(c)}</span>`:""}<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="row muted" style="gap:6px;align-self:end"><input type="checkbox" id="cd-wa" ${c.noWhatsapp?"":"checked"}> Hat WhatsApp</label>
+    ${etronOn()&&c.etronId?`<div class="wide"><button type="button" class="sm" id="cd-etc">Kontakt mit etron abgleichen</button> <span id="cd-etcr" class="muted"></span></div>`:""}
     ${etronOn()&&!c.etronId?`<div class="wide" id="cd-et"><button type="button" class="sm" id="cd-ets">etron-Kunde suchen oder anlegen</button> <span id="cd-eth" class="muted"></span></div>`:""}
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
   ${orderForm("cu", null, cid)}
@@ -1185,10 +1186,19 @@ function renderCustomer(cid){
     write("customers",cid,{firstName:fn,lastName:ln,name:(fn+" "+ln).trim()}).then(ok=>ok&&!(dup&&dup.id!==cid)&&toast("Name gespeichert")); };
   $("#cd-fn").onchange=$("#cd-ln").onchange=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
   $("#cd-swap").onclick=()=>saveName($("#cd-ln").value,$("#cd-fn").value);
+  const etc=$("#cd-etc"); if(etc) etc.onclick=async()=>{ const h=$("#cd-etcr"); h.textContent="Lese etron …";
+    try{ const p=await etronPartner(c.etronId); if(!p){ h.innerHTML=`<span class="bad">etron-Nr. ${esc(c.etronId)} nicht gefunden.</span>`; return; }
+      const r=await etronFillContact(cid,p); const cc=S.customers[cid]; const d=etronContactDiff(cc,p);
+      const line=(lbl,x,f)=>x.same?"":`<div>${lbl}: App <b>${esc(x.app||"–")}</b>, etron <b>${esc(x.etron)}</b> <button type="button" class="sm" data-etk="${f}">etron-Wert übernehmen</button></div>`;
+      const diffs=line("Telefon",d.tel,"tel")+line("E-Mail",d.mail,"mail");
+      h.innerHTML=(r?.filled.length?`<span class="ok">✓ ${r.filled.join(" und ")} aus etron ergänzt.</span> `:"")+(diffs||(r?.filled.length?"":`<span class="ok">✓ Telefon und E-Mail stimmen mit etron überein.</span>`));
+      h.querySelectorAll("[data-etk]").forEach(b=>b.onclick=async()=>{ const c2=S.customers[cid], cf=contactFields(c2); const tel=b.dataset.etk==="tel"?d.tel.etron:cf.tel, mail=b.dataset.etk==="mail"?d.mail.etron:cf.mail;
+        if(await write("customers",cid,{contact:joinContact(tel||"",mail||"",c2)})) toast("Aus etron übernommen"); }); }
+    catch(e){ h.textContent="etron nicht lesbar: "+(e.message||e); } };
   const ets=$("#cd-ets"); if(ets) ets.onclick=async()=>{ const h=$("#cd-eth"); const np=nameParts(c), tel=contactFields(c).tel; h.textContent="Suche in etron …";
     try{ const list=await etronFindPartners(np.first,np.last,tel);
       h.innerHTML=(list.length?`Gefunden (anklicken übernimmt die etron-Nr.): ${etronHitsHtml(list)} `:"In etron kein passender Kunde. ")+`<button type="button" class="sm pri" id="cd-etn">Neu in etron anlegen</button>`;
-      h.querySelectorAll("[data-epid]").forEach(b=>b.onclick=()=>write("customers",cid,{etronId:b.dataset.epid}).then(ok=>ok&&toast("etron-Nr. übernommen")));
+      h.querySelectorAll("[data-epid]").forEach(b=>b.onclick=async()=>{ const p=list.find(x=>String(x.id)===b.dataset.epid); if(await write("customers",cid,{etronId:b.dataset.epid,...(p?.ref?{etronRef:String(p.ref)}:{})})){ const r=await etronFillContact(cid,p); toast("etron-Nr. übernommen."+fillMsg(r),6000); } });
       $("#cd-etn").onclick=async()=>{ if(needStaff()) return; const b=$("#cd-etn"); b.disabled=true; try{ const id=await etronCreatePartner(np.first,np.last,tel,contactFields(c).mail); await write("customers",cid,{etronId:String(id)}); toast(`In etron angelegt: Nr. ${id}`); }catch(e){ b.disabled=false; toast("Nicht angelegt: "+(e.message||e)); } }; }
     catch(e){ h.textContent="etron-Suche nicht möglich: "+(e.message||e); } };
   if($("#cd-ok")) $("#cd-ok").onclick=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
@@ -1200,10 +1210,22 @@ function renderCustomer(cid){
     $("#mgok").onclick=async()=>{ if(await mergeCustomers(cid,t)) location.hash="kunde-"+t; }; };
 }
 
+// Telefon/E-Mail aus etron: leere Felder in der App füllen, abweichende nur melden (nie still überschreiben)
+async function etronPartner(id){ const r=await etronCall("partner_search",{q:String(id)}); return (r.items||[]).find(p=>String(p.id)===String(id))||null; }
+function etronContactDiff(c, p){ const cf=contactFields(c), et=String((p.mobile&&p.mobile!==false?p.mobile:"")||(p.phone&&p.phone!==false?p.phone:"")||"").trim(), em=String(p.email&&p.email!==false?p.email:"").trim();
+  return {tel:{app:cf.tel||"",etron:et,same:!et||telKey(et)===telKey(cf.tel)&&!!cf.tel},mail:{app:cf.mail||"",etron:em,same:!em||em.toLowerCase()===(cf.mail||"").toLowerCase()}}; }
+async function etronFillContact(cid, p){ try{ const c=S.customers[cid]; if(!c||!etronOn()) return null; p=p||await etronPartner(c.etronId); if(!p) return null;
+    const d=etronContactDiff(c,p), cf=contactFields(c); const tel=!cf.tel&&d.tel.etron?d.tel.etron:cf.tel, mail=!cf.mail&&d.mail.etron?d.mail.etron:cf.mail; const filled=[];
+    if(tel!==cf.tel) filled.push("Telefon"); if(mail!==cf.mail) filled.push("E-Mail");
+    if(filled.length) await write("customers",cid,{contact:joinContact(tel||"",mail||"",c)});
+    const differ=[]; if(cf.tel&&!d.tel.same) differ.push("Telefon"); if(cf.mail&&!d.mail.same) differ.push("E-Mail");
+    dlog("INFO",`Kontakt aus etron für Kunde ${cid}: ergänzt ${filled.join("+")||"nichts"}${differ.length?", abweichend "+differ.join("+"):""}`); return {filled,differ}; }
+  catch(e){ dlog("WARN",`Kontakt aus etron für Kunde ${cid}: ${e.message||e}`); return null; } }
+const fillMsg = r => r ? (r.filled.length?` ${r.filled.join(" und ")} aus etron ergänzt.`:"")+(r.differ.length?` ${r.differ.join(" und ")} weicht von etron ab: beim Kunden „Kontakt mit etron abgleichen“.`:"") : "";
 async function saveEtron(cid,v){
   v=String(v||"").trim(); const c=S.customers[cid]; if(!c) return;
   const other=v && Object.values(S.customers).find(x=>x.id!==cid && String(x.etronId||"").trim()===v);
-  if(await write("customers",cid,{etronId:v})) toast(other?`Gespeichert. Achtung: ${other.name} hat dieselbe etron-Nr. und steht jetzt bei den Dubletten.`:"etron-Nr. gespeichert");
+  if(await write("customers",cid,{etronId:v})){ toast(other?`Gespeichert. Achtung: ${other.name} hat dieselbe etron-Nr. und steht jetzt bei den Dubletten.`:"etron-Nr. gespeichert"); if(v&&!other){ const r=await etronFillContact(cid); const m=fillMsg(r); if(m) toast("etron-Nr. gespeichert."+m,7000); } }
 }
 async function mergeCustomers(fromId,toId){
   const f=S.customers[fromId], t=S.customers[toId]; if(!f||!t) return false;
