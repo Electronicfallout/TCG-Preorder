@@ -560,9 +560,14 @@ async function ewCall(c,method,path,params,body){
     const r=await ewFetch(ewBase(c)+path+ewQuery(params),{method,headers:{Authorization:"Bearer "+t,...(body?{"Content-Type":"application/json"}:{})},body:body?JSON.stringify(body):undefined});
     dlog("INFO",`ETRON ${method} ${path} -> HTTP ${r.status}, ${Date.now()-t0} ms, Antwort: ${ewShape(r.text)}`);
     if(r.status===401&&a===0) continue;
-    if(r.status>=300){ dlog("WARN","ETRON Fehlertext: "+r.text.slice(0,600)); throw Object.assign(new Error(`etron HTTP ${r.status}: ${r.text.slice(0,300)}`),{etron:r.status}); }
+    if(r.status>=300){ dlog("WARN","ETRON Fehlertext: "+r.text.slice(0,600)); throw Object.assign(new Error(ewNice(r.status,r.text)),{etron:r.status}); }
     try{ return JSON.parse(r.text); }catch(e){ return r.text; } }
   throw new Error("etron: Anmeldung abgelaufen"); }
+// etron-Fehler verständlich machen (Rechte-Fehler aus Odoo)
+function ewNice(st, txt){ let m=""; try{ const j=JSON.parse(txt); m=String((j.arguments&&j.arguments[0])||j.message||j.error?.message||j.error||""); }catch(e){} if(!m) m=String(txt||"");
+  const ar=m.match(/keinen Zugriff auf Datensätze\s*„([^“]+)“\s*\(([^)]+)\)/)||m.match(/not allowed to access '([^']+)' \(([^)]+)\)/i);
+  if(ar) return `etron verweigert den Zugriff auf „${ar[1]}“ (${ar[2]}). Der Benutzer hinter dem API-Zugang hat dafür zu wenig Rechte. In etron unter Einstellungen → Benutzer diesen Benutzer öffnen: Benutzertyp „Interner Benutzer“ und bei Verkauf mindestens „Benutzer: Nur eigene Dokumente“ setzen. Danach erneut versuchen.`;
+  return `etron HTTP ${st}: ${m.replace(/\s+/g," ").slice(0,300)}`; }
 const ewList = v => Array.isArray(v)?v:(v&&(v.data||v.result||v.records))||[];
 const ewStr = (v,n=120) => String(v??"").trim().slice(0,n);
 const EW_PARTNER_FIELDS = ["id","name","firstname","lastname","ref","phone","mobile","email"];
