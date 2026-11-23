@@ -77,6 +77,7 @@ func main() {
 	mux.HandleFunc("/api/info", guard(handleInfo))
 	mux.HandleFunc("/api/ping", guard(handlePing))
 	mux.HandleFunc("/api/quit", guard(handleQuit))
+	mux.HandleFunc("/api/open", guard(handleOpen))
 	mux.HandleFunc("/api/bye", handleBye)
 	mux.HandleFunc("/api/fs/read", guard(handleRead))
 	mux.HandleFunc("/api/fs/write", guard(handleWrite))
@@ -231,6 +232,38 @@ func handleBye(w http.ResponseWriter, r *http.Request) {
 	winMu.Unlock()
 	go func() { time.Sleep(5 * time.Second); exitIfNoWindows() }() // Neu laden (F5) meldet sich in der Zeit wieder an
 	w.WriteHeader(204)
+}
+
+// Externe Links (etron, WhatsApp, E-Mail …) im Standardbrowser bzw. Standardprogramm öffnen
+func handleOpen(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		URL string `json:"url"`
+	}
+	if r.Method != "POST" || json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&b) != nil {
+		jsonOut(w, 400, map[string]string{"error": "ungültig"})
+		return
+	}
+	u := strings.TrimSpace(b.URL)
+	lu := strings.ToLower(u)
+	ok := false
+	for _, p := range []string{"https://", "http://", "mailto:", "sms:", "tel:", "whatsapp:"} {
+		if strings.HasPrefix(lu, p) {
+			ok = true
+		}
+	}
+	if !ok || strings.ContainsAny(u, "\"\r\n") {
+		jsonOut(w, 400, map[string]string{"error": "Adresse nicht erlaubt"})
+		return
+	}
+	if runtime.GOOS == "windows" {
+		if err := exec.Command("rundll32", "url.dll,FileProtocolHandler", u).Start(); err != nil {
+			jsonOut(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		log.Println("öffnen:", u)
+	}
+	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 
 func handleQuit(w http.ResponseWriter, r *http.Request) {

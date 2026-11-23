@@ -1462,6 +1462,10 @@ async function boot(){
     // beim Programm an- und abmelden, damit es sich beendet, sobald kein Fenster mehr offen ist
     const wid = Math.random().toString(36).slice(2, 12); const ping = () => desk("/api/ping?id=" + wid).catch(() => {});
     ping(); setInterval(ping, 20000); document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ping(); });
+    // Links nach außen (etron, WhatsApp, E-Mail) im Standardbrowser von Windows öffnen statt im App-Fenster
+    document.addEventListener("click", e => { const a = e.target.closest && e.target.closest("a[href]"); if (!a) return; const href = a.getAttribute("href") || "";
+      if (!/^(https?:|mailto:|sms:|tel:|whatsapp:)/i.test(href) || href.startsWith(location.origin)) return;
+      e.preventDefault(); desk("/api/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: a.href }) }).then(r => { if (!r.ok) toast("Link konnte nicht geöffnet werden."); }).catch(() => toast("Link konnte nicht geöffnet werden.")); }, true);
     addEventListener("pagehide", () => { try { navigator.sendBeacon("/api/bye?id=" + wid); } catch (e) {} }); }
   S.doc = new SyncDoc(S.provider, DATA_PATH, null, "vb.cache");
   const cached = await S.doc.loadCache();
