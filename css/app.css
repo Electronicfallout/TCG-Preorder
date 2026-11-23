@@ -121,3 +121,5 @@ details.wiki p,details.wiki ol,details.wiki ul{margin:6px 0}
 .pick{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px;text-align:left}
 .pick b{font-size:15px}.pick span{color:var(--muted);font-size:12px}
 .pick.on{border-color:var(--accent);background:var(--accent-soft)}
+input.ncheck{width:18px;height:18px;margin:0 6px 0 0;vertical-align:-3px;accent-color:var(--ok);cursor:pointer}
+.pill.nonr{background:var(--bad-soft);color:var(--bad);font-size:11px;padding:1px 6px;margin-right:6px}
