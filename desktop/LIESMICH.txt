@@ -2,6 +2,9 @@ TCG Vorbestellungen - Programm für Windows 11
 ==============================================
 
 EINRICHTEN (einmalig, ein PC genügt)
+0. Vor dem Entpacken: Rechtsklick auf die ZIP -> Eigenschaften -> unten
+   "Zulassen" anhaken -> OK. Sonst kann Windows (Smart App Control) die
+   EXE blockieren. Gestartet wird über eine Desktop-Verknüpfung.
 1. Den Inhalt dieser ZIP in den Dropbox-Ordner der App kopieren, also dorthin,
    wo bisher die Datei "vorbestellungen.json" liegt (meist Dropbox\Apps\<Name>\).
    Danach liegen dort: Vorbestellungen.exe, Ordner "programm", LIESMICH.txt.
