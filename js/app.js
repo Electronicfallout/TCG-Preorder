@@ -503,6 +503,48 @@ function bindEtron(){ const b=$("#et-save"); if(!b) return; b.onclick=()=>{ let 
   if(v && !/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen.");
   if(v && !v.includes("{Nr}") && /([?#&])id=\d+/.test(v)) { v=v.replace(/([?#&])id=\d+/, "$1id={Nr}"); toast("id=… wurde durch {Nr} ersetzt."); }
   write("config","etron",{...(S.config?.etron||{}),customerUrl:v},"set").then(ok=>ok&&toast("Gespeichert")); }; }
+// ---------- etron-API: Zugang (nur in der Dropbox, nie im Code) und Verbindungstest
+const ETRON_API_FILE = "etron-api.json";
+function etronApiBase(u){ u=(u||"").trim().replace(/\/+$/,""); if(!/^https?:\/\//.test(u)) return null; const m=u.match(/^(https?:\/\/[^/]+)(\/api\/v\d+)?/); return m ? m[1]+(m[2]||"/api/v2") : null; }
+async function etronApiLoad(){ try{ const r=await S.provider.read(ETRON_API_FILE); return r ? { ...r.data, _rev:r.rev } : null; }catch(e){ return { _err:e.message||String(e) }; } }
+async function etronToken(cfg){ const base=etronApiBase(cfg.url); const url=base+"/authentication/oauth2/token";
+  const tries=[ { headers:{ "Authorization":"Basic "+btoa(cfg.key+":"+cfg.secret), "Content-Type":"application/x-www-form-urlencoded" }, body:"grant_type=client_credentials" },
+    { headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body:new URLSearchParams({grant_type:"client_credentials",client_id:cfg.key,client_secret:cfg.secret}).toString() } ];
+  let last; for(const t of tries){ const r=await fetch(url,{method:"POST",...t}); if(r.ok){ const j=await r.json(); if(j.access_token) return j; last={status:r.status,text:JSON.stringify(j).slice(0,200)}; continue; } last={status:r.status,text:(await r.text()).slice(0,200)}; }
+  const e=new Error("Anmeldung abgelehnt (HTTP "+last.status+"): "+last.text); e.http=last.status; throw e; }
+function etronApiPanel(){
+  return `<div class="panel"><h2>etron-Schnittstelle (Test)</h2>
+    <p class="muted">Zugang aus etron (API &amp; Hooks → Authentication → Client Credentials). Er wird nur in eurer Dropbox gespeichert (<span class="mono">${ETRON_API_FILE}</span>), nie im Programmcode. Bitte einen eigenen Zugang mit einem Benutzer mit wenig Rechten verwenden.</p>
+    <div class="form">
+      <label class="wide">etron-Adresse<input id="ea-url" placeholder="https://xxxxxx.wawi.onretail.eu" autocomplete="off"></label>
+      <label>Client Key<input id="ea-key" autocomplete="off" spellcheck="false"></label>
+      <label>Client Secret<input id="ea-sec" type="password" autocomplete="new-password" spellcheck="false"></label>
+      <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
+    </div><div id="ea-st" class="muted">Lade …</div><div id="ea-res"></div></div>`; }
+function bindEtronApi(){ const st=$("#ea-st"); if(!st) return; let cur=null;
+  const show=()=>{ st.innerHTML = cur?._err ? `Dropbox nicht lesbar: ${esc(cur._err)}` : cur?.key ? `Zugang gespeichert (Key …${esc(String(cur.key).slice(-4))}, gespeichert ${esc(cur.savedAt||"")}${cur.savedBy?" von "+esc(cur.savedBy):""}). Felder leer lassen = unverändert.` : "Noch kein Zugang gespeichert.";
+    if(cur?.url) $("#ea-url").value=cur.url; $("#ea-key").placeholder=cur?.key?"gespeichert":""; $("#ea-sec").placeholder=cur?.secret?"gespeichert":""; };
+  etronApiLoad().then(c=>{ cur=c; show(); });
+  const form=()=>({ url:$("#ea-url").value.trim()||cur?.url||"", key:$("#ea-key").value.trim()||cur?.key||"", secret:$("#ea-sec").value.trim()||cur?.secret||"" });
+  $("#ea-save").onclick=async()=>{ if(needStaff()) return; const f=form(); if(!etronApiBase(f.url)) return toast("Bitte die etron-Adresse mit https:// eintragen."); if(!f.key||!f.secret) return toast("Bitte Client Key und Client Secret eintragen.");
+    const data={url:f.url,key:f.key,secret:f.secret,savedAt:new Date().toLocaleString("de-AT"),savedBy:staff()};
+    try{ const r=await S.provider.write(ETRON_API_FILE,data,cur&&!cur._err?cur._rev:null); cur={...data,_rev:r.rev}; $("#ea-key").value=""; $("#ea-sec").value=""; show(); toast("Zugang in der Dropbox gespeichert"); }
+    catch(e){ toast(e.conflict?"Wurde gerade woanders geändert. Seite neu laden.":"Nicht gespeichert: "+(e.message||e)); } };
+  $("#ea-del").onclick=async()=>{ if(!cur?.key) return toast("Es ist kein Zugang gespeichert."); try{ const r=await S.provider.write(ETRON_API_FILE,{},cur._rev); cur={_rev:r.rev}; show(); toast("Zugang gelöscht"); }catch(e){ toast("Nicht gelöscht: "+(e.message||e)); } };
+  $("#ea-test").onclick=async()=>{ const f=form(); const res=$("#ea-res"); const base=etronApiBase(f.url);
+    if(!base) return toast("Bitte die etron-Adresse mit https:// eintragen."); if(!f.key||!f.secret) return toast("Bitte Client Key und Client Secret eintragen oder speichern.");
+    const lines=[]; const out=(ok,t)=>{ lines.push(`<li class="${ok===true?"ok":ok===false?"bad":""}">${ok===true?"✓":ok===false?"✗":"…"} ${t}</li>`); res.innerHTML=`<ul class="eatest">${lines.join("")}</ul>`; };
+    out(null,`Adresse: <span class="mono">${esc(base)}</span>`);
+    let tok;
+    try{ tok=await etronToken(f); out(true,`Anmeldung erfolgreich (Token gültig ${tok.expires_in?Math.round(tok.expires_in/60)+" Minuten":"– Dauer unbekannt"}).`); }
+    catch(e){ if(e.http){ out(false,esc(e.message)+". Key/Secret prüfen."); return; }
+      let reach=false; try{ await fetch(base+"/authentication/oauth2/token",{method:"POST",mode:"no-cors"}); reach=true; }catch(x){}
+      out(false, reach ? "etron ist erreichbar, aber blockiert Anfragen aus dem Browser (CORS). Direkt aus der App geht es also nicht; dafür braucht es den kleinen Vermittler (Proxy)." : "etron-Adresse nicht erreichbar. Adresse prüfen (nur https://xxxxxx.wawi.onretail.eu, ohne weiteren Pfad)."); return; }
+    try{ const r=await fetch(base+'/search_extract/res.partner?fields=["id"]&limit=1',{headers:{Authorization:"Bearer "+tok.access_token}});
+      if(!r.ok){ out(false,`Kunden lesen abgelehnt (HTTP ${r.status}): ${esc((await r.text()).slice(0,200))}. Der etron-Benutzer braucht Leserechte auf Kontakte.`); return; }
+      const j=await r.json(); const n=Array.isArray(j)?j.length:Array.isArray(j?.data)?j.data.length:Array.isArray(j?.result)?j.result.length:null;
+      out(true,`Kunden lesen funktioniert${n!=null?` (${n} Testdatensatz abgerufen, Inhalt wird nicht angezeigt)`:""}. Die App kann direkt mit etron sprechen.`); }
+    catch(e){ out(false,"Kunden lesen fehlgeschlagen: "+esc(e.message||e)); } }; }
 function gamesPanel(){
   const cnt={}; Object.values(S.products).forEach(p=>{ const g=gameOf(p); cnt[g]=(cnt[g]||0)+1; });
   return `<div class="panel"><h2>Spielsysteme</h2>
@@ -1145,6 +1187,7 @@ function renderSettings(){
     <p class="muted">Mit diesem Code kann ein weiteres Gerät auf denselben Dropbox-App-Ordner zugreifen (nicht auf den Rest der Dropbox). Nur an Mitarbeiter weitergeben.</p>
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
   ${etronPanel()}
+  ${etronApiPanel()}
   ${gamesPanel()}
   ${staffPanel()}
   ${templatesPanel()}
@@ -1156,7 +1199,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron();
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi();
   $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));

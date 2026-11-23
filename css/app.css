@@ -125,3 +125,7 @@ input.ncheck{width:18px;height:18px;margin:0 6px 0 0;vertical-align:-3px;accent-
 .pill.nonr{background:var(--bad-soft);color:var(--bad);font-size:11px;padding:1px 6px;margin-right:6px}
 input.ve{width:70px}
 .picked{flex:1;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}
+ul.eatest{list-style:none;padding:0;margin:10px 0 0}
+ul.eatest li{padding:3px 0}
+ul.eatest li.ok{color:var(--ok)}
+ul.eatest li.bad{color:var(--bad)}
