@@ -1116,10 +1116,15 @@ function cetHtml(){ const st=S.cet; if(!st) return ""; const rows=[...st.rows].s
   return `<div class="panel"><div class="row spread"><h2>Abgleich mit etron</h2><button class="sm" id="cet-x">Schließen</button></div>
     <p class="muted">${st.running?`… suche ${st.done} von ${st.total}`:`${st.total} Kunden ohne etron-Nr. geprüft.`} Ein einzelner passender Treffer ist vorausgewählt. Bei mehreren Konten (z. B. Laden, Webshop, Cardmarket) wird nie automatisch gewählt: bitte das Konto mit der richtigen Kundenreferenz wählen. In etron wird nichts geändert.</p>
     ${grp("Ein Treffer",sure)}${grp("Mehrere mögliche Konten: bitte wählen",multi)}${grp("Nicht gefunden",none)}
-    ${st.running?"":`<div class="row"><button class="pri" id="cet-ok" ${n?"":"disabled"}>${n} etron-Nr. übernehmen</button></div>`}</div>`; }
+    ${st.running?"":`<div class="row"><button class="pri" id="cet-ok" ${n?"":"disabled"}>${n} etron-Nr. übernehmen</button>${multi.length?`<button id="cet-cp">Liste mehrfacher Konten kopieren (${multi.length})</button>`:""}</div><textarea id="cet-ta" hidden rows="8" style="width:100%"></textarea>`}</div>`; }
+// Textliste der Kunden mit mehreren etron-Konten (zum Einfügen z. B. in Asana)
+function cetMultiText(){ const rows=(S.cet?.rows||[]).filter(r=>r.cands.length>1&&!r.err&&S.customers[r.cid]).sort((a,b)=>S.customers[a.cid].name.localeCompare(S.customers[b.cid].name,"de"));
+  return `Doppelte etron-Konten (${rows.length} Kunden), Stand ${fmtDate(today())}\n\n`+rows.map(r=>{ const c=S.customers[r.cid]; const cm=r.cands.find(x=>cetCm(x.p,r.cands));
+    return `${c.name}${cm?` → zusammenführen auf Nr. ${cm.p.id} (Cardmarket, Referenz ${cm.p.ref})`:" → Cardmarket-Konto unklar"}\n`+r.cands.map(x=>`  - Nr. ${x.p.id}${x.p.ref?`, Referenz ${x.p.ref}`:", keine Referenz"}: ${x.p.name||""}`).join("\n"); }).join("\n\n"); }
 function drawCet(){ const box=$("#cet-box"); if(!box) return; box.innerHTML=cetHtml(); bindCet(); }
 function bindCet(){ const x=$("#cet-x"); if(x) x.onclick=()=>{ S.cet=null; drawCet(); };
   app.querySelectorAll("[data-cet]").forEach(el=>el.onchange=()=>{ const r=S.cet.rows.find(r=>r.cid===el.dataset.cet); if(r) r.pick=el.value?+el.value:null; const b=$("#cet-ok"); if(b){ const n=S.cet.rows.filter(r=>r.pick).length; b.textContent=`${n} etron-Nr. übernehmen`; b.disabled=!n; } });
+  const cp=$("#cet-cp"); if(cp) cp.onclick=async()=>{ const t=cetMultiText(); try{ await navigator.clipboard.writeText(t); toast("Liste kopiert. Jetzt einfügen, z. B. im Asana-Task."); }catch(e){ const ta=$("#cet-ta"); ta.hidden=false; ta.value=t; ta.focus(); ta.select(); toast("Kopieren nicht möglich: Text unten markieren und kopieren."); } };
   const ok=$("#cet-ok"); if(ok) ok.onclick=async()=>{ if(needStaff()) return; ok.disabled=true; const rows=S.cet.rows.filter(r=>r.pick&&S.customers[r.cid]&&!String(S.customers[r.cid].etronId||"").trim());
     const used=new Map(Object.values(S.customers).filter(c=>c.etronId).map(c=>[String(c.etronId).trim(),c.id])); let n=0, dup=0;
     for(const r of rows){ const id=String(r.pick); if(used.has(id)&&used.get(id)!==r.cid) dup++; const p=r.cands.find(x=>x.p.id===r.pick)?.p; if(await write("customers",r.cid,{etronId:id,...(p?.ref?{etronRef:String(p.ref)}:{})})){ n++; used.set(id,r.cid); } }
