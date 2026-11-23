@@ -508,6 +508,8 @@ function bindEtron(){ const b=$("#et-save"); if(!b) return; b.onclick=()=>{ let 
 // ---------- etron-API: Zugang (nur in der Dropbox, nie im Code) und Verbindungstest
 const ETRON_API_FILE = "etron-api.json";
 async function etronApiLoad(){ try{ const r=await S.provider.read(ETRON_API_FILE); return r ? { ...r.data, _rev:r.rev } : null; }catch(e){ return { _err:e.message||String(e) }; } }
+// Schritte und Fehler ins Log des Programms (logs\<PC>.log). Nur IDs, Artikelnummern, Anzahlen, keine Namen/Telefonnummern.
+function dlog(level, msg){ if(!S.desktop) return; try{ desk("/api/clientlog",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level,msg:String(msg).slice(0,1500)})}).catch(()=>{}); }catch(e){} }
 // etron-Anfragen laufen über das Programm (Vorbestellungen.exe) direkt zu etron. Der Zugang liegt in etron-zugang.json im Dropbox-Ordner.
 async function etronCall(action, data){
   if(!S.desktop) throw new Error("etron geht nur im Programm (Vorbestellungen.exe).");
@@ -522,17 +524,22 @@ async function etronFindPartners(fn, ln, tel){ const qs=[]; const d=String(tel||
   const seen=new Map(); for(const q of qs){ const r=await etronCall("partner_search",{q}); for(const p of r.items||[]) if(p&&p.id&&!seen.has(p.id)) seen.set(p.id,p); }
   const f=norm(fn||""); return [...seen.values()].sort((a,b)=>(norm(b.name||"").includes(f)?1:0)-(norm(a.name||"").includes(f)?1:0)).slice(0,10); }
 function etronHitsHtml(list){ return list.map(p=>`<button type="button" class="sm" data-epid="${p.id}">Nr. ${p.id}: ${esc(p.name||"")}${etronTel(p)?` <span class="muted">${esc(etronTel(p))}</span>`:""}${p.email?` <span class="muted">${esc(p.email)}</span>`:""}</button>`).join(" "); }
-async function etronCreatePartner(fn, ln, tel, mail){ const r=await etronCall("partner_create",{firstname:fn,lastname:ln,phone:tel,email:mail}); const id=etronIdOf(r); if(!id) throw new Error("etron hat keine Kundennummer zurückgegeben"); return id; }
+async function etronCreatePartner(fn, ln, tel, mail){ dlog("INFO","Kunde in etron anlegen"); const r=await etronCall("partner_create",{firstname:fn,lastname:ln,phone:tel,email:mail}); const id=etronIdOf(r); if(!id){ dlog("ERROR","Kunde in etron anlegen: keine Kundennummer in der Antwort"); throw new Error("etron hat keine Kundennummer zurückgegeben"); } dlog("INFO",`Kunde in etron angelegt: Partner ${id}`); return id; }
 // Auftrag für einen Kunden: zugeteilte Positionen -> etron-Auftrag (Entwurf)
 async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronId) throw new Error("keine etron-Nr.");
   const cfg=odooCfg(); let partner=parseInt(c.etronId,10);
   if(cfg.key==="ref"){ const r=await etronCall("partner_search",{q:String(c.etronId)}); const p=(r.items||[]).find(x=>String(x.ref)===String(c.etronId)); if(!p) throw new Error(`Kunde mit Kundennr. ${c.etronId} in etron nicht gefunden`); partner=p.id; }
-  const miss=list.filter(o=>!S.products[o.productId]?.articleNo); if(miss.length) throw new Error("Artikelnummer fehlt bei: "+[...new Set(miss.map(o=>S.products[o.productId]?.name||"?"))].join(", "));
+  const miss=list.filter(o=>!S.products[o.productId]?.articleNo); if(miss.length){ dlog("WARN",`Auftrag Kunde ${cid}: Artikelnummer fehlt bei Produkt ${miss.map(o=>o.productId).join(", ")}`); } if(miss.length) throw new Error("Artikelnummer fehlt bei: "+[...new Set(miss.map(o=>S.products[o.productId]?.name||"?"))].join(", "));
   const codes=[...new Set(list.map(o=>S.products[o.productId].articleNo.trim()))];
   const found=(await etronCall("product_find",{codes})).items||[]; const byCode=new Map(found.map(p=>[String(p.default_code).trim(),p.id]));
+  dlog("INFO",`Artikelsuche ${codes.join(", ")}: gefunden ${found.map(p=>p.default_code+"→"+p.id).join(", ")||"nichts"}`);
   const nf=codes.filter(x=>!byCode.has(x)); if(nf.length) throw new Error("Artikelnummer in etron nicht gefunden: "+nf.join(", "));
-  const r=await etronCall("order_create",{partner_id:partner,origin:`Vorbestellung ${fmtDate(today())}`,tag:cfg.tag||"",note:"",lines:list.map(o=>({product_id:byCode.get(S.products[o.productId].articleNo.trim()),qty:o.alloc}))});
-  const oid=etronIdOf(r); await pool(list,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid||true})); return oid; }
+  const lines=list.map(o=>({product_id:byCode.get(S.products[o.productId].articleNo.trim()),qty:o.alloc}));
+  dlog("INFO",`Auftrag anlegen: Kunde ${cid}, etron-Partner ${partner}, Positionen ${list.map(o=>o.id+"="+S.products[o.productId].articleNo.trim()+"→Artikel "+byCode.get(S.products[o.productId].articleNo.trim())+" x"+o.alloc).join(", ")}, Stichwort "${cfg.tag||""}"`);
+  const r=await etronCall("order_create",{partner_id:partner,origin:`Vorbestellung ${fmtDate(today())}`,tag:cfg.tag||"",note:"",lines});
+  const oid=etronIdOf(r); if(!oid){ dlog("ERROR",`Auftrag für Kunde ${cid}: etron hat keine Auftragsnummer zurückgegeben`); throw new Error("etron hat keine Auftragsnummer zurückgegeben. Bitte in etron nachsehen, ob der Auftrag trotzdem angelegt wurde, und das Log schicken."); }
+  dlog("INFO",`Auftrag angelegt: Kunde ${cid}, etron-Auftrag ${oid}`);
+  await pool(list,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid})); return oid; }
 function etronApiPanel(){
   if(!S.desktop) return `<div class="panel"><h2>etron-Schnittstelle</h2><p class="muted">Die direkte Verbindung zu etron gibt es nur im Programm <b>Vorbestellungen.exe</b> aus dem Dropbox-Ordner, nicht in der Web-Version.</p></div>`;
   return `<div class="panel"><h2>etron-Schnittstelle</h2>
@@ -636,8 +643,9 @@ function bindMigrate(){ const c=$("#mg-c"); if(!c) return;
       say(`✓ ${n} Dateien übernommen (Daten und ${n-1} Protokollmonate). Anzahl jetzt: ${Object.keys(S.products).length} Produkte, ${Object.keys(S.customers).length} Kunden, ${Object.keys(S.orders).length} Bestellungen.`,"ok");
       if(stats) say(importReport(stats),"");
       say(`Bitte kurz prüfen. Die Web-Version arbeitet weiter mit dem alten Ordner; neue Einträge dort kann man jederzeit erneut übernehmen.`,"muted");
+      dlog("INFO",`Übernahme: ${n} Dateien, Sicherung ${bk.folder}${stats?`, neu ${stats.newTotal}, abgeglichen ${stats.updTotal}, Produkte zusammengelegt ${stats.prodMerged}, Kunden zusammengeführt ${stats.custMerged}, doppelte Bestellungen ${stats.orderDup}, mögliche Dubletten ${stats.dupes}`:""}`);
       S.log=null; S.logP=null; S.lastImport=stats; toast(`Übernahme fertig: ${stats?stats.newTotal+" neu, "+stats.updTotal+" abgeglichen, ":""}${stats?.dupes?stats.dupes+" mögliche Dubletten, ":""}Sicherung in ${bk.folder}`,8000); pull(); render(); }
-    catch(e){ say("✗ "+esc(e.message||e),"bad"); }
+    catch(e){ dlog("ERROR","Übernahme fehlgeschlagen: "+(e.message||e)); say("✗ "+esc(e.message||e),"bad"); }
     b.disabled=false; }; }
 
 function gamesPanel(){
@@ -1106,7 +1114,7 @@ function renderExport(){
   bindOdoo(rows);
   const runEt=async(cids)=>{ if(needStaff()) return; S.etRes=[]; const log=(t,cls)=>{ S.etRes.push(`<p class="${cls||""}">${t}</p>`); const res=$("#eres"); if(res) res.innerHTML=S.etRes.join(""); };
     let ok=0; for(const cid of cids){ const list=rows.filter(o=>o.customerId===cid&&S.orders[o.id]?.status==="Zugeteilt"); if(!list.length) continue; const name=esc(S.customers[cid]?.name||"?");
-      try{ const id=await etronOrderFor(cid,list); ok++; log(`✓ ${name}: Auftrag${id?" "+id:""} angelegt (${list.length} Positionen)`,"ok"); }catch(e){ log(`✗ ${name}: ${esc(e.message||e)}`,"bad"); } }
+      try{ const id=await etronOrderFor(cid,list); ok++; log(`✓ ${name}: Auftrag${id?" "+id:""} angelegt (${list.length} Positionen)`,"ok"); }catch(e){ dlog("ERROR",`Auftrag Kunde ${cid} fehlgeschlagen: ${e.message||e}`); log(`✗ ${name}: ${esc(e.message||e)}`,"bad"); } }
     toast(`${ok} Aufträge in etron angelegt`); return ok; };
   const ea=$("#eall"); if(ea) ea.onclick=()=>{ const cids=[...new Set(rows.filter(o=>S.customers[o.customerId]?.etronId).map(o=>o.customerId))];
     $("#eallc").innerHTML=` <button class="sm danger" id="eallok">Ja, ${cids.length} Aufträge anlegen</button>`; $("#eallok").onclick=async()=>{ $("#eallok").disabled=true; ea.disabled=true; await runEt(cids); }; };
@@ -1304,7 +1312,7 @@ function renderSettings(){
   app.innerHTML = `<div><h1>Einstellungen</h1><p class="sub">Version ${esc(APP_VERSION)} · ${isDisk ? `Programm auf diesem PC · Daten im Ordner <span class="mono">${esc(S.desktop.folder)}</span>` : isDb ? "Daten in der Dropbox (App-Ordner, Datei vorbestellungen.json)" : "Nur ausprobieren: Daten liegen nur in diesem Browser"}</p></div>
   ${wikiPanel()}
   <div class="panel"><h2>Speicher</h2><p>Status: <b>${esc(SYNC_TXT[S.doc.status] || S.doc.status)}</b>${S.doc.error ? ` <span class="muted">(${esc(S.doc.error)})</span>` : ""}</p>
-    <div class="row"><button id="syncnow">Jetzt abgleichen</button>${isDisk ? `<button id="quit" class="danger">Programm beenden</button>` : `<button id="logout" class="danger">${isDb ? "Dropbox auf diesem Gerät trennen" : "Ausprobieren beenden"}</button>`}</div>
+    <div class="row"><button id="syncnow">Jetzt abgleichen</button>${isDisk ? `<button id="openlog">Log öffnen</button><button id="openlogdir">Log-Ordner öffnen</button><button id="quit" class="danger">Programm beenden</button>` : `<button id="logout" class="danger">${isDb ? "Dropbox auf diesem Gerät trennen" : "Ausprobieren beenden"}</button>`}</div>
     <p class="muted">${isDisk ? "Der Dropbox-Client gleicht den Ordner zwischen den PCs ab. Speichern zwei PCs gleichzeitig, führt das Programm die Konfliktkopien automatisch zusammen." : "Trennen entfernt nur den Zugang auf diesem Gerät. Die Daten in der Dropbox bleiben."}</p></div>
   ${isDisk ? migratePanel() : ""}
   ${isDb ? `<div class="panel"><h2>Kollegen einladen</h2>
@@ -1324,7 +1332,9 @@ function renderSettings(){
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
   $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi();
-  if (isDisk) { bindMigrate(); $("#quit").onclick = async () => { await S.doc.sync(); try { await desk("/api/quit", { method: "POST" }); } catch (e) {}
+  if (isDisk) { bindMigrate();
+    $("#openlog").onclick = () => desk("/api/openlog", { method: "POST" }).then(r => r.json()).then(j => toast("Log: " + j.path, 6000));
+    $("#openlogdir").onclick = () => desk("/api/openlog?folder=1", { method: "POST" }).then(r => r.json()).then(j => toast("Ordner: " + j.path, 6000)); $("#quit").onclick = async () => { await S.doc.sync(); try { await desk("/api/quit", { method: "POST" }); } catch (e) {}
     app.innerHTML = `<div class="panel setup"><h1>Programm beendet</h1><p class="sub">Alle Änderungen sind gespeichert. Dieses Fenster kann geschlossen werden.</p></div>`; setTimeout(() => window.close(), 800); }; }
   if ($("#logout")) $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
@@ -1466,13 +1476,18 @@ async function boot(){
     document.addEventListener("click", e => { const a = e.target.closest && e.target.closest("a[href]"); if (!a) return; const href = a.getAttribute("href") || "";
       if (!/^(https?:|mailto:|sms:|tel:|whatsapp:)/i.test(href) || href.startsWith(location.origin)) return;
       e.preventDefault(); desk("/api/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: a.href }) }).then(r => { if (!r.ok) toast("Link konnte nicht geöffnet werden."); }).catch(() => toast("Link konnte nicht geöffnet werden.")); }, true);
+    addEventListener("error", e => dlog("ERROR", `${e.message} (${(e.filename||"").split("/").pop()}:${e.lineno})`));
+    addEventListener("unhandledrejection", e => dlog("ERROR", "Unbehandelt: " + (e.reason?.message || e.reason)));
+    dlog("INFO", `Fenster geöffnet, Version ${APP_VERSION}, Kürzel ${staff() || "-"}`);
     addEventListener("pagehide", () => { try { navigator.sendBeacon("/api/bye?id=" + wid); } catch (e) {} }); }
   S.doc = new SyncDoc(S.provider, DATA_PATH, null, "vb.cache");
   const cached = await S.doc.loadCache();
   S.db = makeDb(S.doc);
   let seen = "";
+  let lastSt = "";
   S.doc.on(() => {
     drawSync();
+    if (S.doc.status !== lastSt && S.doc.status !== "syncing") { if (S.doc.status === "error" || S.doc.status === "offline" || lastSt === "error" || lastSt === "offline") dlog(S.doc.status === "ok" ? "INFO" : "WARN", `Abgleich: ${S.doc.status}${S.doc.error ? " (" + S.doc.error + ")" : ""}`); lastSt = S.doc.status; }
     if (!S.doc.obj) return;
     const key = (S.doc.rev || "") + ":" + (S.doc.obj.meta?.updatedAt || 0);
     if (key === seen) return; seen = key; pull(); route();

@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -54,10 +55,7 @@ func main() {
 		baseDir = d
 	}
 	webDir = filepath.Join(baseDir, "programm")
-	logf, _ := os.OpenFile(filepath.Join(os.TempDir(), "vorbestellungen.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if logf != nil {
-		log.SetOutput(logf)
-	}
+	setupLog()
 	url := "http://127.0.0.1:" + port + "/"
 
 	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
@@ -78,6 +76,8 @@ func main() {
 	mux.HandleFunc("/api/ping", guard(handlePing))
 	mux.HandleFunc("/api/quit", guard(handleQuit))
 	mux.HandleFunc("/api/open", guard(handleOpen))
+	mux.HandleFunc("/api/clientlog", guard(handleClientLog))
+	mux.HandleFunc("/api/openlog", guard(handleOpenLog))
 	mux.HandleFunc("/api/bye", handleBye)
 	mux.HandleFunc("/api/fs/read", guard(handleRead))
 	mux.HandleFunc("/api/fs/write", guard(handleWrite))
@@ -107,8 +107,9 @@ func main() {
 	if os.Getenv("VB_NOWINDOW") == "" {
 		go func() { time.Sleep(300 * time.Millisecond); openWindow(url) }()
 	}
-	log.Println("Start", baseDir)
-	fatal(http.Serve(ln, mux))
+	host, _ := os.Hostname()
+	log.Printf("START Version %s, PC %s, Ordner …\\%s, Windows-Benutzer %s", build, host, filepath.Base(baseDir), os.Getenv("USERNAME"))
+	fatal(http.Serve(ln, accessLog(mux)))
 }
 
 func fatal(err error) {
@@ -260,9 +261,8 @@ func handleOpen(w http.ResponseWriter, r *http.Request) {
 			jsonOut(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-	} else {
-		log.Println("öffnen:", u)
 	}
+	log.Printf("LINK geöffnet (%s)", linkKind(u))
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 
@@ -609,8 +609,10 @@ func (t *tokenCache) get(c etronCfg, force bool) (string, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r, err := httpc.Do(req)
 	if err != nil {
+		log.Printf("ETRON  Anmeldung -> nicht erreichbar (%s)", redact(err.Error()))
 		return "", &etronErr{"etron nicht erreichbar: " + err.Error(), 0}
 	}
+	log.Printf("ETRON  Anmeldung -> HTTP %d", r.StatusCode)
 	defer r.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if r.StatusCode != 200 {
@@ -695,12 +697,18 @@ func call(c etronCfg, method, path string, params map[string]any, body any) (any
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		t0 := time.Now()
 		r, err := httpc.Do(req)
 		if err != nil {
+			log.Printf("ETRON  %s %s -> nicht erreichbar (%s)", method, path, redact(err.Error()))
 			return nil, &etronErr{"etron nicht erreichbar: " + err.Error(), 0}
 		}
 		b, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 		r.Body.Close()
+		log.Printf("ETRON  %s %s -> HTTP %d, %d Bytes, %d ms, Antwort: %s", method, path, r.StatusCode, len(b), time.Since(t0).Milliseconds(), shape(b))
+		if r.StatusCode >= 300 {
+			log.Printf("ETRON  Fehlertext: %s", redact(short(b, 600)))
+		}
 		if r.StatusCode == 401 && attempt == 0 {
 			continue
 		}
@@ -770,7 +778,7 @@ func handleEtron(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := etronAction(c, str(b["action"], 40), b)
 	if err != nil {
-		log.Println("etron", str(b["action"], 40), "Fehler:", err)
+		log.Printf("ETRON %s FEHLER: %s", str(b["action"], 40), redact(err.Error()))
 		st := 0
 		var ee *etronErr
 		if errors.As(err, &ee) {
@@ -1076,4 +1084,209 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 		n++
 	}
 	jsonOut(w, 200, map[string]any{"folder": "sicherung/" + name, "files": n})
+}
+
+// ---------- Logdatei ----------
+// logs\<PC-Name>.log im Programmordner (max. 2 MB, danach .1). Keine Kundendaten: nur IDs, Artikelnummern,
+// Endpunkte, Status und Zeiten. Fehlertexte von etron werden von E-Mail-Adressen und Telefonnummern bereinigt.
+
+type rotLog struct {
+	mu   sync.Mutex
+	path string
+	f    *os.File
+}
+
+var logFile string
+
+func (l *rotLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return len(p), nil
+		}
+		l.f = f
+	}
+	if st, err := l.f.Stat(); err == nil && st.Size() > 2<<20 {
+		l.f.Close()
+		os.Remove(l.path + ".1")
+		os.Rename(l.path, l.path+".1")
+		f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			l.f = nil
+			return len(p), nil
+		}
+		l.f = f
+	}
+	return l.f.Write(p)
+}
+
+func setupLog() {
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "PC"
+	}
+	host = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`\/:*?"<>| `, r) {
+			return '_'
+		}
+		return r
+	}, host)
+	dir := filepath.Join(baseDir, "logs")
+	os.MkdirAll(dir, 0o755)
+	logFile = filepath.Join(dir, host+".log")
+	log.SetOutput(&rotLog{path: logFile})
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+}
+
+var (
+	reMail  = regexp.MustCompile(`[^\s"'<>,;:]+@[^\s"'<>,;:]+\.[A-Za-z]{2,}`)
+	rePhone = regexp.MustCompile(`\+?\d[\d /().-]{6,}\d`)
+)
+
+func redact(s string) string {
+	s = reMail.ReplaceAllString(s, "[E-Mail]")
+	s = rePhone.ReplaceAllString(s, "[Nummer]")
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r", " "), "\n", " ")
+}
+
+// Form einer Antwort ohne Inhalte, z. B. "Liste mit 3 Einträgen" oder "Zahl 900" bei IDs
+func shape(b []byte) string {
+	var v any
+	if json.Unmarshal(b, &v) != nil {
+		return fmt.Sprintf("kein JSON (%d Zeichen)", len(b))
+	}
+	return shapeOf(v, 0)
+}
+
+func shapeOf(v any, depth int) string {
+	switch x := v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return fmt.Sprint(x)
+	case float64:
+		return fmt.Sprintf("Zahl %v", x)
+	case string:
+		return fmt.Sprintf("Text(%d)", len(x))
+	case []any:
+		if len(x) > 0 && depth < 2 {
+			return fmt.Sprintf("Liste(%d) von %s", len(x), shapeOf(x[0], depth+1))
+		}
+		return fmt.Sprintf("Liste(%d)", len(x))
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		if depth >= 2 {
+			return "{" + strings.Join(keys, ",") + "}"
+		}
+		parts := []string{}
+		for _, k := range keys {
+			if k == "id" || k == "error" || k == "result" || k == "code" || k == "status" {
+				if k == "error" || k == "message" {
+					parts = append(parts, k+"="+redact(fmt.Sprint(x[k])))
+				} else {
+					parts = append(parts, k+"="+shapeOf(x[k], depth+1))
+				}
+			} else {
+				parts = append(parts, k)
+			}
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	}
+	return "?"
+}
+
+func linkKind(u string) string {
+	lu := strings.ToLower(u)
+	switch {
+	case strings.Contains(lu, "wa.me") || strings.HasPrefix(lu, "whatsapp:"):
+		return "WhatsApp"
+	case strings.HasPrefix(lu, "mailto:"):
+		return "E-Mail"
+	case strings.HasPrefix(lu, "sms:") || strings.HasPrefix(lu, "tel:"):
+		return "SMS/Telefon"
+	case strings.Contains(lu, "onretail") || strings.Contains(lu, "etron"):
+		return "etron"
+	}
+	return "Web"
+}
+
+type statusRec struct {
+	http.ResponseWriter
+	code int
+}
+
+func (s *statusRec) WriteHeader(c int) { s.code = c; s.ResponseWriter.WriteHeader(c) }
+
+var pingLogged sync.Map
+
+func accessLog(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			h.ServeHTTP(w, r)
+			return
+		}
+		t0 := time.Now()
+		rec := &statusRec{w, 200}
+		h.ServeHTTP(rec, r)
+		p := r.URL.Path
+		if p == "/api/ping" || p == "/api/clientlog" {
+			if _, seen := pingLogged.LoadOrStore(r.URL.Query().Get("id"), true); seen || p == "/api/clientlog" {
+				if rec.code < 300 {
+					return
+				}
+			}
+		}
+		extra := ""
+		if q := r.URL.Query().Get("path"); q != "" {
+			extra = " " + q
+		}
+		if q := r.URL.Query().Get("folder"); q != "" {
+			extra += " Ordner " + q
+		}
+		log.Printf("API    %s %s%s -> %d (%d ms)", r.Method, p, extra, rec.code, time.Since(t0).Milliseconds())
+	})
+}
+
+// Meldungen aus der App (Fehler, Schritte) ins Log
+func handleClientLog(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Level string `json:"level"`
+		Msg   string `json:"msg"`
+	}
+	if r.Method != "POST" || json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&b) != nil {
+		jsonOut(w, 400, map[string]string{"error": "ungültig"})
+		return
+	}
+	lv := strings.ToUpper(str(b.Level, 8))
+	if lv == "" {
+		lv = "INFO"
+	}
+	log.Printf("APP    %-5s %s", lv, redact(str(b.Msg, 1500)))
+	w.WriteHeader(204)
+}
+
+// Logdatei bzw. -ordner im Editor/Explorer öffnen
+func handleOpenLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonOut(w, 405, map[string]string{"error": "method"})
+		return
+	}
+	target := logFile
+	if r.URL.Query().Get("folder") == "1" {
+		target = filepath.Dir(logFile)
+	}
+	if runtime.GOOS == "windows" {
+		if r.URL.Query().Get("folder") == "1" {
+			exec.Command("explorer", target).Start()
+		} else {
+			exec.Command("notepad", target).Start()
+		}
+	}
+	jsonOut(w, 200, map[string]string{"path": target})
 }

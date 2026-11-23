@@ -26,6 +26,9 @@ SICHERHEIT
 - Der etron-Zugang liegt in "etron-zugang.json" in diesem Ordner.
   Diese Datei nicht weitergeben.
 - Sicherungen (vor einer Datenübernahme) liegen im Ordner "sicherung".
+- Logdatei pro PC: Ordner "logs" (Einstellungen -> "Log öffnen"). Sie enthält
+  keine Kundennamen, Telefonnummern oder E-Mail-Adressen, nur IDs,
+  Artikelnummern und Fehlertexte, und kann zur Fehlersuche geteilt werden.
 
 UPDATE
 Neue Version: Ordner "programm" ersetzen (geht auch, während das Programm
