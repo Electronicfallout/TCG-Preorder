@@ -302,6 +302,7 @@ function renderProduct(pid){
     </div></div>
     ${s.rec==null?'<p class="muted">Erst den Wareneingang eintragen, dann kann ein Vorschlag berechnet werden.</p>':sug?'<p class="muted">Vorschlag steht in der Spalte „Vorschlag“. Noch nichts gespeichert.</p>':'<p class="muted">Zuteilungen können auch direkt in der Tabelle eingetragen werden. Bestellungen mit Status „Auftrag angelegt“ oder „Abgeholt“ bleiben beim Vorschlag unverändert.</p>'}
   </div>
+  ${orderForm("pr", pid)}
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
     <span class="row" style="gap:6px">${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
@@ -315,8 +316,7 @@ function renderProduct(pid){
     ${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.map[o.id]??""}</td>`:""}
     <td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td>
     <td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("") || `<tr><td colspan="8" class="empty">Noch keine Bestellungen. Unten die erste erfassen.</td></tr>`}
-  </tbody></table></div>
-  ${orderForm("pr", pid)}`;
+  </tbody></table></div>`;
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
   ["name","msgName","articleNo","etronUrl","release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
@@ -675,14 +675,14 @@ function renderSeries(anyPid){
     <button id="close">Zuteilung abschließen</button><button id="rest" title="Alle offenen Bestellungen ohne Zuteilung auf Warteliste setzen">Rest auf Warteliste</button></div></div>
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
+  ${orderForm("se", null, null, ids)}
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n">${o.qty??""}</td><td>${fmtDate(o.date)}</td>
     <td><select data-rs id="ss-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
     ${sib.map(p=>cell(r,p.id)).join("")}<td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
-  </tbody></table></div>
-  ${orderForm("se", null, null, ids)}`;
+  </tbody></table></div>`;
   app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
   app.querySelectorAll("input[data-oid]").forEach(el=>el.onchange=()=>saveAlloc(el.dataset.oid, num(el.value)));
   app.querySelectorAll("input[data-flex]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!v) return; const o=S.orders[el.dataset.flex];
@@ -738,13 +738,13 @@ function renderCustomer(cid){
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="row muted" style="gap:6px;align-self:end"><input type="checkbox" id="cd-wa" ${c.noWhatsapp?"":"checked"}> Hat WhatsApp</label>
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
+  ${orderForm("cu", null, cid)}
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${os.map(o=>{const p=S.products[o.productId||(o.choices||[])[0]];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}"><td><a href="#produkt-${p?.id||""}">${esc(orderLabel(o))}</a><span class="gtag">${esc(gameOf(p))}</span></td><td>${esc(relTxt(p?.release))}</td>
     <td class="n"><input type="number" min="0" data-f="qty" id="q-${o.id}" value="${o.qty??""}"></td><td>${fmtDate(o.date)}</td>
     <td><select data-f="status" id="s-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
     <td class="n">${o.alloc??""}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td><td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("")||`<tr><td colspan="8" class="empty">Keine Bestellungen.</td></tr>`}
   </tbody></table></div>
-  ${orderForm("cu", null, cid)}
   <div class="panel"><h2>Mit anderem Kunden zusammenführen</h2>
     <p class="muted">Alle Bestellungen von „${esc(c.name)}“ wandern zum gewählten Kunden, danach wird „${esc(c.name)}“ gelöscht.</p>
     <div class="row"><select id="mt"><option value="">Ziel-Kunde wählen</option>${[...d,...others.filter(x=>!d.includes(x))].map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>
