@@ -246,7 +246,7 @@ function renderProducts(){
       <label>Spiel<select id="np-game">${gameOptions(S.game==="Alle"?"One Piece":S.game)}</select></label>
       <label>Einheit<input id="np-unit" placeholder="Display, Case, Stück"></label>
       <button class="pri" ${S.canWrite?"":"disabled"}>Anlegen</button>
-    </form><p class="muted">Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Dann zählt jede Variante getrennt.</p></div>`;
+    </form><p class="muted">Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Dann zählt jede Variante getrennt. Mehrere Produkte in einer gemeinsamen Liste (z. B. zwei Sets am selben Release): erstes Produkt anlegen, dann auf seiner Seite „+ Weiteres Produkt in diese Liste“.</p></div>`;
   $("#pq").oninput = e => { S.pq=e.target.value; render(); };
   const sa=$("#showall"); if(sa) sa.onclick=()=>setGame("Alle");
   $("#parch").onchange = e => { S.parch=e.target.checked; renderProducts(); };
@@ -261,6 +261,21 @@ function veTxt(n, ps){ if(n==null||!ps) return ""; const v=Math.floor(n/ps), r=n
 function veField(f, label, p){ const ps=p.packSize; const n=p[f];
   return `<label>${label}<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="pd-${f}" type="number" min="0" value="${n??""}" style="flex:1" title="Stück">${ps?`<input id="ve-${f}" type="number" min="0" step="1" class="ve" value="${n!=null&&n%ps===0?n/ps:""}" placeholder="VE" title="In VE eintragen (1 VE = ${ps} Stück)"><span class="muted">VE</span>`:""}</span>${ps&&n!=null&&n%ps?`<span class="muted">= ${veTxt(n,ps)}</span>`:""}</label>`; }
 
+// ---------- weiteres Produkt in dieselbe Liste (Serie) aufnehmen
+const addVarBtn = () => `<button class="sm" id="addv" title="Weiteres Produkt (z. B. zweites Set am selben Release) in diese gemeinsame Liste aufnehmen">+ Weiteres Produkt in diese Liste</button>`;
+function bindAddVar(p){ const b=$("#addv"); if(!b) return;
+  b.onclick=()=>{ const box=$("#addvbox"); box.innerHTML=`<div class="panel"><h2>Weiteres Produkt in diese Liste</h2><form class="form" id="av-f">
+      <label class="wide">Produktname<input id="av-name" required placeholder="z. B. IB-10"></label>
+      <label>Artikelnummer<input id="av-art" placeholder="optional"></label>
+      <button class="pri" ${S.canWrite?"":"disabled"}>Anlegen</button><button type="button" id="av-x">Abbrechen</button></form>
+      <p class="muted">Spiel, Release, Einheit und VE werden von „${esc(p.name)}“ übernommen. Danach stehen beide Produkte gemeinsam in einer Liste, und Bestellungen bekommen ein Mengenfeld je Produkt.</p></div>`;
+    $("#av-x").onclick=()=>{ box.innerHTML=""; }; $("#av-name").focus();
+    $("#av-f").onsubmit=async e=>{ e.preventDefault(); const name=$("#av-name").value.trim(), art=$("#av-art").value.trim(); if(!name) return;
+      if (Object.values(S.products).some(x=>x.name.toLowerCase()===name.toLowerCase())) return toast("Dieses Produkt gibt es schon.");
+      let ser=seriesOf(p); if(!ser){ ser=p.name+" / "+name; if(!await write("products",p.id,{series:ser})) return; }
+      const id="p-"+name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,50)+"-"+Date.now().toString(36).slice(-4);
+      if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),series:ser,release:p.release||"",unit:p.unit||"",packSize:p.packSize??null,game:gameOf(p),articleNo:art||undefined,received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="serie-"+id; } }; }; }
+
 function renderProduct(pid){
   const p = S.products[pid]; if(!p){ app.innerHTML=`<a class="back" href="#produkte">← Produkte</a><div class="empty">Dieses Produkt gibt es nicht mehr.</div>`; return; }
   const s = stats(p); const sug = S.sugg[pid];
@@ -271,7 +286,8 @@ function renderProduct(pid){
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
   <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a>${/^https?:\/\//.test(p.etronUrl||"")?` · <a class="back" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">In etron öffnen</a>`:""} · ${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
-   <div class="row"><button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button><button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
+   <div class="row">${addVarBtn()}<button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button><button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
+  <div id="addvbox"></div>
   ${p.archived?`<div class="note">Dieses Produkt ist archiviert und erscheint nur mit „Archivierte zeigen“ in der Produktliste.</div>`:""}
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
@@ -326,12 +342,13 @@ function renderProduct(pid){
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
   ["name","msgName","articleNo","etronUrl","release","series","unit","packSize","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="packSize"&&v!=null&&!(v>=1&&Number.isInteger(v))){ el.value=p.packSize??""; return toast("Bitte eine ganze Zahl ab 1 eintragen."); } if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
   if(p.packSize) ["supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#ve-"+f); el.onchange=()=>{ const v=num(el.value); write("products",pid,{[f]:v==null?null:v*p.packSize}).then(ok=>ok&&toast(v==null?"Gespeichert":`Gespeichert: ${v*p.packSize} Stück`)); }; });
+  bindAddVar(p);
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
   $("#del").onclick=()=>{ const own=ordersOf(pid), fl=flexOf(pid);
     $("#delc").innerHTML=` <button class="sm danger" id="delok">Ja: Produkt und ${own.length} Bestellungen endgültig löschen</button>`;
     $("#delok").onclick=()=>{ const t=now(); S.doc.update(o=>{ o.products[pid]={deleted:true,updatedAt:t};
         for(const x of own) o.orders[x.id]={deleted:true,updatedAt:t};
-        for(const x of fl){ const ch=(o.orders[x.id].choices||[]).filter(c=>c!==pid); o.orders[x.id]= ch.length>1 ? {...o.orders[x.id],choices:ch,updatedAt:t} : ch.length===1 ? {...o.orders[x.id],choices:undefined,productId:ch[0],updatedAt:t} : {deleted:true,updatedAt:t}; } });
+        for(const x of fl){ const ch=(o.orders[x.id].choices||[]).filter(c=>c!==pid); o.orders[x.id]= ch.length>1 ? {...o.orders[x.id],choices:ch,_ft:undefined,updatedAt:t} : ch.length===1 ? {...o.orders[x.id],choices:undefined,_ft:undefined,productId:ch[0],updatedAt:t} : {deleted:true,updatedAt:t}; } });
       toast("Produkt gelöscht"); location.hash="produkte"; }; };
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort();
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,S.mode)};render();}};
@@ -589,12 +606,15 @@ function reassignDialog(pid, freed, exclude){
 
 function orderForm(k, pid, cid, only){
   const prods = Object.values(S.products).filter(p=>!p.archived && (only ? only.includes(p.id) : inGame(p))).sort((a,b)=>gameOf(a).localeCompare(gameOf(b))||a.name.localeCompare(b.name));
+  const sib = pid ? siblings(S.products[pid]) : only ? only.map(id=>S.products[id]).filter(Boolean) : [];
+  const multi = sib.length>1;
   return `<div class="panel"><h2>Neue Bestellung erfassen</h2>
-  <form class="form" id="${k}-f">
-    ${pid?"":`<label class="wide">Produkt<select id="${k}-p" required><option value="">Produkt wählen</option>${prods.map(p=>`<option value="${p.id}">${S.game==="Alle"?esc(gameOf(p))+" · ":""}${esc(p.name)}</option>`).join("")}</select></label>`}
+  <form class="form" id="${k}-f" ${multi?`data-multi="${sib.map(x=>x.id).join(",")}"`:""}>
+    ${pid||multi?"":`<label class="wide">Produkt<select id="${k}-p" required><option value="">Produkt wählen</option>${prods.map(p=>`<option value="${p.id}">${S.game==="Alle"?esc(gameOf(p))+" · ":""}${esc(p.name)}</option>`).join("")}</select></label>`}
     ${cid?"":custPicker(k)}
     <label class="wide" id="${k}-ml" hidden>Bei dieser Serie<select id="${k}-m"></select></label>
-    <label>Menge (Stück)<input id="${k}-q" type="number" min="1" required></label>
+    ${multi?sib.map(x=>`<label>${esc(x.name)} (Stück)<input type="number" min="0" data-mq="${x.id}" class="mq"></label>`).join("")+`<label title="Kunde will eines davon, egal welches. Die Zuteilung entscheidet.">egal welches (Stück)<input id="${k}-qany" type="number" min="0" class="mq"></label>`
+      :`<label>Menge (Stück)<input id="${k}-q" type="number" min="1" required></label>`}
     <label>Bestelldatum<input id="${k}-d" type="date" value="${today()}"></label>
     <label class="wide">Kommentar<input id="${k}-k" placeholder="z. B. 1 Case = 12 Stück"></label>
     <label><span>&nbsp;</span><select id="${k}-s"><option>Offen</option><option>Warteliste</option></select></label>
@@ -650,7 +670,7 @@ function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); co
 function bindOrderForm(k){
   const f=$("#"+k+"-f"); if(!f) return; const hint=$("#"+k+"-hint"), box=$("#"+k+"-ncbox"); S.pick=S.pick||{};
   const redraw=()=>{ $("#"+k+"-cpl").outerHTML=custPicker(k); bindPicker(); };
-  const pick=cid=>{ S.pick[k]=cid; hint.innerHTML=""; box.innerHTML=""; redraw(); $("#"+k+"-q")?.focus(); };
+  const pick=cid=>{ S.pick[k]=cid; hint.innerHTML=""; box.innerHTML=""; redraw(); (f.querySelector("#"+k+"-q, .mq"))?.focus(); };
   const bindPicker=()=>{ const cq=$("#"+k+"-cq");
   if(cq){ const show=()=>{ const q=cq.value.trim(); if(q.length<2){ hint.innerHTML=""; return; } const r=custFind(q);
       hint.innerHTML=`<div class="note">${r.length?`Kunde wählen: ${r.map(c=>`<button type="button" class="sm" data-cid="${c.id}">${custLabel(c)}</button>`).join(" ")}<br>Nicht dabei? `:`Kein Kunde gefunden. `}<button type="button" class="sm" id="${k}-nc2">+ „${esc(q)}“ als neuen Kunden anlegen</button></div>`;
@@ -665,13 +685,20 @@ function bindOrderForm(k){
     ml.hidden = sib.length<2; if(sib.length<2) return;
     const others=sib.filter(x=>x.id!==p.id).map(x=>x.name).join(", ");
     $("#"+k+"-m").innerHTML=`<option value="one">nur ${esc(p.name)}</option><option value="any">egal welches: ${esc(sib.map(x=>x.name).join(" oder "))}</option><option value="all">alle: ${esc(p.name)} und ${esc(others)}</option>`; };
-  const ps=$("#"+k+"-p"); if(ps) ps.onchange=modeUi; modeUi();
+  const ps=$("#"+k+"-p"); if(ps) ps.onchange=modeUi; if(!f.dataset.multi) modeUi();
   f.onsubmit=async e=>{ e.preventDefault();
-    const h=(location.hash||"").slice(1); const pid=h.startsWith("produkt-")?h.slice(8):$("#"+k+"-p").value; if(!pid) return toast("Bitte Produkt wählen.");
+    const h=(location.hash||"").slice(1); const multi=f.dataset.multi?f.dataset.multi.split(","):null;
+    const pid=multi?multi[0]:h.startsWith("produkt-")?h.slice(8):$("#"+k+"-p").value; if(!pid) return toast("Bitte Produkt wählen.");
+    const mq=multi?[...f.querySelectorAll("[data-mq]")].map(i=>[i.dataset.mq,num(i.value)]).filter(([,q])=>q>0):[]; const qany=multi?num($("#"+k+"-qany").value):null;
+    if(multi && !mq.length && !(qany>0)) return toast("Bitte bei mindestens einem Produkt eine Menge eintragen.");
     let cid = h.startsWith("kunde-")?h.slice(6):null;
     if(needStaff()) return;
     if(!cid){ cid=S.pick[k]; if(!cid||!S.customers[cid]) { $("#"+k+"-cq")?.focus(); return toast("Bitte zuerst einen Kunden auswählen oder mit „+ Neuer Kunde“ anlegen."); } }
-    const o={productId:pid,customerId:cid,qty:num($("#"+k+"-q").value),date:$("#"+k+"-d").value,staff:staff(),status:$("#"+k+"-s").value,alloc:null,comment:$("#"+k+"-k").value.trim(),createdAt:new Date().toISOString()};
+    const o={productId:pid,customerId:cid,qty:multi?null:num($("#"+k+"-q").value),date:$("#"+k+"-d").value,staff:staff(),status:$("#"+k+"-s").value,alloc:null,comment:$("#"+k+"-k").value.trim(),createdAt:new Date().toISOString()};
+    if(multi){ const pair=mq.length>1?newId("g"):undefined; let ok=true;
+      for(const [id,q] of mq) ok = await write("orders",newId("o"),{...o,productId:id,qty:q,...(pair?{pairId:pair}:{})},"set") && ok;
+      if(qany>0) ok = await write("orders",newId("o"),{...o,productId:null,choices:multi,qty:qany},"set") && ok;
+      if(ok){ toast("Bestellung gespeichert"); delete S.pick[k]; render(); } return; }
     const mode=$("#"+k+"-ml")?.hidden===false ? $("#"+k+"-m").value : "one";
     if(await saveOrder(o, mode, siblings(S.products[pid]).map(x=>x.id))){ toast("Bestellung gespeichert"); delete S.pick[k]; render(); }
   };
@@ -709,7 +736,7 @@ function renderSeries(anyPid){
     return `<td class="n muted">·</td>${sug?"<td></td>":""}`; };
   const sugSum = sug ? Object.values(sug.res).reduce((a,b)=>a+b,0)+Object.values(sug.flex).reduce((a,b)=>a+b.n,0) : 0;
   app.innerHTML = `<a class="back" href="#produkte">← Produkte</a>
-  <div><h1>Serie ${esc(seriesOf(p0))}</h1><p class="sub">${esc(gameOf(p0))} · ${sib.map(p=>`<a class="back" href="#produkt-${p.id}">${esc(p.name)}</a>`).join(" · ")}</p></div>
+  <div class="row spread"><div><h1>Serie ${esc(seriesOf(p0))}</h1><p class="sub">${esc(gameOf(p0))} · ${sib.map(p=>`<a class="back" href="#produkt-${p.id}">${esc(p.name)}</a>`).join(" · ")}</p></div>${addVarBtn()}</div><div id="addvbox"></div>
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">nur dieses</th><th class="n">+ egal</th><th class="n">Wareneingang</th><th class="n">Zugeteilt</th><th class="n">Frei</th></tr></thead><tbody>
   ${st.map(({p,s})=>`<tr><td><a href="#produkt-${p.id}">${esc(p.name)}</a></td><td class="n">${s.pre}</td><td class="n">${s.flex||""}</td>
     <td class="n"><input type="number" min="0" data-rec="${p.id}" id="sr-${p.id}" value="${p.received??""}" placeholder="fehlt"></td><td class="n">${s.alloc||""}</td>
@@ -726,7 +753,7 @@ function renderSeries(anyPid){
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
-    <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n">${o.qty??""}</td><td>${fmtDate(o.date)}</td>
+    <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n nowrap">${r.length>1?r.map(x=>`<span title="${esc(S.products[x.productId]?.name||"")}">${x.qty??"?"}</span>`).join(" + "):o.qty??""}</td><td>${fmtDate(o.date)}</td>
     <td><select data-rs id="ss-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
     ${sib.map(p=>cell(r,p.id)).join("")}<td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
   </tbody></table></div>`;
@@ -748,7 +775,7 @@ function renderSeries(anyPid){
   bindRest(()=>all);
   $("#close").onclick=async()=>{ const ch=all.filter(o=>o.productId&&o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
     await pool(ch,o=>S.db.collection("orders").doc(o.id).update({status:"Zugeteilt"})); toast(`${ch.length} Bestellungen auf Zugeteilt gesetzt.`); };
-  bindAuftrag(); bindOrderForm("se");
+  bindAuftrag(); bindOrderForm("se"); bindAddVar(p0);
 }
 
 function renderCustomers(){
@@ -936,7 +963,7 @@ const AREA = { games: "Spielsystem", orders: "Bestellung", products: "Produkt", 
 const FIELD = { noWhatsapp: "Kein WhatsApp", firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
   archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronUrl: "etron-Link" };
-const LOG_SKIP = new Set(["updatedAt", "createdAt", "notDupes", "pairId", "order", "hidden"]);
+const LOG_SKIP = new Set(["updatedAt", "_ft", "createdAt", "notDupes", "pairId", "order", "hidden"]);
 function logVal(k, v){
   if (v == null || v === "") return "–";
   if (k === "productId") return S.products[v]?.name || v;
@@ -1011,10 +1038,11 @@ function renderLog(){
 function makeDb(doc){
   const logged = (c, id, fn) => { const before = clone(doc.obj?.[c]?.[id]); fn(); try { logChange(c, id, before, doc.obj?.[c]?.[id]); } catch (e) { console.warn("Protokoll", e); } };
   const col = c => ({ doc: id => ({
-    set: async d => logged(c, id, () => doc.update(o => { (o[c] ||= {})[id] = { ...d, updatedAt: now() }; })),
+    set: async d => logged(c, id, () => doc.update(o => { const old=(o[c] ||= {})[id]; const t=Math.max(now(), (old?.updatedAt||0)+1); o[c][id] = { ...d, _ft: {"*": t}, updatedAt: t }; })),
     update: async d => { const cur = doc.obj[c]?.[id]; if (!cur || cur.deleted) throw { code: "not_found", message: "Eintrag gibt es nicht mehr" };
-      logged(c, id, () => doc.update(o => { o[c][id] = { ...o[c][id], ...d, updatedAt: now() }; })); },
-    delete: async () => logged(c, id, () => doc.update(o => { (o[c] ||= {})[id] = { deleted: true, updatedAt: now() }; })),
+      logged(c, id, () => doc.update(o => { const old=o[c][id]; const t=Math.max(now(), (old.updatedAt||0)+1); const ft=old._ft?{...old._ft}:{"~":old.updatedAt||0}; for(const f of Object.keys(d)) ft[f]=t;
+        o[c][id] = { ...old, ...d, _ft: ft, updatedAt: t }; })); },
+    delete: async () => logged(c, id, () => doc.update(o => { const old=(o[c] ||= {})[id]; o[c][id] = { deleted: true, updatedAt: Math.max(now(), (old?.updatedAt||0)+1) }; })),
   }) });
   return { collection: col };
 }
@@ -1087,7 +1115,7 @@ const WIKI = [
   ["Vorbestellung aufnehmen (und neuen Kunden anlegen)", `<ol><li>Produkt in der Liste anklicken (oder einen Kunden unter <b>Kunden</b> öffnen).</li>
     <li>Bei „Neue Bestellung erfassen“ im Feld <b>Kunde</b> den Namen (oder Telefon / etron-Nr.) eintippen und den Kunden aus der Liste <b>auswählen</b>. Ohne ausgewählten Kunden kann keine Bestellung gespeichert werden.</li>
     <li>Gibt es den Kunden noch nicht: <b>+ Neuer Kunde</b> anklicken (auch unter <b>Kunden</b> oben rechts) und Vorname, Nachname und Telefon eintragen. Die App zeigt ähnliche Kunden an (Name oder gleiche Telefonnummer). Ist es einer davon, bitte diesen anklicken statt neu anzulegen.</li>
-    <li>Menge, Bestelldatum und eventuell einen Kommentar eintragen. Bei einer Serie wählen: nur dieses Produkt, „egal welches“ oder „beide“.</li>
+    <li>Menge, Bestelldatum und eventuell einen Kommentar eintragen. Stehen mehrere Produkte in einer gemeinsamen Liste (Serie), gibt es ein Mengenfeld je Produkt, z. B. IB-09: 2 und IB-10: 1, plus „egal welches“ für Kunden, denen es egal ist. Ein weiteres Produkt kommt über <b>+ Weiteres Produkt in diese Liste</b> auf der Produktseite dazu.</li>
     <li><b>Speichern</b>.</li></ol>
     <p>Danach beim Kunden (Reiter <b>Kunden</b>, Name anklicken) <b>Telefon/E-Mail</b> und, wenn bekannt, die <b>etron-Kundennummer</b> eintragen. Die Telefonnummer braucht man für WhatsApp-Nachrichten, die etron-Nr. für den Export.</p>
     <p>Größere Listen können unter Einstellungen → „Excel-Liste importieren“ auf einmal eingelesen werden.</p>`],
