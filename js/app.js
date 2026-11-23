@@ -558,7 +558,7 @@ const ewQuery = p => p ? "?"+Object.keys(p).sort().map(k=>k+"="+encodeURICompone
 async function ewCall(c,method,path,params,body){
   for(let a=0;a<2;a++){ const t=await ewToken(c,a>0); const t0=Date.now();
     const r=await ewFetch(ewBase(c)+path+ewQuery(params),{method,headers:{Authorization:"Bearer "+t,...(body?{"Content-Type":"application/json"}:{})},body:body?JSON.stringify(body):undefined});
-    dlog("INFO",`ETRON ${method} ${path} -> HTTP ${r.status}, ${Date.now()-t0} ms, Antwort: ${ewShape(r.text)}`);
+    dlog("INFO",`ETRON ${method} ${path}${path.includes("product.")&&params?.domain?" Suche "+JSON.stringify(params.domain):""} -> HTTP ${r.status}, ${Date.now()-t0} ms, Antwort: ${ewShape(r.text)}`);
     if(r.status===401&&a===0) continue;
     if(r.status>=300){ dlog("WARN","ETRON Fehlertext: "+r.text.slice(0,600)); throw Object.assign(new Error(ewNice(r.status,r.text)),{etron:r.status}); }
     try{ return JSON.parse(r.text); }catch(e){ return r.text; } }
@@ -684,8 +684,9 @@ function bindEtronWeb(){ const st=$("#ea-st"); if(!st) return;
     try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Erweiterung aktiv.</li><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li>${j.prod==null&&!j.perr?"":j.prod?`<li class="ok">✓ Artikel lesen funktioniert.</li>`:`<li class="bad">✗ Artikel lesen: ${j.perr?esc(j.perr):"etron liefert keinen einzigen Artikel. Der API-Zugang darf vermutlich keine Artikel sehen."}${j.diag?`<br><span class="muted">${esc(j.diag)}</span>`:""}</li>`}</ul>`; }
     catch(e){ res.innerHTML=`<ul class="eatest"><li class="bad">✗ ${esc(e.message||e)}</li></ul>`; } };
   $("#ea-arts").onclick=async()=>{ const res=$("#ea-res"), code=$("#ea-art").value.trim(); if(!code) return toast("Bitte eine Artikelnummer eintragen."); res.innerHTML=`<ul class="eatest"><li>… suche ${esc(code)}</li></ul>`;
-    try{ let j; if(artIdOf(code)&&!/[a-z]/i.test(code)){ try{ const h=await etronCall("product_by_id",{id:artIdOf(code)}); j={items:[h],near:{}}; }catch(e){ j=await etronCall("product_find",{codes:[code]}); if(!(j.items||[]).length) throw e; } } else j=await etronCall("product_find",{codes:[code]}); const hit=(j.items||[])[0], near=(j.near||{})[code]||[];
-      res.innerHTML=`<ul class="eatest">${hit?`<li class="ok">✓ Gefunden: ${esc(hit.name||"")} (etron-Artikel ${esc(String(hit.id))}${hit.active===false?", archiviert":""})</li>`:`<li class="bad">✗ ${esc(code)} nicht gefunden.</li>${near.map(p=>`<li>ähnlich: ${esc(p.code||"-")} / Barcode ${esc(p.barcode||"-")} · ${esc(p.name)}${p.active?"":" (archiviert)"}</li>`).join("")}`}</ul>`; }
+    try{ let j; if(artIdOf(code)&&!/[a-z]/i.test(code)){ try{ const h=await etronCall("product_by_id",{id:artIdOf(code)}); j={items:[h],near:{}}; }catch(e){ j=await etronCall("product_find",{codes:[code]}); if(!(j.items||[]).length) throw e; } } else j=await etronCall("product_find",{codes:[code]}); const hit=(j.items||[])[0]; let near=(j.near||{})[code]||[];
+      if(!hit&&!near.length){ near=((await etronCall("product_search",{q:code})).items||[]); }
+      res.innerHTML=`<ul class="eatest">${hit?`<li class="ok">✓ Gefunden: ${esc(hit.name||"")} (etron-Artikel ${esc(String(hit.id))}${hit.active===false?", archiviert":""})</li>`:`<li class="bad">✗ Keine Artikelnummer „${esc(code)}“.${near.length?" Treffer nach Name oder Teilnummer (zum Verknüpfen oben auf der Produktseite „Artikel in etron suchen“ nutzen):":""}</li>${near.map(p=>`<li>Treffer: ${esc(p.name)}${p.active?"":" (archiviert)"} · Art.-Nr. ${esc(p.code||"-")} · ID ${esc(String(p.id))}</li>`).join("")}`}</ul>`; }
     catch(e){ res.innerHTML=`<ul class="eatest"><li class="bad">✗ ${esc(e.message||e)}</li></ul>`; } };
   $("#ea-log").onclick=()=>{ let a=[]; try{ a=JSON.parse(localStorage.getItem("vb.dlog")||"[]"); }catch(e){} saveFile(`vorbestellungen-log-${today()}.txt`, new Blob([a.join("\r\n")||"(leer)"],{type:"text/plain;charset=utf-8"})); }; }
 function bindEtronApi(){ if(!S.desktop) return bindEtronWeb(); const st=$("#ea-st"); if(!st) return; let cur={};
