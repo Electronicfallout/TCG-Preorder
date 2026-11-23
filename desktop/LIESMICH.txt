@@ -1,0 +1,31 @@
+TCG Vorbestellungen - Programm für Windows 11
+==============================================
+
+EINRICHTEN (einmalig, ein PC genügt)
+1. Den Inhalt dieser ZIP in den Dropbox-Ordner der App kopieren, also dorthin,
+   wo bisher die Datei "vorbestellungen.json" liegt (meist Dropbox\Apps\<Name>\).
+   Danach liegen dort: Vorbestellungen.exe, Ordner "programm", LIESMICH.txt.
+   Die Daten bleiben, wo sie sind - es muss nichts umgezogen werden.
+   (Liegt das Programm in einem anderen Ordner: Einstellungen ->
+   "Daten aus dem alten System übernehmen".)
+2. Vorbestellungen.exe doppelklicken. Die App öffnet sich in einem eigenen
+   Edge-Fenster. Beim ersten Start kann Windows fragen ("Computer wurde
+   geschützt"): "Weitere Informationen" -> "Trotzdem ausführen".
+3. Rechtsklick auf Vorbestellungen.exe -> "Verknüpfung erstellen" und die
+   Verknüpfung auf den Desktop legen. Das auf jedem Firmen-PC einmal machen.
+
+VORAUSSETZUNG
+Auf jedem PC läuft der Dropbox-Client und synchronisiert diesen Ordner.
+
+SICHERHEIT
+- Das Programm nimmt nur Verbindungen vom eigenen PC an (127.0.0.1).
+  Handys und andere PCs kommen nicht heran.
+- Der etron-Zugang liegt in "etron-zugang.json" in diesem Ordner.
+  Diese Datei nicht weitergeben.
+- Sicherungen (vor einer Datenübernahme) liegen im Ordner "sicherung".
+
+UPDATE
+Neue Version: Ordner "programm" ersetzen (geht auch, während das Programm
+läuft), danach das App-Fenster neu laden (F5). Vorbestellungen.exe nur
+ersetzen, wenn ausdrücklich dabei steht; dafür vorher auf allen PCs das
+App-Fenster schließen (das Programm beendet sich 15 Minuten danach selbst).

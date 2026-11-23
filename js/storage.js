@@ -47,6 +47,39 @@ export class LocalProvider {
   }
 }
 
+// ---------- Programm (Vorbestellungen.exe): Dateien im lokalen Dropbox-Ordner ----------
+// Der Dropbox-Client gleicht die Dateien zwischen den PCs ab. Konfliktkopien werden beim Abgleich zusammengeführt.
+
+const enc = encodeURIComponent;
+export async function desktopInfo() {
+  if (!/^(127\.0\.0\.1|localhost)$/.test(location.hostname)) return null;
+  try { const r = await fetch('/api/info', { headers: { 'X-VB': '1' } }); if (!r.ok) return null; const j = await r.json(); return j.app === 'vorbestellungen' ? j : null; } catch { return null; }
+}
+export async function desk(url, opts = {}) {
+  try { return await fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-VB': '1' } }); }
+  catch (e) { throw new OfflineError('Programm läuft nicht mehr. Bitte Vorbestellungen.exe neu starten.'); }
+}
+async function errText(r) { try { const j = await r.json(); return j.error || r.status; } catch { return r.status; } }
+
+export class DiskProvider {
+  constructor() { this.kind = 'disk'; }
+  async read(path) {
+    const r = await desk('/api/fs/read?path=' + enc(path));
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error('Lesefehler: ' + await errText(r));
+    return { data: JSON.parse(await r.text()), rev: r.headers.get('X-Rev') };
+  }
+  async write(path, data, rev) {
+    const r = await desk('/api/fs/write?path=' + enc(path) + '&rev=' + enc(rev || ''), { method: 'PUT', body: JSON.stringify(data) });
+    if (r.status === 409) throw new ConflictError();
+    if (!r.ok) throw new Error('Speicherfehler: ' + await errText(r));
+    return { rev: (await r.json()).rev };
+  }
+  async list(folder) { const r = await desk('/api/fs/list?folder=' + enc(folder)); return r.ok ? r.json() : []; }
+  async conflicts(path) { const r = await desk('/api/fs/conflicts?path=' + enc(path)); return r.ok ? r.json() : []; }
+  async remove(path) { await desk('/api/fs/remove?path=' + enc(path), { method: 'POST' }); }
+}
+
 // ---------- Dropbox ----------
 // Zugang: { appKey, refreshToken }. Access-Token wird bei Bedarf geholt.
 

@@ -1,7 +1,7 @@
 // TCG Vorbestellungen: Oberfläche und Logik.
 // Daten liegen ausschließlich in der Dropbox (App-Ordner) oder beim Ausprobieren im Browser.
-import { LS, LocalProvider, DropboxProvider, startDropboxLogin, finishDropboxLogin, makeInvite, parseInvite, redirectUri } from './storage.js';
-import { SyncDoc, DATA_PATH, emptyData, now, stable, clone } from './store.js';
+import { LS, LocalProvider, DropboxProvider, DiskProvider, desktopInfo, desk, startDropboxLogin, finishDropboxLogin, makeInvite, parseInvite, redirectUri } from './storage.js';
+import { SyncDoc, DATA_PATH, emptyData, now, stable, clone, merge } from './store.js';
 import { APP_VERSION } from './version.js';
 
 const STATUSES = ["Offen","Zugeteilt","Auftrag angelegt","Abgeholt","Warteliste","Storniert"];
@@ -196,7 +196,9 @@ function renderImport(){
   app.innerHTML = `<div class="panel setup"><h1>Noch keine Daten</h1>
   <p class="sub">Die Datei <span class="mono">vorbestellungen.json</span> in der Dropbox ist leer. Du kannst eine Sicherung übernehmen (z. B. den JSON-Export der bisherigen App) oder direkt unter Produkte loslegen.</p>
   <div class="row"><label class="row"><input type="file" id="impf" accept=".json,application/json"></label><span id="impst" class="muted"></span></div>
-  <div class="row"><button id="start">Ohne Daten starten</button>${S.provider?.kind==="local"?'<button id="demo">Beispieldaten laden</button>':""}</div></div>`;
+  <div class="row"><button id="start">Ohne Daten starten</button>${S.provider?.kind==="local"?'<button id="demo">Beispieldaten laden</button>':""}</div></div>
+  ${S.provider?.kind==="disk"?migratePanel():""}`;
+  if (S.provider?.kind==="disk") bindMigrate();
   $("#impf").onchange = e => importFile(e.target.files[0], $("#impst"));
   $("#start").onclick = () => { S.skipImport=true; location.hash="produkte"; renderProducts(); };
   const d=$("#demo"); if(d) d.onclick=()=>importObj(demoData());
@@ -506,44 +508,74 @@ function bindEtron(){ const b=$("#et-save"); if(!b) return; b.onclick=()=>{ let 
 // ---------- etron-API: Zugang (nur in der Dropbox, nie im Code) und Verbindungstest
 const ETRON_API_FILE = "etron-api.json";
 async function etronApiLoad(){ try{ const r=await S.provider.read(ETRON_API_FILE); return r ? { ...r.data, _rev:r.rev } : null; }catch(e){ return { _err:e.message||String(e) }; } }
-// Aufruf über den Vermittler (Cloudflare Worker, Code in proxy/etron-worker.js). Zugang liegt in der Dropbox.
-async function etronCall(action, data, cfg){ cfg = cfg || S.etronApi || (S.etronApi = await etronApiLoad());
-  if(!cfg?.proxy || !cfg?.appToken) throw new Error("etron-Schnittstelle ist nicht eingerichtet (Einstellungen).");
-  let r; try{ r=await fetch(cfg.proxy,{method:"POST",headers:{"Content-Type":"application/json","X-App-Token":cfg.appToken},body:JSON.stringify({action,...(data||{})})}); }
-  catch(e){ const x=new Error("Vermittler nicht erreichbar. Adresse prüfen."); x.net=true; throw x; }
+// etron-Anfragen laufen über das Programm (Vorbestellungen.exe) direkt zu etron. Der Zugang liegt in etron-zugang.json im Dropbox-Ordner.
+async function etronCall(action, data){
+  if(!S.desktop) throw new Error("etron geht nur im Programm (Vorbestellungen.exe).");
+  const r=await desk("/api/etron",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...(data||{})})});
   let j=null; try{ j=await r.json(); }catch(e){}
-  if(!r.ok){ const x=new Error((j&&j.error)||("HTTP "+r.status)); x.http=r.status; throw x; } return j; }
+  if(!r.ok){ const x=new Error((j&&j.error)||("HTTP "+r.status)); x.http=r.status; x.etron=j&&j.status; throw x; } return j; }
 function etronApiPanel(){
+  if(!S.desktop) return `<div class="panel"><h2>etron-Schnittstelle</h2><p class="muted">Die direkte Verbindung zu etron gibt es nur im Programm <b>Vorbestellungen.exe</b> aus dem Dropbox-Ordner, nicht in der Web-Version.</p></div>`;
   return `<div class="panel"><h2>etron-Schnittstelle</h2>
-    <p class="muted">Die App spricht über einen kleinen Vermittler (Cloudflare Worker) mit etron. Der etron-Zugang (Key und Secret) liegt nur im Worker. Hier kommen nur die Adresse des Workers und der App-Schlüssel hinein; beides wird in eurer Dropbox gespeichert (<span class="mono">${ETRON_API_FILE}</span>), nie im Programmcode.</p>
+    <p class="muted">Zugang aus etron (API &amp; Hooks → Authentication → Client Credentials, mit einem Benutzer mit wenig Rechten). Er wird nur im Dropbox-Ordner des Programms gespeichert (<span class="mono">etron-zugang.json</span>), nie im Programmcode. Das Programm spricht direkt mit etron, nichts läuft über fremde Server.</p>
     <div class="form">
-      <label class="wide">Adresse des Vermittlers<input id="ea-proxy" placeholder="https://etron-vorbestellungen.….workers.dev" autocomplete="off"></label>
-      <label class="wide">App-Schlüssel<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="ea-tok" type="password" autocomplete="new-password" spellcheck="false" style="flex:1"><button type="button" class="sm" id="ea-gen">Neuen erzeugen</button></span></label>
-      <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
+      <label class="wide">etron-Adresse<input id="ea-url" placeholder="https://xxxxxx.wawi.onretail.eu" autocomplete="off"></label>
+      <label>Client Key<input id="ea-key" autocomplete="off" spellcheck="false"></label>
+      <label>Client Secret<input id="ea-sec" type="password" autocomplete="new-password" spellcheck="false"></label>
+      <button id="ea-save" class="pri">Speichern</button><button id="ea-test">Verbindung testen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
     </div><div id="ea-st" class="muted">Lade …</div><div id="ea-res"></div></div>`; }
-function bindEtronApi(){ const st=$("#ea-st"); if(!st) return; let cur=null;
-  const show=()=>{ st.innerHTML = cur?._err ? `Dropbox nicht lesbar: ${esc(cur._err)}` : cur?.proxy ? `Gespeichert: ${esc(cur.proxy)} (${esc(cur.savedAt||"")}${cur.savedBy?" von "+esc(cur.savedBy):""}). App-Schlüssel leer lassen = unverändert.` : "Noch nicht eingerichtet.";
-    if(cur?.secret) st.innerHTML+=` <b>In der Dropbox liegt noch ein altes etron-Secret. Es wird beim nächsten Speichern entfernt.</b>`;
-    if(cur?.proxy) $("#ea-proxy").value=cur.proxy; $("#ea-tok").placeholder=cur?.appToken?"gespeichert":""; };
-  etronApiLoad().then(c=>{ cur=c; show(); });
-  const form=()=>({ proxy:$("#ea-proxy").value.trim()||cur?.proxy||"", appToken:$("#ea-tok").value.trim()||cur?.appToken||"" });
-  $("#ea-gen").onclick=()=>{ const a=new Uint8Array(24); crypto.getRandomValues(a); const t=[...a].map(x=>x.toString(16).padStart(2,"0")).join("");
-    const el=$("#ea-tok"); el.type="text"; el.value=t; el.select(); copyText(t).then(()=>toast("Neuer App-Schlüssel kopiert. In Cloudflare als APP_TOKEN eintragen und hier speichern.")); };
-  $("#ea-save").onclick=async()=>{ if(needStaff()) return; const f=form(); if(!/^(https:\/\/|http:\/\/localhost)/.test(f.proxy)) return toast("Bitte die Adresse des Vermittlers mit https:// eintragen."); if(f.appToken.length<16) return toast("Bitte den App-Schlüssel eintragen (mindestens 16 Zeichen).");
-    const data={proxy:f.proxy.replace(/\/+$/,""),appToken:f.appToken,savedAt:new Date().toLocaleString("de-AT"),savedBy:staff()};
-    try{ const r=await S.provider.write(ETRON_API_FILE,data,cur&&!cur._err?cur._rev:null); cur={...data,_rev:r.rev}; S.etronApi=cur; $("#ea-tok").value=""; $("#ea-tok").type="password"; show(); toast("In der Dropbox gespeichert"); }
-    catch(e){ toast(e.conflict?"Wurde gerade woanders geändert. Seite neu laden.":"Nicht gespeichert: "+(e.message||e)); } };
-  $("#ea-del").onclick=async()=>{ if(!cur || cur._err || !cur._rev) return toast("Es ist nichts gespeichert."); try{ const r=await S.provider.write(ETRON_API_FILE,{},cur._rev); cur={_rev:r.rev}; S.etronApi=null; show(); toast("Zugang gelöscht"); }catch(e){ toast("Nicht gelöscht: "+(e.message||e)); } };
-  $("#ea-test").onclick=async()=>{ const f=form(); const res=$("#ea-res");
-    if(!/^(https:\/\/|http:\/\/localhost)/.test(f.proxy)||!f.appToken) return toast("Bitte Adresse und App-Schlüssel eintragen.");
+function bindEtronApi(){ const st=$("#ea-st"); if(!st) return; let cur={};
+  const load=async()=>{ try{ cur=await (await desk("/api/etron/config")).json(); }catch(e){ cur={}; }
+    st.innerHTML = cur.set ? `Zugang gespeichert (Key …${esc(cur.keyTail||"")}${cur.savedAt?", "+esc(cur.savedAt):""}${cur.savedBy?" von "+esc(cur.savedBy):""}). Key/Secret leer lassen = unverändert.` : "Noch kein Zugang gespeichert.";
+    if(cur.url) $("#ea-url").value=cur.url; $("#ea-key").placeholder=cur.set?"gespeichert":""; $("#ea-sec").placeholder=cur.set?"gespeichert":""; };
+  load();
+  $("#ea-save").onclick=async()=>{ if(needStaff()) return; const url=$("#ea-url").value.trim(), key=$("#ea-key").value.trim(), secret=$("#ea-sec").value.trim();
+    if(!/^(https:\/\/|http:\/\/127\.0\.0\.1:)/.test(url||cur.url||"")) return toast("Bitte die etron-Adresse mit https:// eintragen.");
+    if(!cur.set&&(!key||!secret)) return toast("Bitte Client Key und Client Secret eintragen.");
+    const r=await desk("/api/etron/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,key,secret,savedAt:new Date().toLocaleString("de-AT"),savedBy:staff()})});
+    if(!r.ok){ let j={}; try{ j=await r.json(); }catch(e){} return toast("Nicht gespeichert: "+(j.error||r.status)); }
+    $("#ea-key").value=""; $("#ea-sec").value=""; toast("etron-Zugang gespeichert"); load(); };
+  $("#ea-del").onclick=async()=>{ if(!cur.set) return toast("Es ist kein Zugang gespeichert."); await desk("/api/etron/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({delete:true})}); toast("Zugang gelöscht"); load(); };
+  $("#ea-test").onclick=async()=>{ const res=$("#ea-res"); if(!cur.set) return toast("Bitte zuerst den Zugang speichern.");
     res.innerHTML=`<ul class="eatest"><li>… teste</li></ul>`;
-    try{ const j=await etronCall("ping",{},f); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Vermittler erreicht, App-Schlüssel stimmt.</li><li class="ok">✓ Anmeldung bei etron und Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li></ul>`; }
-    catch(e){ const why = e.net ? "Vermittler nicht erreichbar. Adresse prüfen; in Cloudflare muss der Worker „Deployed“ sein."
-        : e.http===401 ? "App-Schlüssel stimmt nicht mit APP_TOKEN in Cloudflare überein."
-        : e.http===403 ? "Der Vermittler lässt diese Seite nicht zu (ALLOWED_ORIGIN prüfen)."
-        : e.http===500 ? esc(e.message)
-        : "Vermittler erreicht, aber etron meldet: "+esc(e.message);
-      res.innerHTML=`<ul class="eatest">${e.http&&e.http!==500&&e.http!==401&&e.http!==403?'<li class="ok">✓ Vermittler erreicht, App-Schlüssel stimmt.</li>':""}<li class="bad">✗ ${why}</li></ul>`; } }; }
+    try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li></ul>`; }
+    catch(e){ const auth=e.etron===401||e.etron===400||e.etron===403;
+      res.innerHTML=`<ul class="eatest">${!auth&&/HTTP/.test(e.message)&&!/Anmeldung/.test(e.message)?'<li class="ok">✓ Anmeldung bei etron erfolgreich.</li>':""}<li class="bad">✗ ${esc(e.message)}${auth&&/Anmeldung/.test(e.message)?" Client Key/Secret prüfen.":""}</li></ul>`; } }; }
+
+// ---------- Übernahme aus dem alten System (Web-App mit Dropbox-App-Ordner) ins Programm
+function migratePanel(){
+  return `<div class="panel"><h2>Daten aus dem alten System übernehmen</h2>
+    <p class="muted">Übernimmt alle Produkte, Kunden, Bestellungen, Vorlagen, Mitarbeiter, Einstellungen und das Protokoll aus dem bisherigen Dropbox-App-Ordner (<span class="mono">Dropbox\\Apps\\…</span>) in den Ordner dieses Programms. Vorher wird eine Sicherung angelegt. Vorhandene Daten werden nicht gelöscht, sondern zusammengeführt (pro Eintrag gewinnt der neuere Stand). Liegt das Programm schon im alten Ordner, ist nichts zu tun.</p>
+    <div id="mg-c" class="muted">Suche alten Ordner …</div>
+    <div class="row" style="margin-top:8px"><input id="mg-p" placeholder="oder Ordner von Hand: C:\\Users\\…\\Dropbox\\Apps\\…" style="flex:1 1 360px"><button id="mg-go" class="pri">Übernehmen</button></div>
+    <div id="mg-r"></div></div>`; }
+function bindMigrate(){ const c=$("#mg-c"); if(!c) return;
+  desk("/api/migrate/candidates").then(r=>r.json()).then(list=>{
+    if(!list.length){ c.innerHTML="Kein alter Ordner mit <span class=\"mono\">vorbestellungen.json</span> gefunden. Bitte den Ordner unten von Hand eintragen."; return; }
+    c.innerHTML=`Gefunden: ${list.map((x,i)=>`<label class="row" style="gap:6px"><input type="radio" name="mg" value="${esc(x.folder)}" ${i?"":"checked"}> <span class="mono">${esc(x.folder)}</span> <span class="muted">(zuletzt geändert ${esc(x.modified)}, ${x.logs} Protokollmonate)</span></label>`).join("")}`;
+  }).catch(()=>{ c.textContent="Suche nicht möglich."; });
+  $("#mg-go").onclick=async()=>{ if(needStaff()) return; const src=$("#mg-p").value.trim()||document.querySelector('input[name=mg]:checked')?.value; const out=$("#mg-r");
+    if(!src) return toast("Bitte einen Ordner wählen oder eintragen.");
+    const b=$("#mg-go"); b.disabled=true; const say=(t,cls="")=>{ out.innerHTML+=`<p class="${cls}">${t}</p>`; };
+    out.innerHTML="";
+    try{
+      const q="src="+encodeURIComponent(src);
+      const lr=await desk("/api/migrate/list?"+q); const files=await lr.json(); if(!lr.ok) throw new Error(files.error||lr.status);
+      const bk=await (await desk("/api/backup",{method:"POST"})).json(); if(bk.error) throw new Error("Sicherung fehlgeschlagen: "+bk.error);
+      say(`✓ Sicherung angelegt: <span class="mono">${esc(bk.folder)}</span> (${bk.files} Dateien)`,"ok");
+      let n=0;
+      for(const f of files){
+        const sr=await desk("/api/migrate/read?"+q+"&path="+encodeURIComponent(f)); if(!sr.ok) continue; const srcObj=JSON.parse(await sr.text());
+        if(f==="vorbestellungen.json"){ await S.doc.sync(); S.doc.update(o=>{ const m=merge(o,srcObj); for(const k of Object.keys(o)) delete o[k]; Object.assign(o,m); }); await S.doc.sync(); }
+        else { for(let t=0;t<5;t++){ const cur=await S.provider.read(f); const m=cur?merge(cur.data,srcObj):srcObj; try{ await S.provider.write(f,m,cur?cur.rev:null); break; }catch(e){ if(!e.conflict) throw e; } } }
+        n++;
+      }
+      say(`✓ ${n} Dateien übernommen (Daten und ${n-1} Protokollmonate). Anzahl jetzt: ${Object.keys(S.products).length} Produkte, ${Object.keys(S.customers).length} Kunden, ${Object.keys(S.orders).length} Bestellungen.`,"ok");
+      say(`Bitte kurz prüfen. Die Web-Version arbeitet weiter mit dem alten Ordner; neue Einträge dort kann man jederzeit erneut übernehmen.`,"muted");
+      S.log=null; S.logP=null; toast(`Übernahme fertig: ${n} Dateien, Sicherung in ${bk.folder}`); pull(); render(); }
+    catch(e){ say("✗ "+esc(e.message||e),"bad"); }
+    b.disabled=false; }; }
+
 function gamesPanel(){
   const cnt={}; Object.values(S.products).forEach(p=>{ const g=gameOf(p); cnt[g]=(cnt[g]||0)+1; });
   return `<div class="panel"><h2>Spielsysteme</h2>
@@ -1176,12 +1208,13 @@ const WIKI = [
 ];
 const wikiPanel = () => `<div class="panel"><h2>Kurzanleitung</h2>${WIKI.map(([t,b])=>`<details class="wiki"><summary>${t}</summary><div>${b}</div></details>`).join("")}</div>`;
 function renderSettings(){
-  const isDb = S.provider.kind === "dropbox";
-  app.innerHTML = `<div><h1>Einstellungen</h1><p class="sub">Version ${esc(APP_VERSION)} · ${isDb ? "Daten in der Dropbox (App-Ordner, Datei vorbestellungen.json)" : "Nur ausprobieren: Daten liegen nur in diesem Browser"}</p></div>
+  const isDb = S.provider.kind === "dropbox", isDisk = S.provider.kind === "disk";
+  app.innerHTML = `<div><h1>Einstellungen</h1><p class="sub">Version ${esc(APP_VERSION)} · ${isDisk ? `Programm auf diesem PC · Daten im Ordner <span class="mono">${esc(S.desktop.folder)}</span>` : isDb ? "Daten in der Dropbox (App-Ordner, Datei vorbestellungen.json)" : "Nur ausprobieren: Daten liegen nur in diesem Browser"}</p></div>
   ${wikiPanel()}
   <div class="panel"><h2>Speicher</h2><p>Status: <b>${esc(SYNC_TXT[S.doc.status] || S.doc.status)}</b>${S.doc.error ? ` <span class="muted">(${esc(S.doc.error)})</span>` : ""}</p>
-    <div class="row"><button id="syncnow">Jetzt abgleichen</button><button id="logout" class="danger">${isDb ? "Dropbox auf diesem Gerät trennen" : "Ausprobieren beenden"}</button></div>
-    <p class="muted">Trennen entfernt nur den Zugang auf diesem Gerät. Die Daten in der Dropbox bleiben.</p></div>
+    <div class="row"><button id="syncnow">Jetzt abgleichen</button>${isDisk ? "" : `<button id="logout" class="danger">${isDb ? "Dropbox auf diesem Gerät trennen" : "Ausprobieren beenden"}</button>`}</div>
+    <p class="muted">${isDisk ? "Der Dropbox-Client gleicht den Ordner zwischen den PCs ab. Speichern zwei PCs gleichzeitig, führt das Programm die Konfliktkopien automatisch zusammen." : "Trennen entfernt nur den Zugang auf diesem Gerät. Die Daten in der Dropbox bleiben."}</p></div>
+  ${isDisk ? migratePanel() : ""}
   ${isDb ? `<div class="panel"><h2>Kollegen einladen</h2>
     <p class="muted">Mit diesem Code kann ein weiteres Gerät auf denselben Dropbox-App-Ordner zugreifen (nicht auf den Rest der Dropbox). Nur an Mitarbeiter weitergeben.</p>
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
@@ -1199,7 +1232,8 @@ function renderSettings(){
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
   $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi();
-  $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
+  if (isDisk) bindMigrate();
+  if ($("#logout")) $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
   $("#impf2").onchange = e => importFile(e.target.files[0], $("#impst2"));
@@ -1325,10 +1359,13 @@ async function boot(){
   let cred = null;
   try { const back = await finishDropboxLogin(); if (back) { cred = { kind: "dropbox", ...back }; LS.set("vb.cred", JSON.stringify(cred)); } }
   catch (e) { return renderConnect(e.message); }
+  S.desktop = await desktopInfo();
+  if (S.desktop) cred = { kind: "disk" };
   if (!cred) { try { cred = JSON.parse(LS.get("vb.cred") || "null"); } catch { cred = null; } }
   if (!cred) return renderConnect();
   S.cred = cred;
-  S.provider = cred.kind === "dropbox" ? new DropboxProvider(cred) : new LocalProvider();
+  S.provider = cred.kind === "disk" ? new DiskProvider() : cred.kind === "dropbox" ? new DropboxProvider(cred) : new LocalProvider();
+  if (S.desktop) document.title = "TCG Vorbestellungen";
   S.doc = new SyncDoc(S.provider, DATA_PATH, null, "vb.cache");
   const cached = await S.doc.loadCache();
   S.db = makeDb(S.doc);
@@ -1347,7 +1384,7 @@ async function boot(){
     else { app.innerHTML = `<div class="note bad">Dropbox nicht erreichbar: ${esc(S.doc.error || "unbekannter Fehler")}. <button id="rt">Erneut versuchen</button> <a class="back" href="#einstellungen">Einstellungen</a></div>`; $("#rt").onclick = () => location.reload(); return; }
   }
   if (cred.kind === "local" && !Object.keys(S.doc.obj.products || {}).length && !LS.get("vb.demo")) { LS.set("vb.demo", "1"); importObj(demoData()); }
-  setInterval(() => { if (document.visibilityState === "visible" && !S.doc.dirty) S.doc.sync(); if (document.visibilityState === "visible") openLog().then(d => d.sync()); }, 30000);
+  setInterval(() => { if (document.visibilityState === "visible" && !S.doc.dirty) S.doc.sync(); if (document.visibilityState === "visible") openLog().then(d => d.sync()); }, S.desktop ? 10000 : 30000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { S.doc.sync(); S.log?.doc.sync(); } });
 }
 window.addEventListener("hashchange", () => { S.oq = ""; S.osort = ""; route(); }); // Standard: chronologisch

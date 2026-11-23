@@ -170,8 +170,16 @@ export class SyncDoc {
       for (let attempt = 0; attempt < 5; attempt++) {
         const remote = await this.fetchRemote();
         if (!remote && !this.obj) break; // Datei gibt es noch nicht: Aufrufer legt sie an
-        const merged = compact(merge(this.obj, remote ? remote.obj : null));
-        const needWrite = this.dirty || !remote || stable(merged) !== stable(remote.obj);
+        // Konfliktkopien (Dropbox-Client, wenn zwei PCs gleichzeitig gespeichert haben) mit einarbeiten
+        const extra = [];
+        if (this.provider.conflicts) {
+          try { for (const n of await this.provider.conflicts(this.path)) { const r = await this.provider.read(n); if (r) extra.push({ name: n, obj: await this.codec.decode(r.data) }); } }
+          catch (e) { console.warn('Konfliktkopien', e); }
+        }
+        let merged = merge(this.obj, remote ? remote.obj : null);
+        for (const x of extra) merged = merge(merged, x.obj);
+        merged = compact(merged);
+        const needWrite = this.dirty || !remote || extra.length > 0 || stable(merged) !== stable(remote.obj);
         if (!needWrite) {
           this.obj = merged;
           this.rev = remote.rev;
@@ -183,6 +191,7 @@ export class SyncDoc {
           this.obj = merged;
           this.rev = res.rev;
           this.dirty = false;
+          for (const x of extra) { try { await this.provider.remove(x.name); } catch (e) { console.warn('Konfliktkopie', e); } }
           break;
         } catch (e) {
           if (e instanceof ConflictError || e.conflict) continue; // jemand war schneller: neu laden und zusammenführen

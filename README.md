@@ -17,6 +17,12 @@ Vorbestellungen, Wartelisten und Zuteilungen für One Piece, Pokémon und Riftbo
 - **etron-Export**: alle zugeteilten Bestellungen als CSV (mit etron-Kundennummer), danach als „Auftrag angelegt“ markieren.
 - Funktioniert **offline** und gleicht später ab. Ändern zwei Geräte gleichzeitig, werden die Änderungen pro Eintrag zusammengeführt statt überschrieben.
 
+## Programm für Windows (empfohlen in der Firma)
+
+`Vorbestellungen.exe` startet die App lokal auf dem PC (nur erreichbar vom eigenen PC, 127.0.0.1) und öffnet sie in einem Edge-Fenster. Das Programm liegt zusammen mit den Daten im Dropbox-Ordner der App; der Dropbox-Client gleicht ab, Konfliktkopien werden automatisch zusammengeführt. Die etron-Schnittstelle (Kunden, Aufträge) gibt es nur im Programm; der Zugang liegt in `etron-zugang.json` im selben Ordner, nie im Repository.
+
+Paket bauen: `desktop/build.sh` (braucht Go) → `dist/TCG-Vorbestellungen-<Version>.zip` mit `Vorbestellungen.exe`, `programm\` und `LIESMICH.txt`.
+
 ## Wo liegen die Daten?
 
 Ausschließlich in der Dropbox, im Ordner `Apps/<Name der Dropbox-App>/vorbestellungen.json`.

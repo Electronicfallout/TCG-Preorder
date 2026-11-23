@@ -6,3 +6,4 @@
 *.csv
 daten/
 .DS_Store
+dist/
