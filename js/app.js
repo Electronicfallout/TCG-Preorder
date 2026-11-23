@@ -570,7 +570,7 @@ function ewNice(st, txt){ let m=""; try{ const j=JSON.parse(txt); m=String((j.ar
   return `etron HTTP ${st}: ${m.replace(/\s+/g," ").slice(0,300)}`; }
 const ewList = v => Array.isArray(v)?v:(v&&(v.data||v.result||v.records))||[];
 const ewStr = (v,n=120) => String(v??"").trim().slice(0,n);
-const EW_PARTNER_FIELDS = ["id","name","firstname","lastname","ref","phone","mobile","email"];
+const EW_PARTNER_FIELDS = ["id","name","firstname","lastname","ref","phone","mobile","email","type","parent_id","is_company"];
 const EW_ACTIONS = {
   async ping(c){ await ewToken(c,true); const r=await ewCall(c,"GET","/search_extract/res.partner",{fields:["id"],limit:1});
     let prod=null, perr=""; try{ prod=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:[],fields:["id"],limit:5})).length; }catch(e){ perr=String(e.message||e).slice(0,200); }
@@ -606,6 +606,10 @@ const EW_ACTIONS = {
     const code=String(b.code||"").trim().toUpperCase(), pc=String(p.default_code||"").trim().toUpperCase();
     if(code&&pc&&code!==pc) throw new Error(`etron-Artikel-ID ${n} ist „${ewStr(p.name,60)}“ (Art.-Nr. ${p.default_code}), beim Produkt steht aber Art.-Nr. ${b.code}. Sicherheitshalber kein Auftrag. Bitte oben auf der Produktseite den richtigen Artikel neu übernehmen.`);
     return {id:p.id,default_code:p.default_code||"",name:ewStr(p.name,80),active:p.active!==false}; },
+  async order_lines_find(c,b){ const partner=parseInt(b.partner_id,10), ids=(b.product_ids||[]).map(x=>parseInt(x,10)).filter(Boolean); if(!partner||!ids.length) return {items:[]};
+    const r=ewList(await ewCall(c,"GET","/search_read/sale.order.line",{domain:["&","&",["order_partner_id","=",partner],["product_id","in",ids],["state","!=","cancel"]],fields:["order_id","product_id","product_uom_qty","state"],limit:50}));
+    const idOf=v=>Array.isArray(v)?v[0]:v, nameOf=v=>Array.isArray(v)?String(v[1]||v[0]):String(v);
+    return {items:r.map(l=>({order:nameOf(l.order_id),order_id:idOf(l.order_id),product_id:idOf(l.product_id),qty:+l.product_uom_qty||0,state:l.state}))}; },
   async order_create(c,b){ const partner=parseInt(b.partner_id,10); if(!partner) throw new Error("etron-Kundennummer fehlt");
     const lines=(b.lines||[]).slice(0,50).map(l=>({product_id:parseInt(l.product_id,10),product_uom_qty:Math.max(1,Math.min(9999,parseInt(l.qty,10)||0))})).filter(l=>l.product_id);
     if(!lines.length) throw new Error("Keine Auftragszeilen");
@@ -640,12 +644,20 @@ async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronI
   dlog("INFO",`Artikelsuche ${codes.join(", ")}: gefunden ${found.map(p=>p.default_code+"→"+p.id).join(", ")||"nichts"}`);
   const nf=codes.filter(x=>!byCode.has(x)); if(nf.length) throw new Error("Artikelnummer in etron nicht gefunden: "+nf.map(x=>{ const n=(pf.near||{})[x]||[]; return n.length?`${x} (ähnlich: ${n.slice(0,3).map(p=>(p.code||p.barcode)+(p.active?"":" archiviert")).join(", ")})`:x; }).join(", ")+". In etron beim Artikel das Feld „Interne Referenz“ prüfen.");
   const artOf=o=>artById.get(o.productId)??byCode.get(S.products[o.productId].articleNo.trim());
+  // Doppelte vermeiden: gibt es in etron schon eine (nicht stornierte) Auftragszeile für diesen Kunden und Artikel?
+  const ex=(await etronCall("order_lines_find",{partner_id:partner,product_ids:[...new Set(allList.map(artOf))]})).items||[]; const linked=[];
+  if(ex.length){ const byProd=new Map(); ex.forEach(l=>{ if(!byProd.has(l.product_id)) byProd.set(l.product_id,[]); byProd.get(l.product_id).push(l); });
+    for(const o of [...allList]){ const hit=byProd.get(artOf(o)); if(!hit) continue; const qty=hit.reduce((a,l)=>a+(l.qty||0),0), nm=[...new Set(hit.map(l=>l.order))].join(", ");
+      linked.push({o,order:nm,qty}); allList.splice(allList.indexOf(o),1); }
+    dlog("INFO",`Kunde ${cid}: schon in etron vorhanden: ${linked.map(x=>x.o.id+" in "+x.order+" ("+x.qty+" Stk.)").join(", ")}`);
+    await pool(linked,x=>S.db.collection("orders").doc(x.o.id).update({status:"Auftrag angelegt",etronOrder:x.order})); }
+  if(!allList.length) return {oid:null,linked};
   const lines=allList.map(o=>({product_id:artOf(o),qty:o.alloc}));
   dlog("INFO",`Auftrag anlegen: Kunde ${cid}, etron-Partner ${partner}, Positionen ${allList.map(o=>o.id+"="+(S.products[o.productId].articleNo||"").trim()+"→Artikel "+artOf(o)+" x"+o.alloc).join(", ")}, Stichwort "${cfg.tag||""}"`);
   const r=await etronCall("order_create",{partner_id:partner,origin:`Vorbestellung ${fmtDate(today())}`,tag:cfg.tag||"",note:"",lines});
   const oid=etronIdOf(r); if(!oid){ dlog("ERROR",`Auftrag für Kunde ${cid}: etron hat keine Auftragsnummer zurückgegeben`); throw new Error("etron hat keine Auftragsnummer zurückgegeben. Bitte in etron nachsehen, ob der Auftrag trotzdem angelegt wurde, und das Log schicken."); }
   dlog("INFO",`Auftrag angelegt: Kunde ${cid}, etron-Auftrag ${oid}`);
-  await pool(allList,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid})); return oid; }
+  await pool(allList,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid})); return {oid,linked,n:allList.length}; }
 // "47.411", "47411", "#47411" -> 47411
 function artIdOf(v){ const t=String(v||"").replace(/[\s.#']/g,""); return /^\d{1,9}$/.test(t)&&+t>0?+t:0; }
 function etronApiPanel(){
@@ -1073,12 +1085,51 @@ function renderSeries(anyPid){
   bindAuftrag(); bindOrderForm("se"); bindAddVar(p0);
 }
 
+// ---------- Abgleich: Kunden ohne etron-Nr. in etron suchen. Nichts wird in etron angelegt oder geändert.
+const telKey = t => { let d=String(t||"").replace(/\D/g,""); if(d.startsWith("00")) d=d.slice(2); d=d.replace(/^(43|49|41)/,""); d=d.replace(/^0+/,""); return d.length>=6?d.slice(-9):""; };
+function cetScore(c, p){ const cf=contactFields(c), tk=telKey(cf.tel), mail=(cf.mail||"").toLowerCase();
+  const why=[]; const ptels=[p.mobile,p.phone].filter(x=>x&&x!==false).map(telKey).filter(Boolean);
+  const telOk=tk&&ptels.includes(tk), telBad=tk&&ptels.length&&!telOk; if(telOk) why.push("Telefon");
+  const mailOk=mail&&p.email&&String(p.email).toLowerCase()===mail; if(mailOk) why.push("E-Mail");
+  const a=norm(c.name), b=norm(p.name||""), fl=norm(`${c.firstName||""} ${c.lastName||""}`), lf=norm(`${c.lastName||""} ${c.firstName||""}`);
+  const nameOk=b&&(b===a||b===fl||b===lf); if(nameOk) why.push("Name");
+  return {score:(telOk?2:0)+(mailOk?2:0)+(nameOk?1:0)-(telBad&&!mailOk?1:0), why}; }
+async function cetSearch(c){ const cf=contactFields(c), qs=[]; const tk=telKey(cf.tel); if(tk) qs.push(tk.slice(-7)); if(cf.mail) qs.push(cf.mail);
+  const ln=(c.lastName||"").trim()||(c.name||"").trim().split(/\s+/).pop(); if(ln&&ln.length>=2) qs.push(ln);
+  const seen=new Map(); for(const q of qs){ const r=await etronCall("partner_search",{q}); for(const p of r.items||[]) if(p&&p.id&&!seen.has(p.id)) seen.set(p.id,p); }
+  return [...seen.values()].map(p=>({p,...cetScore(c,p)})).filter(x=>x.why.length).sort((x,y)=>y.score-x.score).slice(0,8); }
+async function runCet(){ if(needStaff()) return; const todo=Object.values(S.customers).filter(c=>!String(c.etronId||"").trim());
+  S.cet={running:true,done:0,total:todo.length,rows:[]}; dlog("INFO",`etron-Abgleich gestartet: ${todo.length} Kunden ohne etron-Nr.`); drawCet();
+  const q=[...todo]; const worker=async()=>{ while(q.length){ const c=q.shift(); let cands=[], err="";
+    try{ cands=await cetSearch(c); }catch(e){ err=String(e.message||e); }
+    // nur vorauswählen, wenn genau ein Treffer und der über Telefon/E-Mail oder exakt den Namen passt
+    const pick=!err&&cands.length===1&&cands[0].score>=1?cands[0].p.id:null;
+    S.cet.rows.push({cid:c.id,cands,err,pick}); S.cet.done++; drawCet(); } };
+  await Promise.all([worker(),worker(),worker()]); S.cet.running=false;
+  const r=S.cet.rows; dlog("INFO",`etron-Abgleich fertig: ${r.filter(x=>x.pick).length} eindeutig, ${r.filter(x=>!x.pick&&x.cands.length).length} zur Auswahl, ${r.filter(x=>!x.cands.length&&!x.err).length} ohne Treffer, ${r.filter(x=>x.err).length} Fehler`); drawCet(); }
+function cetHtml(){ const st=S.cet; if(!st) return ""; const rows=[...st.rows].sort((a,b)=>(S.customers[a.cid]?.name||"").localeCompare(S.customers[b.cid]?.name||"","de"));
+  const grp=(t,list)=>list.length?`<h3>${t} (${list.length})</h3><div class="tablebox"><table><thead><tr><th>Kunde in der App</th><th>Treffer in etron</th></tr></thead><tbody>${list.map(r=>{ const c=S.customers[r.cid]; if(!c) return "";
+    return `<tr><td><a href="#kunde-${r.cid}">${esc(c.name)}</a><br><span class="muted">${esc(c.contact||"")}</span></td><td>${r.err?`<span class="bad">✗ ${esc(r.err)}</span>`:!r.cands.length?`<span class="muted">nicht in etron gefunden</span>`:r.cands.map(x=>`<label class="row" style="gap:6px;align-items:flex-start"><input type="radio" name="cet-${r.cid}" data-cet="${r.cid}" value="${x.p.id}" ${r.pick===x.p.id?"checked":""}> <span><b>Nr. ${x.p.id}</b>${x.p.ref?` · Referenz <span class="mono">${esc(String(x.p.ref))}</span>`:""}: ${esc(x.p.name||"")}${Array.isArray(x.p.parent_id)?` <span class="muted">(gehört zu ${esc(String(x.p.parent_id[1]||""))})</span>`:""}<br><span class="muted">${esc(etronTel(x.p))}${x.p.email?" · "+esc(x.p.email):""} · passt: ${x.why.join(", ")||"-"}</span></span></label>`).join("")+`<label class="row muted"><input type="radio" name="cet-${r.cid}" data-cet="${r.cid}" value="" ${r.pick?"":"checked"}> keiner davon</label>`}</td></tr>`; }).join("")}</tbody></table></div>`:"";
+  const sure=rows.filter(r=>r.cands.length===1&&!r.err), multi=rows.filter(r=>r.cands.length>1&&!r.err), none=rows.filter(r=>!r.cands.length||r.err); const n=rows.filter(r=>r.pick).length;
+  return `<div class="panel"><div class="row spread"><h2>Abgleich mit etron</h2><button class="sm" id="cet-x">Schließen</button></div>
+    <p class="muted">${st.running?`… suche ${st.done} von ${st.total}`:`${st.total} Kunden ohne etron-Nr. geprüft.`} Ein einzelner passender Treffer ist vorausgewählt. Bei mehreren Konten (z. B. Laden, Webshop, Cardmarket) wird nie automatisch gewählt: bitte das Konto mit der richtigen Kundenreferenz wählen. In etron wird nichts geändert.</p>
+    ${grp("Ein Treffer",sure)}${grp("Mehrere mögliche Konten: bitte wählen",multi)}${grp("Nicht gefunden",none)}
+    ${st.running?"":`<div class="row"><button class="pri" id="cet-ok" ${n?"":"disabled"}>${n} etron-Nr. übernehmen</button></div>`}</div>`; }
+function drawCet(){ const box=$("#cet-box"); if(!box) return; box.innerHTML=cetHtml(); bindCet(); }
+function bindCet(){ const x=$("#cet-x"); if(x) x.onclick=()=>{ S.cet=null; drawCet(); };
+  app.querySelectorAll("[data-cet]").forEach(el=>el.onchange=()=>{ const r=S.cet.rows.find(r=>r.cid===el.dataset.cet); if(r) r.pick=el.value?+el.value:null; const b=$("#cet-ok"); if(b){ const n=S.cet.rows.filter(r=>r.pick).length; b.textContent=`${n} etron-Nr. übernehmen`; b.disabled=!n; } });
+  const ok=$("#cet-ok"); if(ok) ok.onclick=async()=>{ if(needStaff()) return; ok.disabled=true; const rows=S.cet.rows.filter(r=>r.pick&&S.customers[r.cid]&&!String(S.customers[r.cid].etronId||"").trim());
+    const used=new Map(Object.values(S.customers).filter(c=>c.etronId).map(c=>[String(c.etronId).trim(),c.id])); let n=0, dup=0;
+    for(const r of rows){ const id=String(r.pick); if(used.has(id)&&used.get(id)!==r.cid) dup++; const p=r.cands.find(x=>x.p.id===r.pick)?.p; if(await write("customers",r.cid,{etronId:id,...(p?.ref?{etronRef:String(p.ref)}:{})})){ n++; used.set(id,r.cid); } }
+    dlog("INFO",`etron-Abgleich übernommen: ${n} Kunden${dup?`, ${dup} mit schon vergebener Nr.`:""}`);
+    S.cet.rows=S.cet.rows.filter(r=>!rows.includes(r)); toast(`${n} etron-Nummern gespeichert${dup?`. Achtung: ${dup} Nummern sind schon bei einem anderen Kunden eingetragen (siehe Dubletten).`:""}`, dup?9000:4000); drawCet(); }; }
+
 function renderCustomers(){
   const q=norm(S.cq||""); const onlyD=S.cdup;
   const counts={}; Object.values(S.orders).forEach(o=>{ const c=counts[o.customerId]||(counts[o.customerId]={n:0,open:0}); if(COUNTS(o.status)){c.n++; if(o.status==="Offen"||o.status==="Zugeteilt") c.open+=(o.alloc||o.qty||0);} });
   const cs=Object.values(S.customers).map(c=>({...c,d:dupesOf(c)})).filter(c=>(!q||nameMatch(q,c)||String(c.etronId||"").includes(S.cq.trim())) && (!onlyD||c.d.length) && (!S.cnoe||!c.etronId) && (!S.cunc||!nameChecked(c))).sort((a,b)=>a.name.localeCompare(b.name,"de"));
   const dn=Object.values(S.customers).filter(c=>dupesOf(c).length).length;
-  app.innerHTML=`<div class="row spread"><h1>Kunden</h1><button class="pri" id="cnew">+ Neuer Kunde</button></div><div id="cl-ncbox"></div><div><p class="sub">${Object.keys(S.customers).length} Kunden, davon ${Object.values(S.customers).filter(c=>!c.etronId).length} ohne etron-Nr. ${dn?`${dn} sehen nach Dublette aus: <a class="back" href="#dubletten">jetzt prüfen</a>.`:""}</p></div>
+  app.innerHTML=`<div class="row spread"><h1>Kunden</h1><div class="row">${etronOn()?`<button id="cet" ${S.cet?.running?"disabled":""}>Mit etron abgleichen</button>`:""}<button class="pri" id="cnew">+ Neuer Kunde</button></div></div><div id="cl-ncbox"></div><div id="cet-box">${cetHtml()}</div><div><p class="sub">${Object.keys(S.customers).length} Kunden, davon ${Object.values(S.customers).filter(c=>!c.etronId).length} ohne etron-Nr. ${dn?`${dn} sehen nach Dublette aus: <a class="back" href="#dubletten">jetzt prüfen</a>.`:""}</p></div>
   <div class="row"><input id="cq" class="search" placeholder="Kunde suchen" value="${esc(S.cq||"")}"><label class="row muted"><input type="checkbox" id="cdup" ${onlyD?"checked":""}> Nur mögliche Dubletten</label><label class="row muted"><input type="checkbox" id="cnoe" ${S.cnoe?"checked":""}> Nur ohne etron-Nr.</label><label class="row muted"><input type="checkbox" id="cunc" ${S.cunc?"checked":""}> Vor-/Nachname ungeprüft (${Object.values(S.customers).filter(c=>!nameChecked(c)).length})</label></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>etron-Nr.</th><th>Kontakt</th><th class="n">Bestellungen</th><th class="n">Stück offen</th><th>Ähnlich</th></tr></thead><tbody>
   ${cs.map(c=>`<tr class="click" data-go="kunde-${c.id}"><td>${custFlags(c)}<a href="#kunde-${c.id}">${esc(c.name)}</a></td><td><input data-cf="${c.id}" id="e-${c.id}" style="width:110px" value="${esc(c.etronId||"")}" placeholder="fehlt">${etronUrl(c)?` <a href="${esc(etronUrl(c))}" target="_blank" rel="noopener" title="In etron öffnen">↗</a>`:""}</td><td>${esc(c.contact||"")}</td><td class="n">${counts[c.id]?.n||0}</td><td class="n">${counts[c.id]?.open||""}</td><td>${c.d.map(x=>esc(x.name)).join(", ")}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Kein Kunde gefunden.</td></tr>`}
@@ -1087,6 +1138,7 @@ function renderCustomers(){
   $("#cdup").onchange=e=>{S.cdup=e.target.checked;renderCustomers();};
   $("#cnew").onclick=()=>openCustNew("cl", $("#cl-ncbox"), S.cq||"", cid=>{ location.hash="kunde-"+cid; });
   $("#cnoe").onchange=e=>{S.cnoe=e.target.checked;renderCustomers();};
+  const cet=$("#cet"); if(cet) cet.onclick=()=>{ cet.disabled=true; runCet().catch(e=>toast("Abgleich: "+(e.message||e))); }; bindCet();
   $("#cunc").onchange=e=>{S.cunc=e.target.checked;renderCustomers();};
   app.querySelectorAll("[data-cf]").forEach(el=>{ el.onclick=e=>e.stopPropagation(); el.onchange=()=>saveEtron(el.dataset.cf, el.value); });
   app.querySelectorAll("tr[data-go]").forEach(tr=>tr.onclick=e=>{ if(e.target.tagName!=="A"&&e.target.tagName!=="INPUT") location.hash=tr.dataset.go; });
@@ -1240,7 +1292,7 @@ function renderExport(){
   ${(()=>{ const pend=Object.values(S.orders).filter(o=>o.status==="Offen"&&(o.alloc||0)>0&&o.productId&&inGame(S.products[o.productId])); if(!pend.length) return "";
     const ps=[...new Set(pend.map(o=>o.productId))]; return `<div class="note">${pend.length} Bestellungen haben schon eine Zuteilung, stehen aber noch auf „Offen“ und erscheinen deshalb hier nicht. Auf der Produktseite „Zuteilung abschließen“ klicken: ${ps.map(id=>`<a href="#produkt-${id}">${esc(S.products[id]?.name||"?")}</a>`).join(", ")}</div>`; })()}
   <div class="row">${oqInput()}</div>
-  ${etronOn()&&rows.length?`<div class="panel"><h2>Aufträge direkt in etron anlegen</h2><p class="muted">Legt pro Kunde einen Auftrag als <b>Entwurf</b> an (Artikel über die Artikelnummer, Stichwort aus den Einstellungen unten) und setzt die Positionen auf „Auftrag angelegt“. In etron prüfen und bestätigen.</p>
+  ${etronOn()&&(rows.length||S.etRes?.length)?`<div class="panel"><h2>Aufträge direkt in etron anlegen</h2><p class="muted">Legt pro Kunde einen Auftrag als <b>Entwurf</b> an (Artikel über die Artikelnummer, Stichwort aus den Einstellungen unten) und setzt die Positionen auf „Auftrag angelegt“. In etron prüfen und bestätigen.</p>
     <div class="row"><button class="pri" id="eall">Alle ${new Set(rows.filter(o=>S.customers[o.customerId]?.etronId).map(o=>o.customerId)).size} Kunden in etron anlegen</button><span id="eallc"></span></div><div id="eres">${(S.etRes||[]).join("")}</div></div>`:""}
   ${etronOn()&&!rows.length&&S.etRes?.length?`<div class="panel"><h2>etron-Ergebnis</h2>${S.etRes.join("")}</div>`:""}
   ${odooPanel(rows)}
@@ -1254,10 +1306,11 @@ function renderExport(){
   bindOq();
   bindOdoo(rows);
   const runEt=async(cids)=>{ if(needStaff()) return; S.etRes=[]; const log=(t,cls)=>{ S.etRes.push(`<p class="${cls||""}">${t}</p>`); const res=$("#eres"); if(res) res.innerHTML=S.etRes.join(""); };
-    let ok=0, errs=[]; dlog("INFO",`etron-Aufträge anlegen gestartet für Kunden ${cids.join(", ")}`); for(const cid of cids){ const list=rows.filter(o=>o.customerId===cid&&S.orders[o.id]?.status==="Zugeteilt"); if(!list.length){ dlog("WARN",`Kunde ${cid}: keine zugeteilten Positionen mehr`); errs.push("keine zugeteilten Positionen"); continue; } const name=esc(S.customers[cid]?.name||"?");
-      try{ const id=await etronOrderFor(cid,list); ok++; log(`✓ ${name}: Auftrag${id?" "+id:""} angelegt (${list.length} Positionen)`,"ok"); }catch(e){ dlog("ERROR",`Auftrag Kunde ${cid} fehlgeschlagen: ${e.message||e}`); errs.push(String(e.message||e)); log(`✗ ${name}: ${esc(e.message||e)}`,"bad"); } }
+    let ok=0, lk=0, errs=[]; dlog("INFO",`etron-Aufträge anlegen gestartet für Kunden ${cids.join(", ")}`); for(const cid of cids){ const list=rows.filter(o=>o.customerId===cid&&S.orders[o.id]?.status==="Zugeteilt"); if(!list.length){ dlog("WARN",`Kunde ${cid}: keine zugeteilten Positionen mehr`); errs.push("keine zugeteilten Positionen"); continue; } const name=esc(S.customers[cid]?.name||"?");
+      try{ const r=await etronOrderFor(cid,list); lk+=r.linked.length; if(r.oid){ ok++; log(`✓ ${name}: Auftrag ${esc(String(r.oid))} angelegt (${r.n} Positionen)`,"ok"); }
+        for(const x of r.linked) log(`↺ ${name}: ${esc(S.products[x.o.productId]?.name||"?")} ist in etron schon im Auftrag ${esc(x.order)} (${x.qty} Stk.${x.qty!==x.o.alloc?`, in der App ${x.o.alloc} Stk.: bitte prüfen`:""}). Nicht doppelt angelegt, nur verknüpft.`, x.qty!==x.o.alloc?"bad":"ok"); }catch(e){ dlog("ERROR",`Auftrag Kunde ${cid} fehlgeschlagen: ${e.message||e}`); errs.push(String(e.message||e)); log(`✗ ${name}: ${esc(e.message||e)}`,"bad"); } }
     const box=$("#eres"); if(box) box.scrollIntoView({behavior:"smooth",block:"center"});
-    toast(errs.length?`${ok} Aufträge angelegt. Fehler: ${errs[0]}`:`${ok} Aufträge in etron angelegt`, errs.length?12000:4000); return ok; };
+    toast((errs.length?`${ok} Aufträge angelegt. Fehler: ${errs[0]}`:`${ok} Aufträge in etron angelegt`)+(lk?`. ${lk} Positionen waren schon in etron und wurden nur verknüpft.`:""), errs.length?12000:4000); return ok; };
   const ea=$("#eall"); if(ea) ea.onclick=()=>{ const cids=[...new Set(rows.filter(o=>S.customers[o.customerId]?.etronId).map(o=>o.customerId))];
     $("#eallc").innerHTML=` <button class="sm danger" id="eallok">Ja, ${cids.length} Aufträge anlegen</button>`; $("#eallok").onclick=async()=>{ $("#eallok").disabled=true; ea.disabled=true; await runEt(cids); }; };
   app.querySelectorAll("[data-eone]").forEach(b=>b.onclick=async()=>{ b.disabled=true; await runEt([b.dataset.eone]); });
