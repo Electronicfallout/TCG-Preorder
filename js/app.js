@@ -247,17 +247,30 @@ function renderProducts(){
       <label>Release<input id="np-rel" placeholder="2027-05-15, Q3 2027 oder leer"></label>
       <label>Spiel<select id="np-game">${gameOptions(S.game==="Alle"?"One Piece":S.game)}</select></label>
       <label>Einheit<input id="np-unit" placeholder="Display, Case, Stück"></label>
+      ${etSearchHtml("np","")}<div class="wide muted" id="np-etsel"></div>
       <button class="pri" ${S.canWrite?"":"disabled"}>Anlegen</button>
     </form><p class="muted">Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Dann zählt jede Variante getrennt. Mehrere Produkte in einer gemeinsamen Liste (z. B. zwei Sets am selben Release): erstes Produkt anlegen, dann auf seiner Seite „+ Weiteres Produkt in diese Liste“.</p></div>`;
   $("#pq").oninput = e => { S.pq=e.target.value; render(); };
   const sa=$("#showall"); if(sa) sa.onclick=()=>setGame("Alle");
   $("#parch").onchange = e => { S.parch=e.target.checked; renderProducts(); };
   app.querySelectorAll("tr[data-go]").forEach(tr=>tr.onclick=e=>{ if(e.target.tagName!=="A"&&e.target.tagName!=="INPUT") location.hash=tr.dataset.go; });
+  let npEt=null; bindEtSearch("np", x=>{ npEt=x; const n=$("#np-name"); if(!n.value.trim()) n.value=x.name; $("#np-etsel").innerHTML=`<span class="ok">✓ etron-Artikel ${esc(String(x.id))}${x.code?", Art.-Nr. "+esc(x.code):""} wird verknüpft.</span>`; $("#np-etsr").innerHTML=""; });
   $("#np").onsubmit = async e => { e.preventDefault(); const name=$("#np-name").value.trim(); if(!name) return;
     if (Object.values(S.products).some(p=>p.name.toLowerCase()===name.toLowerCase())) return toast("Dieses Produkt gibt es schon.");
     const id = "p-"+name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,50)+"-"+Date.now().toString(36).slice(-4);
-    if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),release:$("#np-rel").value.trim(),unit:$("#np-unit").value.trim(),game:$("#np-game").value,received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="produkt-"+id; } };
+    if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),release:$("#np-rel").value.trim(),unit:$("#np-unit").value.trim(),game:$("#np-game").value,...(npEt?{etronArtId:String(npEt.id),...(npEt.code?{articleNo:npEt.code}:{})}:{}),received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="produkt-"+id; } };
 }
+
+// etron-Artikelsuche (Name, Referenz, Barcode): Treffer anklicken -> onPick({id,code,name})
+function etSearchHtml(k, q, linked){ if(!etronOn()) return ""; return `<div class="${k==="np"?"wide":"panel"}" id="${k}-etbox">${k==="np"?"":`<h2>etron-Artikel${linked?` <span class="ok" style="font-size:.8em">✓ verknüpft (ID ${esc(String(linked))})</span>`:""}</h2>`}
+  <div class="row" style="gap:6px"><input id="${k}-etq" value="${esc(q||"")}" placeholder="In etron suchen: Name oder Nummer, z. B. OP-18" style="flex:1"><button type="button" id="${k}-ets" class="sm">Artikel in etron suchen</button></div><div id="${k}-etsr" class="muted"></div></div>`; }
+function bindEtSearch(k, onPick){ const ets=$("#"+k+"-ets"); if(!ets) return; const q0=$("#"+k+"-etq");
+  q0.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); ets.click(); } };
+  ets.onclick=async()=>{ const out=$("#"+k+"-etsr"), q=q0.value.trim(); if(q.length<2) return toast("Bitte mindestens 2 Zeichen eingeben."); out.innerHTML="… suche"; ets.disabled=true;
+    try{ const it=(await etronCall("product_search",{q})).items||[];
+      out.innerHTML=it.length?`<p>Bitte den passenden Artikel anklicken:</p><div class="tablebox"><table><thead><tr><th>Artikel in etron</th><th>Interne Referenz</th><th>Barcode</th><th>ID</th><th></th></tr></thead><tbody>${it.map((x,n)=>`<tr${x.active?"":' class="dim"'}><td>${esc(x.name)}${x.active?"":" (archiviert)"}</td><td class="mono">${esc(x.code||"–")}</td><td class="mono">${esc(x.barcode||"–")}</td><td class="mono">${esc(String(x.id))}</td><td><button type="button" class="sm pri" data-etpick="${n}">Übernehmen</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="bad">Kein Artikel gefunden. Anderen Suchbegriff probieren, z. B. nur „OP-18“ oder „OP18“. Wenn gar nichts gefunden wird: unter Einstellungen „Verbindung testen“ zeigt, ob der Zugang Artikel lesen darf.</p>`;
+      out.querySelectorAll("[data-etpick]").forEach(b=>b.onclick=()=>onPick(it[+b.dataset.etpick])); }
+    catch(e){ out.innerHTML=`<p class="bad">✗ ${esc(e.message||e)}</p>`; } ets.disabled=false; }; }
 
 function veTxt(n, ps){ if(n==null||!ps) return ""; const v=Math.floor(n/ps), r=n%ps; return v&&r?`${v} VE + ${r} Stk.`:v?`${v} VE`:`${r} Stk.`; }
 function veField(f, label, p){ const ps=p.packSize; const n=p[f];
@@ -290,6 +303,7 @@ function renderProduct(pid){
   <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a>${/^https?:\/\//.test(p.etronUrl||"")?` · <a class="back" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">In etron öffnen</a>`:""} · ${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
    <div class="row">${addVarBtn()}<button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button><button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
   <div id="addvbox"></div>
+  ${etSearchHtml("pd",(p.group||p.name||"").split("|")[0].trim(),p.etronArtId)}
   ${p.archived?`<div class="note">Dieses Produkt ist archiviert und erscheint nur mit „Archivierte zeigen“ in der Produktliste.</div>`:""}
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
@@ -305,7 +319,6 @@ function renderProduct(pid){
       <label class="wide">Produktname<input id="pd-name" value="${esc(p.name||"")}"></label>
       <label>Artikelnummer<input id="pd-articleNo" value="${esc(p.articleNo||"")}" placeholder="etron-Artikelnr."></label>
       <label>etron-Artikel-ID <span class="muted">(optional, hat Vorrang)</span><input id="pd-etronArtId" value="${esc(p.etronArtId||"")}" placeholder="z. B. 47411"></label>
-      ${etronOn()?`<div class="wide"><div class="row" style="gap:6px"><input id="pd-etq" value="${esc((p.group||p.name||"").split("|")[0].trim())}" placeholder="Name oder Nummer, z. B. OP-18" style="flex:1"><button id="pd-ets" class="sm">Artikel in etron suchen</button></div><div id="pd-etsr" class="muted"></div></div>`:""}
       <label class="wide">etron-Link zum Artikel<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="pd-etronUrl" type="url" value="${esc(p.etronUrl||"")}" placeholder="https://… (Adresse aus dem Browser kopieren)" style="flex:1">${/^https?:\/\//.test(p.etronUrl||"")?`<a class="btn" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">Öffnen</a>`:""}</span></label>
       <label class="wide">Name in Kundennachrichten<input id="pd-msgName" value="${esc(p.msgName||"")}" placeholder="leer = Produktname (ohne Artikelnummer eintragen)"></label>
       <label>Release<input id="pd-release" value="${esc(p.release||"")}" placeholder="JJJJ-MM-TT, Q2 2027"></label>
@@ -345,11 +358,7 @@ function renderProduct(pid){
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
   ["name","msgName","articleNo","etronArtId","etronUrl","release","series","unit","packSize","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="packSize"&&v!=null&&!(v>=1&&Number.isInteger(v))){ el.value=p.packSize??""; return toast("Bitte eine ganze Zahl ab 1 eintragen."); } if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronArtId"&&v&&!artIdOf(v)){ el.value=p.etronArtId||""; return toast("Bitte nur die Zahl eintragen, z. B. 47411."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
-  const ets=$("#pd-ets"); if(ets) ets.onclick=async()=>{ const out=$("#pd-etsr"), q=$("#pd-etq").value.trim(); if(q.length<2) return toast("Bitte mindestens 2 Zeichen eingeben."); out.innerHTML="… suche"; ets.disabled=true;
-    try{ const j=await etronCall("product_search",{q}); const it=j.items||[];
-      out.innerHTML=it.length?`<p>Bitte den passenden Artikel anklicken:</p><div class="tablebox"><table><thead><tr><th>Artikel in etron</th><th>Interne Referenz</th><th>Barcode</th><th>ID</th><th></th></tr></thead><tbody>${it.map(x=>`<tr${x.active?"":' class="dim"'}><td>${esc(x.name)}${x.active?"":" (archiviert)"}</td><td class="mono">${esc(x.code||"–")}</td><td class="mono">${esc(x.barcode||"–")}</td><td class="mono">${esc(String(x.id))}</td><td><button class="sm pri" data-etpick="${esc(String(x.id))}" data-etcode="${esc(x.code||"")}">Übernehmen</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="bad">Kein Artikel gefunden. Anderen Suchbegriff probieren, z. B. nur „OP-18“ oder „OP18“. Wenn gar nichts gefunden wird: unter Einstellungen „Verbindung testen“ zeigt, ob der Zugang Artikel lesen darf.</p>`;
-      out.querySelectorAll("[data-etpick]").forEach(b=>b.onclick=async()=>{ const patch={etronArtId:b.dataset.etpick}; if(b.dataset.etcode) patch.articleNo=b.dataset.etcode; if(await write("products",pid,patch)) toast(`Übernommen: etron-Artikel ${b.dataset.etpick}${b.dataset.etcode?", Art.-Nr. "+b.dataset.etcode:""}`,5000); }); }
-    catch(e){ out.innerHTML=`<p class="bad">✗ ${esc(e.message||e)}</p>`; } ets.disabled=false; };
+  bindEtSearch("pd", async x=>{ const patch={etronArtId:String(x.id)}; if(x.code) patch.articleNo=x.code; if(await write("products",pid,patch)) toast(`Übernommen: etron-Artikel ${x.id}${x.code?", Art.-Nr. "+x.code:""}`,5000); });
   if(p.packSize) ["supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#ve-"+f); el.onchange=()=>{ const v=num(el.value); write("products",pid,{[f]:v==null?null:v*p.packSize}).then(ok=>ok&&toast(v==null?"Gespeichert":`Gespeichert: ${v*p.packSize} Stück`)); }; });
   bindAddVar(p);
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
