@@ -514,6 +514,25 @@ async function etronCall(action, data){
   const r=await desk("/api/etron",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...(data||{})})});
   let j=null; try{ j=await r.json(); }catch(e){}
   if(!r.ok){ const x=new Error((j&&j.error)||("HTTP "+r.status)); x.http=r.status; x.etron=j&&j.status; throw x; } return j; }
+// ---------- etron direkt (nur im Programm): Kunden suchen/anlegen, Aufträge anlegen
+// Antwort von create: Zahl, [Zahl] oder {id: Zahl}
+function etronIdOf(r){ const v=r?.result??r; if(typeof v==="number") return v; if(Array.isArray(v)) return etronIdOf(v[0]); if(v&&typeof v==="object") return etronIdOf(v.id??v.result??v.data); const n=parseInt(v,10); return n>0?n:null; }
+const etronTel = p => [p.mobile,p.phone].filter(x=>x&&x!==false).join(" / ");
+async function etronFindPartners(fn, ln, tel){ const qs=[]; const d=String(tel||"").replace(/\D/g,""); if(d.length>=6) qs.push(d.slice(-8)); if((ln||"").trim().length>=2) qs.push(ln.trim()); else if((fn||"").trim().length>=2) qs.push(fn.trim());
+  const seen=new Map(); for(const q of qs){ const r=await etronCall("partner_search",{q}); for(const p of r.items||[]) if(p&&p.id&&!seen.has(p.id)) seen.set(p.id,p); }
+  const f=norm(fn||""); return [...seen.values()].sort((a,b)=>(norm(b.name||"").includes(f)?1:0)-(norm(a.name||"").includes(f)?1:0)).slice(0,10); }
+function etronHitsHtml(list){ return list.map(p=>`<button type="button" class="sm" data-epid="${p.id}">Nr. ${p.id}: ${esc(p.name||"")}${etronTel(p)?` <span class="muted">${esc(etronTel(p))}</span>`:""}${p.email?` <span class="muted">${esc(p.email)}</span>`:""}</button>`).join(" "); }
+async function etronCreatePartner(fn, ln, tel, mail){ const r=await etronCall("partner_create",{firstname:fn,lastname:ln,phone:tel,email:mail}); const id=etronIdOf(r); if(!id) throw new Error("etron hat keine Kundennummer zurückgegeben"); return id; }
+// Auftrag für einen Kunden: zugeteilte Positionen -> etron-Auftrag (Entwurf)
+async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronId) throw new Error("keine etron-Nr.");
+  const cfg=odooCfg(); let partner=parseInt(c.etronId,10);
+  if(cfg.key==="ref"){ const r=await etronCall("partner_search",{q:String(c.etronId)}); const p=(r.items||[]).find(x=>String(x.ref)===String(c.etronId)); if(!p) throw new Error(`Kunde mit Kundennr. ${c.etronId} in etron nicht gefunden`); partner=p.id; }
+  const miss=list.filter(o=>!S.products[o.productId]?.articleNo); if(miss.length) throw new Error("Artikelnummer fehlt bei: "+[...new Set(miss.map(o=>S.products[o.productId]?.name||"?"))].join(", "));
+  const codes=[...new Set(list.map(o=>S.products[o.productId].articleNo.trim()))];
+  const found=(await etronCall("product_find",{codes})).items||[]; const byCode=new Map(found.map(p=>[String(p.default_code).trim(),p.id]));
+  const nf=codes.filter(x=>!byCode.has(x)); if(nf.length) throw new Error("Artikelnummer in etron nicht gefunden: "+nf.join(", "));
+  const r=await etronCall("order_create",{partner_id:partner,origin:`Vorbestellung ${fmtDate(today())}`,tag:cfg.tag||"",note:"",lines:list.map(o=>({product_id:byCode.get(S.products[o.productId].articleNo.trim()),qty:o.alloc}))});
+  const oid=etronIdOf(r); await pool(list,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid||true})); return oid; }
 function etronApiPanel(){
   if(!S.desktop) return `<div class="panel"><h2>etron-Schnittstelle</h2><p class="muted">Die direkte Verbindung zu etron gibt es nur im Programm <b>Vorbestellungen.exe</b> aus dem Dropbox-Ordner, nicht in der Web-Version.</p></div>`;
   return `<div class="panel"><h2>etron-Schnittstelle</h2>
@@ -764,8 +783,9 @@ function custNewForm(k, pre){ const [fn,...rest]=(pre||"").trim().split(/\s+/);
     <label>E-Mail<input id="${k}-nmail" type="email" autocomplete="off"></label>
     <label>etron-Nr.<input id="${k}-net" autocomplete="off" placeholder="falls bekannt"></label>
     <label class="row muted" style="align-self:end"><input type="checkbox" id="${k}-nwa"> kein WhatsApp</label>
+    ${S.desktop?`<label class="row muted" style="align-self:end" id="${k}-necl"><input type="checkbox" id="${k}-nec" checked> auch in etron anlegen</label>`:""}
     <button class="pri" id="${k}-nok" ${S.canWrite?"":"disabled"}>Kunden anlegen</button><button type="button" id="${k}-nx">Abbrechen</button>
-  </form><div id="${k}-nh"></div></div>`; }
+  </form><div id="${k}-nh"></div>${S.desktop?`<div id="${k}-neh" class="muted"></div>`:""}</div>`; }
 // onPick(cid, created) wird mit bestehendem oder neu angelegtem Kunden aufgerufen
 function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); const v=id=>$("#"+k+"-"+id).value.trim(); let okFor=null;
   const ok=$("#"+k+"-nok"), h=$("#"+k+"-nh");
@@ -777,11 +797,21 @@ function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); co
     else { h.innerHTML=""; ok.disabled=!S.canWrite; ok.textContent="Kunden anlegen"; }
     h.querySelectorAll("[data-cid]").forEach(b=>b.onclick=()=>{ box.innerHTML=""; onPick(b.dataset.cid,false); });
     return {fn,ln,tel,key,ex,d}; };
-  ["nfn","nln","ntel"].forEach(id=>$("#"+k+"-"+id).oninput=check); check();
+  // etron: passende Kunden zeigen (Name/Telefon), Klick übernimmt die etron-Nr.
+  let etT=null, etSeq=0; const neh=$("#"+k+"-neh");
+  const etUi=()=>{ const has=!!v("net"); const l=$("#"+k+"-necl"); if(l) l.hidden=has; };
+  const etSearch=()=>{ if(!neh) return; clearTimeout(etT); etT=setTimeout(async()=>{ const fn=v("nfn"), ln=v("nln"), tel=v("ntel"); if(ln.length<2 && tel.replace(/\D/g,"").length<6){ neh.innerHTML=""; return; }
+      const my=++etSeq; neh.textContent="Suche in etron …"; try{ const list=await etronFindPartners(fn,ln,tel); if(my!==etSeq) return;
+        neh.innerHTML=list.length?`In etron gefunden (anklicken übernimmt die etron-Nr.): ${etronHitsHtml(list)}`:"In etron kein passender Kunde gefunden.";
+        neh.querySelectorAll("[data-epid]").forEach(b=>b.onclick=()=>{ const p=list.find(x=>String(x.id)===b.dataset.epid); $("#"+k+"-net").value=p.id; if(!v("ntel")&&etronTel(p)) $("#"+k+"-ntel").value=(p.mobile||p.phone); if(!v("nmail")&&p.email) $("#"+k+"-nmail").value=p.email; etUi(); neh.innerHTML=`✓ etron-Nr. ${p.id} übernommen (${esc(p.name||"")}).`; }); }
+      catch(e){ if(my===etSeq) neh.textContent="etron-Suche nicht möglich: "+(e.message||e); } },450); };
+  ["nfn","nln","ntel"].forEach(id=>$("#"+k+"-"+id).oninput=()=>{ check(); etSearch(); }); $("#"+k+"-net").oninput=etUi; check(); etSearch();
   $("#"+k+"-nx").onclick=()=>{ box.innerHTML=""; };
   $("#"+k+"-nform").onsubmit=async e=>{ e.preventDefault(); if(needStaff()) return; const r=check(); if(!r.fn||!r.ln) return toast("Bitte Vor- und Nachname eintragen."); if(r.ex) return;
     if(r.d.length && okFor!==r.key){ okFor=r.key; check(); return toast("Bitte die ähnlichen Kunden prüfen, dann nochmal klicken."); }
     const cid=newId("c"); const et=v("net"); const rec={name:r.fn+" "+r.ln,firstName:r.fn,lastName:r.ln,contact:joinContact(r.tel,v("nmail"),null),note:""};
+    if(!et && S.desktop && $("#"+k+"-nec")?.checked){ ok.disabled=true; try{ const id=await etronCreatePartner(r.fn,r.ln,r.tel,v("nmail")); rec.etronId=String(id); toast(`In etron angelegt: Nr. ${id}`); }
+      catch(e){ ok.disabled=false; return toast("In etron nicht angelegt: "+(e.message||e)+". Haken „auch in etron anlegen“ entfernen, um nur hier anzulegen."); } }
     if(et) rec.etronId=et; if($("#"+k+"-nwa").checked) rec.noWhatsapp=true; if(r.d.length) rec.notDupes=r.d.map(c=>c.id);
     if(await write("customers",cid,rec,"set")){ toast("Kunde angelegt"); box.innerHTML=""; onPick(cid,true); } };
   $("#"+k+"-nfn").focus(); }
@@ -930,6 +960,7 @@ function renderCustomer(cid){
     <label>etron-Kundennr.${etronLink(c)?` <span style="float:right">${etronLink(c)}</span>`:""}<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="row muted" style="gap:6px;align-self:end"><input type="checkbox" id="cd-wa" ${c.noWhatsapp?"":"checked"}> Hat WhatsApp</label>
+    ${S.desktop&&!c.etronId?`<div class="wide" id="cd-et"><button type="button" class="sm" id="cd-ets">etron-Kunde suchen oder anlegen</button> <span id="cd-eth" class="muted"></span></div>`:""}
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
   ${orderForm("cu", null, cid)}
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th><th class="n">Zuteilung</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
@@ -948,6 +979,12 @@ function renderCustomer(cid){
     write("customers",cid,{firstName:fn,lastName:ln,name:(fn+" "+ln).trim()}).then(ok=>ok&&!(dup&&dup.id!==cid)&&toast("Name gespeichert")); };
   $("#cd-fn").onchange=$("#cd-ln").onchange=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
   $("#cd-swap").onclick=()=>saveName($("#cd-ln").value,$("#cd-fn").value);
+  const ets=$("#cd-ets"); if(ets) ets.onclick=async()=>{ const h=$("#cd-eth"); const np=nameParts(c), tel=contactFields(c).tel; h.textContent="Suche in etron …";
+    try{ const list=await etronFindPartners(np.first,np.last,tel);
+      h.innerHTML=(list.length?`Gefunden (anklicken übernimmt die etron-Nr.): ${etronHitsHtml(list)} `:"In etron kein passender Kunde. ")+`<button type="button" class="sm pri" id="cd-etn">Neu in etron anlegen</button>`;
+      h.querySelectorAll("[data-epid]").forEach(b=>b.onclick=()=>write("customers",cid,{etronId:b.dataset.epid}).then(ok=>ok&&toast("etron-Nr. übernommen")));
+      $("#cd-etn").onclick=async()=>{ if(needStaff()) return; const b=$("#cd-etn"); b.disabled=true; try{ const id=await etronCreatePartner(np.first,np.last,tel,contactFields(c).mail); await write("customers",cid,{etronId:String(id)}); toast(`In etron angelegt: Nr. ${id}`); }catch(e){ b.disabled=false; toast("Nicht angelegt: "+(e.message||e)); } }; }
+    catch(e){ h.textContent="etron-Suche nicht möglich: "+(e.message||e); } };
   if($("#cd-ok")) $("#cd-ok").onclick=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
   $("#cd-wa").onchange=e=>write("customers",cid,{noWhatsapp:!e.target.checked}).then(ok=>ok&&toast("Gespeichert"));
   $("#cd-etronId").onchange=e=>saveEtron(cid,e.target.value);
@@ -1054,9 +1091,12 @@ function renderExport(){
   <div class="tiles"><div class="tile"><b>${new Set(rows.map(o=>o.customerId)).size}</b><span>Kunden offen</span></div><div class="tile"><b>${rows.length}</b><span>Positionen</span></div><div class="tile"><b>${rows.reduce((s,o)=>s+o.alloc,0)}</b><span>Stück</span></div></div>
   ${Object.keys(byC).some(id=>!S.customers[id]?.etronId)?`<div class="note">${Object.keys(byC).filter(id=>!S.customers[id]?.etronId).length} Kunden haben noch keine etron-Nr. Bitte vor dem Anlegen der Aufträge unter Kunden eintragen.</div>`:""}
   <div class="row">${oqInput()}</div>
+  ${S.desktop&&rows.length?`<div class="panel"><h2>Aufträge direkt in etron anlegen</h2><p class="muted">Legt pro Kunde einen Auftrag als <b>Entwurf</b> an (Artikel über die Artikelnummer, Stichwort aus den Einstellungen unten) und setzt die Positionen auf „Auftrag angelegt“. In etron prüfen und bestätigen.</p>
+    <div class="row"><button class="pri" id="eall">Alle ${new Set(rows.filter(o=>S.customers[o.customerId]?.etronId).map(o=>o.customerId)).size} Kunden in etron anlegen</button><span id="eallc"></span></div><div id="eres">${(S.etRes||[]).join("")}</div></div>`:""}
+  ${S.desktop&&!rows.length&&S.etRes?.length?`<div class="panel"><h2>etron-Ergebnis</h2>${S.etRes.join("")}</div>`:""}
   ${odooPanel(rows)}
   <div class="row"><button class="pri" id="dl" ${rows.length?"":"disabled"}>CSV herunterladen</button><button id="cp" ${rows.length?"":"disabled"}>Als Text kopieren</button><button id="mk" ${rows.length&&S.canWrite?"":"disabled"}>Alle als „Auftrag angelegt“ markieren</button><span id="mkc"></span></div>
-  ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2>${custFlags({...c,id:cid})}<a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId)+" "+etronLink({...c,id:cid}):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
+  ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2>${custFlags({...c,id:cid})}<a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${S.desktop&&c.etronId&&list.some(o=>o.status==="Zugeteilt")?`<button class="sm" data-eone="${cid}">In etron anlegen</button> `:""}${c.etronId?"etron-Nr. "+esc(c.etronId)+" "+etronLink({...c,id:cid}):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
     <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th><th>Nachricht</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}${S.products[o.productId]?.articleNo?` <span class="muted">Art.-Nr. ${esc(S.products[o.productId].articleNo)}</span>`:""}${/^https?:\/\//.test(S.products[o.productId]?.etronUrl||"")?` <a href="${esc(S.products[o.productId].etronUrl)}" target="_blank" rel="noopener">etron</a>`:""}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
   <div class="panel"><h2>Gesamtsicherung</h2><p class="muted">Alle Produkte, Kunden und Bestellungen als eine JSON-Datei, z. B. für den Umzug in die Dropbox.</p><div class="row"><button id="bk">Alle Daten exportieren (JSON)</button></div></div>
   <textarea id="ta" hidden rows="6" style="width:100%"></textarea>`;
@@ -1064,6 +1104,13 @@ function renderExport(){
   if(!rows.length) return;
   bindOq();
   bindOdoo(rows);
+  const runEt=async(cids)=>{ if(needStaff()) return; S.etRes=[]; const log=(t,cls)=>{ S.etRes.push(`<p class="${cls||""}">${t}</p>`); const res=$("#eres"); if(res) res.innerHTML=S.etRes.join(""); };
+    let ok=0; for(const cid of cids){ const list=rows.filter(o=>o.customerId===cid&&S.orders[o.id]?.status==="Zugeteilt"); if(!list.length) continue; const name=esc(S.customers[cid]?.name||"?");
+      try{ const id=await etronOrderFor(cid,list); ok++; log(`✓ ${name}: Auftrag${id?" "+id:""} angelegt (${list.length} Positionen)`,"ok"); }catch(e){ log(`✗ ${name}: ${esc(e.message||e)}`,"bad"); } }
+    toast(`${ok} Aufträge in etron angelegt`); return ok; };
+  const ea=$("#eall"); if(ea) ea.onclick=()=>{ const cids=[...new Set(rows.filter(o=>S.customers[o.customerId]?.etronId).map(o=>o.customerId))];
+    $("#eallc").innerHTML=` <button class="sm danger" id="eallok">Ja, ${cids.length} Aufträge anlegen</button>`; $("#eallok").onclick=async()=>{ $("#eallok").disabled=true; ea.disabled=true; await runEt(cids); }; };
+  app.querySelectorAll("[data-eone]").forEach(b=>b.onclick=async()=>{ b.disabled=true; await runEt([b.dataset.eone]); });
   $("#dl").onclick=async()=>{ const data=csv(rows); const name=`etron-auftraege-${today()}.csv`;
     if(S.downloads){ try{ await S.downloads.save({filename:name,data:new Blob([data],{type:"text/csv;charset=utf-8"})}); return; }catch(e){ if(e&&e.code==="dismissed") return; } }
     showText(data); toast("Download nicht verfügbar: Text unten markieren und kopieren."); };

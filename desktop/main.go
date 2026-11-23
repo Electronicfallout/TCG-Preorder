@@ -779,15 +779,27 @@ func etronAction(c etronCfg, action string, b map[string]any) (any, error) {
 		if n := str(b["note"], 500); n != "" {
 			values["note"] = n
 		}
-		if tag := str(b["tag"], 60); tag != "" {
-			tr, err := call(c, "GET", "/search_read/crm.tag", map[string]any{"domain": []any{[]any{"name", "=", tag}}, "fields": []string{"id"}}, nil)
-			if err == nil {
-				if l := listOf(tr); len(l) > 0 {
-					if m, ok := l[0].(map[string]any); ok && intOf(m["id"]) > 0 {
-						values["tag_ids"] = []any{[]any{6, 0, []any{intOf(m["id"])}}}
-					}
+		names := []any{}
+		for _, t := range strings.Split(str(b["tag"], 200), ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				names = append(names, t)
+			}
+		}
+		if len(names) > 0 {
+			tr, err := call(c, "GET", "/search_read/crm.tag", map[string]any{"domain": []any{[]any{"name", "in", names}}, "fields": []string{"id", "name"}}, nil)
+			if err != nil {
+				return nil, fmt.Errorf("Stichwort nicht lesbar: %v", err)
+			}
+			ids := []any{}
+			for _, x := range listOf(tr) {
+				if m, ok := x.(map[string]any); ok && intOf(m["id"]) > 0 {
+					ids = append(ids, intOf(m["id"]))
 				}
 			}
+			if len(ids) < len(names) {
+				return nil, fmt.Errorf("Stichwort „%s“ gibt es in etron nicht (genaue Schreibweise prüfen)", str(b["tag"], 200))
+			}
+			values["tag_ids"] = []any{[]any{6, 0, ids}}
 		}
 		r, err := call(c, "POST", "/create/sale.order", nil, map[string]any{"values": values})
 		if err != nil {
