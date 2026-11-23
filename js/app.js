@@ -559,7 +559,15 @@ const EW_ACTIONS = {
     const values={firstname,lastname,type:"contact",customer_rank:1}; if(ewStr(b.phone)) values.mobile=ewStr(b.phone,40); if(ewStr(b.email)) values.email=ewStr(b.email);
     return {result:await ewCall(c,"POST","/create/res.partner",null,{values})}; },
   async product_find(c,b){ const codes=(b.codes||[]).map(x=>ewStr(x,60)).filter(Boolean).slice(0,50); if(!codes.length) return {items:[]};
-    return {items:ewList(await ewCall(c,"GET","/search_read/product.product",{domain:[["default_code","in",codes]],fields:["id","default_code","name"]}))}; },
+    const F=["id","default_code","barcode","name","active"], norm=x=>String(x||"").trim().toUpperCase();
+    const items=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:[["default_code","in",codes]],fields:F})); const have=new Set(items.map(p=>norm(p.default_code))); const near={};
+    // nicht gefunden: auch archivierte Artikel, ohne Groß/Klein, Barcode und Teiltreffer
+    for(const code of codes.filter(x=>!have.has(norm(x)))){
+      const hits=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],"|","|",["default_code","=ilike",code],["barcode","=",code],["default_code","ilike",code]],fields:F,limit:10}));
+      const exact=hits.filter(p=>norm(p.default_code)===norm(code)||norm(p.barcode)===norm(code));
+      if(exact.length===1){ items.push({...exact[0],default_code:code}); } else near[code]=hits.map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,80),active:p.active!==false}));
+      dlog("INFO",`Artikelsuche erweitert ${code}: ${hits.length} Treffer${hits.length?" ("+hits.map(p=>(p.default_code||"-")+"/"+(p.barcode||"-")+(p.active===false?" archiviert":"")+"→"+p.id).join(", ")+")":""}`); }
+    return {items,near}; },
   async order_create(c,b){ const partner=parseInt(b.partner_id,10); if(!partner) throw new Error("etron-Kundennummer fehlt");
     const lines=(b.lines||[]).slice(0,50).map(l=>({product_id:parseInt(l.product_id,10),product_uom_qty:Math.max(1,Math.min(9999,parseInt(l.qty,10)||0))})).filter(l=>l.product_id);
     if(!lines.length) throw new Error("Keine Auftragszeilen");
@@ -587,9 +595,9 @@ async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronI
   if(cfg.key==="ref"){ const r=await etronCall("partner_search",{q:String(c.etronId)}); const p=(r.items||[]).find(x=>String(x.ref)===String(c.etronId)); if(!p) throw new Error(`Kunde mit Kundennr. ${c.etronId} in etron nicht gefunden`); partner=p.id; }
   const miss=list.filter(o=>!S.products[o.productId]?.articleNo); if(miss.length){ dlog("WARN",`Auftrag Kunde ${cid}: Artikelnummer fehlt bei Produkt ${miss.map(o=>o.productId).join(", ")}`); } if(miss.length) throw new Error("Artikelnummer fehlt bei: "+[...new Set(miss.map(o=>S.products[o.productId]?.name||"?"))].join(", "));
   const codes=[...new Set(list.map(o=>S.products[o.productId].articleNo.trim()))];
-  const found=(await etronCall("product_find",{codes})).items||[]; const byCode=new Map(found.map(p=>[String(p.default_code).trim(),p.id]));
+  const pf=await etronCall("product_find",{codes}); const found=pf.items||[]; const byCode=new Map(found.map(p=>[String(p.default_code).trim(),p.id]));
   dlog("INFO",`Artikelsuche ${codes.join(", ")}: gefunden ${found.map(p=>p.default_code+"→"+p.id).join(", ")||"nichts"}`);
-  const nf=codes.filter(x=>!byCode.has(x)); if(nf.length) throw new Error("Artikelnummer in etron nicht gefunden: "+nf.join(", "));
+  const nf=codes.filter(x=>!byCode.has(x)); if(nf.length) throw new Error("Artikelnummer in etron nicht gefunden: "+nf.map(x=>{ const n=(pf.near||{})[x]||[]; return n.length?`${x} (ähnlich: ${n.slice(0,3).map(p=>(p.code||p.barcode)+(p.active?"":" archiviert")).join(", ")})`:x; }).join(", ")+". In etron beim Artikel das Feld „Interne Referenz“ prüfen.");
   const lines=list.map(o=>({product_id:byCode.get(S.products[o.productId].articleNo.trim()),qty:o.alloc}));
   dlog("INFO",`Auftrag anlegen: Kunde ${cid}, etron-Partner ${partner}, Positionen ${list.map(o=>o.id+"="+S.products[o.productId].articleNo.trim()+"→Artikel "+byCode.get(S.products[o.productId].articleNo.trim())+" x"+o.alloc).join(", ")}, Stichwort "${cfg.tag||""}"`);
   const r=await etronCall("order_create",{partner_id:partner,origin:`Vorbestellung ${fmtDate(today())}`,tag:cfg.tag||"",note:"",lines});
@@ -614,7 +622,7 @@ function etronWebPanel(){
       <label class="wide">etron-Adresse<input id="ea-url" placeholder="https://xxxxxx.wawi.onretail.eu" autocomplete="off"></label>
       <label>Client Key<input id="ea-key" autocomplete="off" spellcheck="false"></label>
       <label>Client Secret<input id="ea-sec" type="password" autocomplete="new-password" spellcheck="false"></label>
-      <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
+      <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><input id="ea-art" placeholder="Art.-Nr. testen, z. B. P0044509" style="width:14em"><button id="ea-arts">Artikel suchen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
     </div><div id="ea-st" class="muted">Lade …</div><div id="ea-res"></div>
     <div class="row" style="margin-top:8px"><button class="sm" id="ea-log">Log herunterladen</button><span class="muted">Schritte und Fehler dieses Browsers, ohne Kundennamen/Telefonnummern.</span></div></div>`; }
 function bindEtronWeb(){ const st=$("#ea-st"); if(!st) return;
@@ -630,6 +638,10 @@ function bindEtronWeb(){ const st=$("#ea-st"); if(!st) return;
   $("#ea-del").onclick=async()=>{ if(!EW.cfg) return toast("Es ist kein Zugang gespeichert."); try{ await ewCfg(true); const r=await S.provider.write(ETRON_FILE,{},EW.rev); EW.cfg=null; EW.rev=r.rev; EW.tok=null; show(); toast("Zugang gelöscht"); }catch(e){ toast("Nicht gelöscht: "+(e.message||e)); } };
   $("#ea-test").onclick=async()=>{ const res=$("#ea-res"); res.innerHTML=`<ul class="eatest"><li>… teste</li></ul>`;
     try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Erweiterung aktiv.</li><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li></ul>`; }
+    catch(e){ res.innerHTML=`<ul class="eatest"><li class="bad">✗ ${esc(e.message||e)}</li></ul>`; } };
+  $("#ea-arts").onclick=async()=>{ const res=$("#ea-res"), code=$("#ea-art").value.trim(); if(!code) return toast("Bitte eine Artikelnummer eintragen."); res.innerHTML=`<ul class="eatest"><li>… suche ${esc(code)}</li></ul>`;
+    try{ const j=await etronCall("product_find",{codes:[code]}); const hit=(j.items||[])[0], near=(j.near||{})[code]||[];
+      res.innerHTML=`<ul class="eatest">${hit?`<li class="ok">✓ Gefunden: ${esc(hit.name||"")} (etron-Artikel ${esc(String(hit.id))}${hit.active===false?", archiviert":""})</li>`:`<li class="bad">✗ ${esc(code)} nicht gefunden.</li>${near.map(p=>`<li>ähnlich: ${esc(p.code||"-")} / Barcode ${esc(p.barcode||"-")} · ${esc(p.name)}${p.active?"":" (archiviert)"}</li>`).join("")}`}</ul>`; }
     catch(e){ res.innerHTML=`<ul class="eatest"><li class="bad">✗ ${esc(e.message||e)}</li></ul>`; } };
   $("#ea-log").onclick=()=>{ let a=[]; try{ a=JSON.parse(localStorage.getItem("vb.dlog")||"[]"); }catch(e){} saveFile(`vorbestellungen-log-${today()}.txt`, new Blob([a.join("\r\n")||"(leer)"],{type:"text/plain;charset=utf-8"})); }; }
 function bindEtronApi(){ if(!S.desktop) return bindEtronWeb(); const st=$("#ea-st"); if(!st) return; let cur={};
