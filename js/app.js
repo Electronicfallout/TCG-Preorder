@@ -1197,9 +1197,10 @@ function renderExport(){
   bindOq();
   bindOdoo(rows);
   const runEt=async(cids)=>{ if(needStaff()) return; S.etRes=[]; const log=(t,cls)=>{ S.etRes.push(`<p class="${cls||""}">${t}</p>`); const res=$("#eres"); if(res) res.innerHTML=S.etRes.join(""); };
-    let ok=0; for(const cid of cids){ const list=rows.filter(o=>o.customerId===cid&&S.orders[o.id]?.status==="Zugeteilt"); if(!list.length) continue; const name=esc(S.customers[cid]?.name||"?");
-      try{ const id=await etronOrderFor(cid,list); ok++; log(`✓ ${name}: Auftrag${id?" "+id:""} angelegt (${list.length} Positionen)`,"ok"); }catch(e){ dlog("ERROR",`Auftrag Kunde ${cid} fehlgeschlagen: ${e.message||e}`); log(`✗ ${name}: ${esc(e.message||e)}`,"bad"); } }
-    toast(`${ok} Aufträge in etron angelegt`); return ok; };
+    let ok=0, errs=[]; dlog("INFO",`etron-Aufträge anlegen gestartet für Kunden ${cids.join(", ")}`); for(const cid of cids){ const list=rows.filter(o=>o.customerId===cid&&S.orders[o.id]?.status==="Zugeteilt"); if(!list.length){ dlog("WARN",`Kunde ${cid}: keine zugeteilten Positionen mehr`); errs.push("keine zugeteilten Positionen"); continue; } const name=esc(S.customers[cid]?.name||"?");
+      try{ const id=await etronOrderFor(cid,list); ok++; log(`✓ ${name}: Auftrag${id?" "+id:""} angelegt (${list.length} Positionen)`,"ok"); }catch(e){ dlog("ERROR",`Auftrag Kunde ${cid} fehlgeschlagen: ${e.message||e}`); errs.push(String(e.message||e)); log(`✗ ${name}: ${esc(e.message||e)}`,"bad"); } }
+    const box=$("#eres"); if(box) box.scrollIntoView({behavior:"smooth",block:"center"});
+    toast(errs.length?`${ok} Aufträge angelegt. Fehler: ${errs[0]}`:`${ok} Aufträge in etron angelegt`, errs.length?12000:4000); return ok; };
   const ea=$("#eall"); if(ea) ea.onclick=()=>{ const cids=[...new Set(rows.filter(o=>S.customers[o.customerId]?.etronId).map(o=>o.customerId))];
     $("#eallc").innerHTML=` <button class="sm danger" id="eallok">Ja, ${cids.length} Aufträge anlegen</button>`; $("#eallok").onclick=async()=>{ $("#eallok").disabled=true; ea.disabled=true; await runEt(cids); }; };
   app.querySelectorAll("[data-eone]").forEach(b=>b.onclick=async()=>{ b.disabled=true; await runEt([b.dataset.eone]); });
