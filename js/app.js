@@ -257,6 +257,10 @@ function renderProducts(){
     if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),release:$("#np-rel").value.trim(),unit:$("#np-unit").value.trim(),game:$("#np-game").value,received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="produkt-"+id; } };
 }
 
+function veTxt(n, ps){ if(n==null||!ps) return ""; const v=Math.floor(n/ps), r=n%ps; return v&&r?`${v} VE + ${r} Stk.`:v?`${v} VE`:`${r} Stk.`; }
+function veField(f, label, p){ const ps=p.packSize; const n=p[f];
+  return `<label>${label}<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="pd-${f}" type="number" min="0" value="${n??""}" style="flex:1" title="Stück">${ps?`<input id="ve-${f}" type="number" min="0" step="1" class="ve" value="${n!=null&&n%ps===0?n/ps:""}" placeholder="VE" title="In VE eintragen (1 VE = ${ps} Stück)"><span class="muted">VE</span>`:""}</span>${ps&&n!=null&&n%ps?`<span class="muted">= ${veTxt(n,ps)}</span>`:""}</label>`; }
+
 function renderProduct(pid){
   const p = S.products[pid]; if(!p){ app.innerHTML=`<a class="back" href="#produkte">← Produkte</a><div class="empty">Dieses Produkt gibt es nicht mehr.</div>`; return; }
   const s = stats(p); const sug = S.sugg[pid];
@@ -272,7 +276,7 @@ function renderProduct(pid){
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
     ${s.flex?`<div class="tile"><b>+${s.flex}</b><span>egal welches (Serie)</span></div>`:""}
-    <div class="tile"><b>${s.rec??"–"}</b><span>Wareneingang</span></div>
+    <div class="tile"><b>${s.rec??"–"}</b><span>Wareneingang${p.packSize&&s.rec!=null?` (${veTxt(s.rec,p.packSize)})`:""}</span></div>
     <div class="tile"><b>${s.alloc}</b><span>zugeteilt</span></div>
     <div class="tile ${s.over?"bad":s.free===0?"ok":""}"><b>${s.free??"–"}</b><span>noch frei</span></div>
     <div class="tile ${s.rec!=null&&s.pre>s.rec?"bad":""}"><b>${s.rec==null?"–":Math.max(0,s.pre-s.rec)}</b><span>Fehlmenge</span></div>
@@ -288,9 +292,10 @@ function renderProduct(pid){
       <label>Serie<input id="pd-series" value="${esc(p.series||"")}" placeholder="z. B. Mega Evolution"></label>
       <label>Spiel<select id="pd-game">${gameOptions(gameOf(p))}</select></label>
       <label>Einheit<input id="pd-unit" value="${esc(p.unit||"")}"></label>
-      <label>Beim Lieferanten bestellt<input id="pd-supplierOrdered" type="number" min="0" value="${p.supplierOrdered??""}"></label>
-      <label>Lieferant zugesagt<input id="pd-supplierConfirmed" type="number" min="0" value="${p.supplierConfirmed??""}"></label>
-      <label>Wareneingang (verfügbar)<input id="pd-received" type="number" min="0" value="${p.received??""}"></label>
+      <label>VE (Stück pro Karton)<input title="Verpackungseinheit" id="pd-packSize" type="number" min="1" step="1" value="${p.packSize??""}" placeholder="z. B. 8 Displays pro Karton"></label>
+      ${veField("supplierOrdered","Beim Lieferanten bestellt",p)}
+      ${veField("supplierConfirmed","Lieferant zugesagt",p)}
+      ${veField("received","Wareneingang (verfügbar)",p)}
     </div></div>
   <div class="panel"><div class="row spread"><h2>Zuteilung</h2>
     <div class="row">
@@ -319,7 +324,8 @@ function renderProduct(pid){
   </tbody></table></div>`;
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
-  ["name","msgName","articleNo","etronUrl","release","series","unit","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  ["name","msgName","articleNo","etronUrl","release","series","unit","packSize","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="packSize"&&v!=null&&!(v>=1&&Number.isInteger(v))){ el.value=p.packSize??""; return toast("Bitte eine ganze Zahl ab 1 eintragen."); } if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  if(p.packSize) ["supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#ve-"+f); el.onchange=()=>{ const v=num(el.value); write("products",pid,{[f]:v==null?null:v*p.packSize}).then(ok=>ok&&toast(v==null?"Gespeichert":`Gespeichert: ${v*p.packSize} Stück`)); }; });
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
   $("#del").onclick=()=>{ const own=ordersOf(pid), fl=flexOf(pid);
     $("#delc").innerHTML=` <button class="sm danger" id="delok">Ja: Produkt und ${own.length} Bestellungen endgültig löschen</button>`;
@@ -1043,7 +1049,7 @@ const WIKI = [
     <li><b>Speichern</b>.</li></ol>
     <p>Danach beim Kunden (Reiter <b>Kunden</b>, Name anklicken) <b>Telefon/E-Mail</b> und, wenn bekannt, die <b>etron-Kundennummer</b> eintragen. Die Telefonnummer braucht man für WhatsApp-Nachrichten, die etron-Nr. für den Export.</p>
     <p>Größere Listen können unter Einstellungen → „Excel-Liste importieren“ auf einmal eingelesen werden.</p>`],
-  ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen.</li>
+  ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen. Ist eine <b>Verpackungseinheit</b> hinterlegt (z. B. 8 Displays pro Karton), kann die Menge auch direkt in VE eingetragen werden; die Stückzahl wird dann ausgerechnet.</li>
     <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Dann <b>Vorschlag berechnen</b>.</li>
     <li>Vorschlag prüfen, eventuell einzelne Zahlen in der Tabelle ändern, dann <b>Vorschlag übernehmen</b>.</li>
     <li><b>Zuteilung abschließen</b> setzt alle Bestellungen mit Zuteilung auf „Zugeteilt“. Wer nichts bekommt, kann auf „Warteliste“ gesetzt werden.</li></ol>`],
