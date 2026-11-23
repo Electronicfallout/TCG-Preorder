@@ -75,6 +75,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/info", guard(handleInfo))
+	mux.HandleFunc("/api/ping", guard(handlePing))
+	mux.HandleFunc("/api/quit", guard(handleQuit))
+	mux.HandleFunc("/api/bye", handleBye)
 	mux.HandleFunc("/api/fs/read", guard(handleRead))
 	mux.HandleFunc("/api/fs/write", guard(handleWrite))
 	mux.HandleFunc("/api/fs/list", guard(handleList))
@@ -88,6 +91,7 @@ func main() {
 	mux.HandleFunc("/api/backup", guard(handleBackup))
 	mux.Handle("/", hostOnly(noCache(http.FileServer(http.Dir(webDir)))))
 
+	go watchWindows()
 	go func() {
 		for range time.Tick(time.Minute) {
 			seenMu.Lock()
@@ -191,6 +195,71 @@ func guard(f http.HandlerFunc) http.HandlerFunc {
 		}
 		touch()
 		f(w, r)
+	}
+}
+
+// ---------- Fenster beobachten: Programm beendet sich, wenn kein App-Fenster mehr offen ist ----------
+// Jedes Fenster meldet sich alle 20 s (/api/ping?id=…) und beim Schließen ab (/api/bye).
+var (
+	winMu    sync.Mutex
+	windows  = map[string]time.Time{}
+	everOpen bool
+)
+
+const winTimeout = 150 * time.Second // minimierte Fenster melden sich seltener
+
+func handlePing(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id != "" && len(id) < 64 {
+		winMu.Lock()
+		windows[id] = time.Now()
+		everOpen = true
+		winMu.Unlock()
+	}
+	jsonOut(w, 200, map[string]bool{"ok": true})
+}
+
+// sendBeacon beim Schließen: ohne eigenen Kopf möglich, daher Herkunft prüfen
+func handleBye(w http.ResponseWriter, r *http.Request) {
+	o := r.Header.Get("Origin")
+	if !okHost(r) || r.Method != "POST" || (o != "http://127.0.0.1:"+port && o != "http://localhost:"+port) {
+		http.Error(w, "nicht erlaubt", 403)
+		return
+	}
+	winMu.Lock()
+	delete(windows, r.URL.Query().Get("id"))
+	winMu.Unlock()
+	go func() { time.Sleep(5 * time.Second); exitIfNoWindows() }() // Neu laden (F5) meldet sich in der Zeit wieder an
+	w.WriteHeader(204)
+}
+
+func handleQuit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonOut(w, 405, map[string]string{"error": "method"})
+		return
+	}
+	jsonOut(w, 200, map[string]bool{"ok": true})
+	go func() { time.Sleep(300 * time.Millisecond); log.Println("beendet über Knopf"); os.Exit(0) }()
+}
+
+func exitIfNoWindows() {
+	winMu.Lock()
+	for id, t := range windows {
+		if time.Since(t) > winTimeout {
+			delete(windows, id)
+		}
+	}
+	n, ever := len(windows), everOpen
+	winMu.Unlock()
+	if ever && n == 0 {
+		log.Println("kein Fenster mehr offen, beende")
+		os.Exit(0)
+	}
+}
+
+func watchWindows() {
+	for range time.Tick(10 * time.Second) {
+		exitIfNoWindows()
 	}
 }
 

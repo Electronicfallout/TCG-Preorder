@@ -28,4 +28,5 @@ UPDATE
 Neue Version: Ordner "programm" ersetzen (geht auch, während das Programm
 läuft), danach das App-Fenster neu laden (F5). Vorbestellungen.exe nur
 ersetzen, wenn ausdrücklich dabei steht; dafür vorher auf allen PCs das
-App-Fenster schließen (das Programm beendet sich 15 Minuten danach selbst).
+App-Fenster schließen (das Programm beendet sich dann nach wenigen
+Sekunden selbst) oder Einstellungen -> "Programm beenden".

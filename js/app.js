@@ -1304,7 +1304,7 @@ function renderSettings(){
   app.innerHTML = `<div><h1>Einstellungen</h1><p class="sub">Version ${esc(APP_VERSION)} · ${isDisk ? `Programm auf diesem PC · Daten im Ordner <span class="mono">${esc(S.desktop.folder)}</span>` : isDb ? "Daten in der Dropbox (App-Ordner, Datei vorbestellungen.json)" : "Nur ausprobieren: Daten liegen nur in diesem Browser"}</p></div>
   ${wikiPanel()}
   <div class="panel"><h2>Speicher</h2><p>Status: <b>${esc(SYNC_TXT[S.doc.status] || S.doc.status)}</b>${S.doc.error ? ` <span class="muted">(${esc(S.doc.error)})</span>` : ""}</p>
-    <div class="row"><button id="syncnow">Jetzt abgleichen</button>${isDisk ? "" : `<button id="logout" class="danger">${isDb ? "Dropbox auf diesem Gerät trennen" : "Ausprobieren beenden"}</button>`}</div>
+    <div class="row"><button id="syncnow">Jetzt abgleichen</button>${isDisk ? `<button id="quit" class="danger">Programm beenden</button>` : `<button id="logout" class="danger">${isDb ? "Dropbox auf diesem Gerät trennen" : "Ausprobieren beenden"}</button>`}</div>
     <p class="muted">${isDisk ? "Der Dropbox-Client gleicht den Ordner zwischen den PCs ab. Speichern zwei PCs gleichzeitig, führt das Programm die Konfliktkopien automatisch zusammen." : "Trennen entfernt nur den Zugang auf diesem Gerät. Die Daten in der Dropbox bleiben."}</p></div>
   ${isDisk ? migratePanel() : ""}
   ${isDb ? `<div class="panel"><h2>Kollegen einladen</h2>
@@ -1324,7 +1324,8 @@ function renderSettings(){
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
   $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi();
-  if (isDisk) bindMigrate();
+  if (isDisk) { bindMigrate(); $("#quit").onclick = async () => { await S.doc.sync(); try { await desk("/api/quit", { method: "POST" }); } catch (e) {}
+    app.innerHTML = `<div class="panel setup"><h1>Programm beendet</h1><p class="sub">Alle Änderungen sind gespeichert. Dieses Fenster kann geschlossen werden.</p></div>`; setTimeout(() => window.close(), 800); }; }
   if ($("#logout")) $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
@@ -1457,7 +1458,11 @@ async function boot(){
   if (!cred) return renderConnect();
   S.cred = cred;
   S.provider = cred.kind === "disk" ? new DiskProvider() : cred.kind === "dropbox" ? new DropboxProvider(cred) : new LocalProvider();
-  if (S.desktop) document.title = "TCG Vorbestellungen";
+  if (S.desktop) { document.title = "TCG Vorbestellungen";
+    // beim Programm an- und abmelden, damit es sich beendet, sobald kein Fenster mehr offen ist
+    const wid = Math.random().toString(36).slice(2, 12); const ping = () => desk("/api/ping?id=" + wid).catch(() => {});
+    ping(); setInterval(ping, 20000); document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ping(); });
+    addEventListener("pagehide", () => { try { navigator.sendBeacon("/api/bye?id=" + wid); } catch (e) {} }); }
   S.doc = new SyncDoc(S.provider, DATA_PATH, null, "vb.cache");
   const cached = await S.doc.loadCache();
   S.db = makeDb(S.doc);
