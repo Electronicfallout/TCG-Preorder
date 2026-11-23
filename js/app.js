@@ -15,7 +15,7 @@ const num = v => (v === "" || v == null || isNaN(+v)) ? null : +v;
 const today = () => { const d=new Date(); return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,10); };
 const fmtDate = d => d ? d.split("-").reverse().join(".") : "";
 const pill = s => `<span class="pill s-${esc((s||"").split(" ")[0])}">${esc(s)}</span>`;
-function toast(t){const el=$("#toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,2600)}
+function toast(t,ms=2600){const el=$("#toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,ms)}
 const store = (k,v) => { try { if (v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v);} catch(e){ return null; } };
 
 // ---------- Kürzel
@@ -543,12 +543,54 @@ function bindEtronApi(){ const st=$("#ea-st"); if(!st) return; let cur={};
       res.innerHTML=`<ul class="eatest">${!auth&&/HTTP/.test(e.message)&&!/Anmeldung/.test(e.message)?'<li class="ok">✓ Anmeldung bei etron erfolgreich.</li>':""}<li class="bad">✗ ${esc(e.message)}${auth&&/Anmeldung/.test(e.message)?" Client Key/Secret prüfen.":""}</li></ul>`; } }; }
 
 // ---------- Übernahme aus dem alten System (Web-App mit Dropbox-App-Ordner) ins Programm
+// Abgleich: gleiche ID = derselbe Eintrag (neuerer Stand gewinnt). Bei paralleler Nutzung können dieselben Dinge
+// aber in beiden Systemen getrennt angelegt worden sein (andere ID). Eindeutige Fälle werden zusammengelegt,
+// unklare als mögliche Dubletten gemeldet.
+const IMPORT_COLS = ["products","customers","orders","templates","staff","config","games"];
+function snapshot(o){ const s={}; for(const c of IMPORT_COLS){ s[c]={}; for(const [id,r] of Object.entries(o?.[c]||{})) s[c][id]=stable(r); } return s; }
+const digitsOnly = t => String(t||"").replace(/\D/g,"").replace(/^(00|0)?43/,"").replace(/^0/,"");
+async function dedupeAfterImport(before, src){
+  const st={ cols:{}, newTotal:0, updTotal:0, prodMerged:0, custMerged:0, orderDup:0, dupes:0 };
+  const after=S.doc.obj;
+  for(const c of IMPORT_COLS){ const x={neu:0,abgeglichen:0,gleich:0};
+    for(const id of Object.keys(src?.[c]||{})){ const r=after?.[c]?.[id]; if(!r||r.deleted) continue;
+      if(!(id in before[c])) x.neu++; else if(before[c][id]!==stable(r)) x.abgeglichen++; else x.gleich++; }
+    st.cols[c]=x; st.newTotal+=x.neu; st.updTotal+=x.abgeglichen; }
+  const isNew=(c,id)=>!(id in before[c]);
+  // Produkte: gleicher Name und gleiches Spiel -> zusammenlegen
+  for(const p of Object.values(S.products).filter(p=>isNew("products",p.id))){
+    const x=Object.values(S.products).find(q=>q.id!==p.id && !isNew("products",q.id) && q.name.trim().toLowerCase()===p.name.trim().toLowerCase() && gameOf(q)===gameOf(p)); if(!x) continue;
+    for(const o of Object.values(S.orders)){ if(o.productId===p.id) await write("orders",o.id,{productId:x.id});
+      else if((o.choices||[]).includes(p.id)) await write("orders",o.id,{choices:[...new Set(o.choices.map(c=>c===p.id?x.id:c))]}); }
+    const pt={}; for(const f of ["articleNo","etronUrl","msgName","series","release","unit","packSize","received","supplierOrdered","supplierConfirmed"]) if((x[f]==null||x[f]==="")&&p[f]!=null&&p[f]!=="") pt[f]=p[f];
+    if(Object.keys(pt).length) await write("products",x.id,pt);
+    await write("products",p.id,null,"delete"); st.prodMerged++; pull(); }
+  // Kunden: gleicher Vor-/Nachname (auch vertauscht), Telefon passt (gleich oder eines leer), etron-Nr. widerspricht nicht
+  for(const c of Object.values(S.customers).filter(c=>isNew("customers",c.id))){
+    const tc=digitsOnly(contactFields(c).tel), np=nameParts(c);
+    const x=Object.values(S.customers).find(q=>{ if(q.id===c.id||isNew("customers",q.id)) return false; const a=norm(q.name);
+      if(a!==norm(np.first+" "+np.last) && a!==norm(np.last+" "+np.first)) return false;
+      const tq=digitsOnly(contactFields(q).tel); if(tc&&tq&&tc!==tq) return false;
+      return !(c.etronId&&q.etronId&&String(c.etronId)!==String(q.etronId)); });
+    if(x && await mergeCustomers(c.id,x.id)){ st.custMerged++; pull(); } }
+  // Bestellungen: gleicher Kunde, gleiches Produkt, gleiche Menge, gleiches Datum -> doppelt
+  const key=o=>[o.customerId,o.productId||"",(o.choices||[]).slice().sort().join("+"),o.qty,o.date||""].join("|");
+  const old=new Map(Object.values(S.orders).filter(o=>!isNew("orders",o.id)).map(o=>[key(o),o]));
+  for(const o of Object.values(S.orders).filter(o=>isNew("orders",o.id))){ if(old.has(key(o))){ await write("orders",o.id,null,"delete"); st.orderDup++; } }
+  pull();
+  st.dupes=Object.values(S.customers).filter(c=>isNew("customers",c.id) && dupesOf(c).length).length;
+  return st; }
+function importReport(st){ const L={products:"Produkte",customers:"Kunden",orders:"Bestellungen",templates:"Vorlagen",staff:"Mitarbeiter",config:"Einstellungen",games:"Spiele"};
+  const rows=IMPORT_COLS.filter(c=>st.cols[c]&&(st.cols[c].neu+st.cols[c].abgeglichen+st.cols[c].gleich)).map(c=>`<tr><td>${L[c]}</td><td class="n">${st.cols[c].neu}</td><td class="n">${st.cols[c].abgeglichen}</td><td class="n">${st.cols[c].gleich}</td></tr>`).join("");
+  return `<div class="tablebox" style="margin-top:6px"><table><thead><tr><th></th><th class="n">neu</th><th class="n">abgeglichen</th><th class="n">schon gleich</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p>${st.prodMerged?`✓ ${st.prodMerged} doppelt angelegte Produkte (gleicher Name) zusammengelegt. `:""}${st.custMerged?`✓ ${st.custMerged} doppelt angelegte Kunden (gleicher Name, Telefon passt) zusammengeführt. `:""}${st.orderDup?`✓ ${st.orderDup} doppelte Bestellungen (gleicher Kunde, Produkt, Menge, Datum) entfernt. `:""}</p>
+    ${st.dupes?`<div class="note">${st.dupes} neu übernommene Kunden sehen anderen Kunden ähnlich. Bitte unter <a href="#dubletten">Dubletten</a> prüfen.</div>`:`<p class="ok">Keine weiteren möglichen Dubletten.</p>`}`; }
 function migratePanel(){
   return `<div class="panel"><h2>Daten aus dem alten System übernehmen</h2>
-    <p class="muted">Übernimmt alle Produkte, Kunden, Bestellungen, Vorlagen, Mitarbeiter, Einstellungen und das Protokoll aus dem bisherigen Dropbox-App-Ordner (<span class="mono">Dropbox\\Apps\\…</span>) in den Ordner dieses Programms. Vorher wird eine Sicherung angelegt. Vorhandene Daten werden nicht gelöscht, sondern zusammengeführt (pro Eintrag gewinnt der neuere Stand). Liegt das Programm schon im alten Ordner, ist nichts zu tun.</p>
+    <p class="muted">Übernimmt alle Produkte, Kunden, Bestellungen, Vorlagen, Mitarbeiter, Einstellungen und das Protokoll aus dem bisherigen Dropbox-App-Ordner (<span class="mono">Dropbox\\Apps\\…</span>) in den Ordner dieses Programms. Vorher wird eine Sicherung angelegt. Vorhandene Daten werden nicht gelöscht, sondern abgeglichen: gleiche Einträge werden zusammengeführt (der neuere Stand gewinnt), doppelt angelegte Produkte, Kunden und Bestellungen werden erkannt. Die Übernahme kann beliebig oft wiederholt werden, z. B. solange die Web-Version parallel läuft. Liegt das Programm schon im alten Ordner, ist nichts zu tun.</p>
     <div id="mg-c" class="muted">Suche alten Ordner …</div>
     <div class="row" style="margin-top:8px"><input id="mg-p" placeholder="oder Ordner von Hand: C:\\Users\\…\\Dropbox\\Apps\\…" style="flex:1 1 360px"><button id="mg-go" class="pri">Übernehmen</button></div>
-    <div id="mg-r"></div></div>`; }
+    <div id="mg-r">${S.lastImport?`<p><b>Ergebnis der letzten Übernahme:</b></p>`+importReport(S.lastImport):""}</div></div>`; }
 function bindMigrate(){ const c=$("#mg-c"); if(!c) return;
   desk("/api/migrate/candidates").then(r=>r.json()).then(list=>{
     if(!list.length){ c.innerHTML="Kein alter Ordner mit <span class=\"mono\">vorbestellungen.json</span> gefunden. Bitte den Ordner unten von Hand eintragen."; return; }
@@ -563,16 +605,19 @@ function bindMigrate(){ const c=$("#mg-c"); if(!c) return;
       const lr=await desk("/api/migrate/list?"+q); const files=await lr.json(); if(!lr.ok) throw new Error(files.error||lr.status);
       const bk=await (await desk("/api/backup",{method:"POST"})).json(); if(bk.error) throw new Error("Sicherung fehlgeschlagen: "+bk.error);
       say(`✓ Sicherung angelegt: <span class="mono">${esc(bk.folder)}</span> (${bk.files} Dateien)`,"ok");
-      let n=0;
+      let n=0, stats=null;
       for(const f of files){
         const sr=await desk("/api/migrate/read?"+q+"&path="+encodeURIComponent(f)); if(!sr.ok) continue; const srcObj=JSON.parse(await sr.text());
-        if(f==="vorbestellungen.json"){ await S.doc.sync(); S.doc.update(o=>{ const m=merge(o,srcObj); for(const k of Object.keys(o)) delete o[k]; Object.assign(o,m); }); await S.doc.sync(); }
+        if(f==="vorbestellungen.json"){ await S.doc.sync(); const before=snapshot(S.doc.obj);
+          S.doc.update(o=>{ const m=merge(o,srcObj); for(const k of Object.keys(o)) delete o[k]; Object.assign(o,m); }); pull();
+          stats=await dedupeAfterImport(before, srcObj); await S.doc.sync(); }
         else { for(let t=0;t<5;t++){ const cur=await S.provider.read(f); const m=cur?merge(cur.data,srcObj):srcObj; try{ await S.provider.write(f,m,cur?cur.rev:null); break; }catch(e){ if(!e.conflict) throw e; } } }
         n++;
       }
       say(`✓ ${n} Dateien übernommen (Daten und ${n-1} Protokollmonate). Anzahl jetzt: ${Object.keys(S.products).length} Produkte, ${Object.keys(S.customers).length} Kunden, ${Object.keys(S.orders).length} Bestellungen.`,"ok");
+      if(stats) say(importReport(stats),"");
       say(`Bitte kurz prüfen. Die Web-Version arbeitet weiter mit dem alten Ordner; neue Einträge dort kann man jederzeit erneut übernehmen.`,"muted");
-      S.log=null; S.logP=null; toast(`Übernahme fertig: ${n} Dateien, Sicherung in ${bk.folder}`); pull(); render(); }
+      S.log=null; S.logP=null; S.lastImport=stats; toast(`Übernahme fertig: ${stats?stats.newTotal+" neu, "+stats.updTotal+" abgeglichen, ":""}${stats?.dupes?stats.dupes+" mögliche Dubletten, ":""}Sicherung in ${bk.folder}`,8000); pull(); render(); }
     catch(e){ say("✗ "+esc(e.message||e),"bad"); }
     b.disabled=false; }; }
 
