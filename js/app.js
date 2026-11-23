@@ -460,6 +460,15 @@ function msgDialog(ids){
 function drawStaffList(){ let dl=document.getElementById("staff-dl"); if(!dl){ dl=document.createElement("datalist"); dl.id="staff-dl"; document.body.appendChild(dl); staffEl.setAttribute("list","staff-dl"); }
   dl.innerHTML=Object.values(S.staff||{}).map(m=>`<option value="${esc(m.kuerzel)}">${esc(m.name||"")}</option>`).join("");
   markStaff(); }
+function etronPanel(){ const t=(S.config?.etron||{}).customerUrl||"";
+  return `<div class="panel"><h2>etron-Kundenkonto verlinken</h2>
+    <p class="muted">Damit bei Kunden mit etron-Kundennr. ein Link „In etron öffnen“ erscheint: In etron einen Kunden öffnen, die Adresse aus dem Browser kopieren und hier einfügen. An die Stelle der Kundennummer kommt <b>{Nr}</b>. Steht in der Adresse <code>id=123</code>, wird das automatisch ersetzt.</p>
+    <div class="row"><input id="et-url" value="${esc(t)}" placeholder="https://…/web#id={Nr}&model=res.partner&view_type=form" style="flex:1 1 360px"><button id="et-save" class="pri">Speichern</button></div>
+    ${t&&!t.includes("{Nr}")?`<div class="note bad">Die Vorlage enthält kein {Nr}. Bitte die Kundennummer in der Adresse durch {Nr} ersetzen.</div>`:""}</div>`; }
+function bindEtron(){ const b=$("#et-save"); if(!b) return; b.onclick=()=>{ let v=$("#et-url").value.trim();
+  if(v && !/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen.");
+  if(v && !v.includes("{Nr}") && /([?#&])id=\d+/.test(v)) { v=v.replace(/([?#&])id=\d+/, "$1id={Nr}"); toast("id=… wurde durch {Nr} ersetzt."); }
+  write("config","etron",{...(S.config?.etron||{}),customerUrl:v},"set").then(ok=>ok&&toast("Gespeichert")); }; }
 function gamesPanel(){
   const cnt={}; Object.values(S.products).forEach(p=>{ const g=gameOf(p); cnt[g]=(cnt[g]||0)+1; });
   return `<div class="panel"><h2>Spielsysteme</h2>
@@ -675,7 +684,7 @@ function renderCustomers(){
   app.innerHTML=`<div><h1>Kunden</h1><p class="sub">${Object.keys(S.customers).length} Kunden, davon ${Object.values(S.customers).filter(c=>!c.etronId).length} ohne etron-Nr. ${dn?`${dn} sehen nach Dublette aus: <a class="back" href="#dubletten">jetzt prüfen</a>.`:""}</p></div>
   <div class="row"><input id="cq" class="search" placeholder="Kunde suchen" value="${esc(S.cq||"")}"><label class="row muted"><input type="checkbox" id="cdup" ${onlyD?"checked":""}> Nur mögliche Dubletten</label><label class="row muted"><input type="checkbox" id="cnoe" ${S.cnoe?"checked":""}> Nur ohne etron-Nr.</label><label class="row muted"><input type="checkbox" id="cunc" ${S.cunc?"checked":""}> Vor-/Nachname ungeprüft (${Object.values(S.customers).filter(c=>!nameChecked(c)).length})</label></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>etron-Nr.</th><th>Kontakt</th><th class="n">Bestellungen</th><th class="n">Stück offen</th><th>Ähnlich</th></tr></thead><tbody>
-  ${cs.map(c=>`<tr class="click" data-go="kunde-${c.id}"><td>${custFlags(c)}<a href="#kunde-${c.id}">${esc(c.name)}</a></td><td><input data-cf="${c.id}" id="e-${c.id}" style="width:110px" value="${esc(c.etronId||"")}" placeholder="fehlt"></td><td>${esc(c.contact||"")}</td><td class="n">${counts[c.id]?.n||0}</td><td class="n">${counts[c.id]?.open||""}</td><td>${c.d.map(x=>esc(x.name)).join(", ")}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Kein Kunde gefunden.</td></tr>`}
+  ${cs.map(c=>`<tr class="click" data-go="kunde-${c.id}"><td>${custFlags(c)}<a href="#kunde-${c.id}">${esc(c.name)}</a></td><td><input data-cf="${c.id}" id="e-${c.id}" style="width:110px" value="${esc(c.etronId||"")}" placeholder="fehlt">${etronUrl(c)?` <a href="${esc(etronUrl(c))}" target="_blank" rel="noopener" title="In etron öffnen">↗</a>`:""}</td><td>${esc(c.contact||"")}</td><td class="n">${counts[c.id]?.n||0}</td><td class="n">${counts[c.id]?.open||""}</td><td>${c.d.map(x=>esc(x.name)).join(", ")}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Kein Kunde gefunden.</td></tr>`}
   </tbody></table></div>`;
   $("#cq").oninput=e=>{S.cq=e.target.value;render();};
   $("#cdup").onchange=e=>{S.cdup=e.target.checked;renderCustomers();};
@@ -697,7 +706,7 @@ function renderCustomer(cid){
     <label>Vorname<input id="cd-fn" value="${esc(nameParts(c).first)}"></label>
     <label>Nachname<input id="cd-ln" value="${esc(nameParts(c).last)}"></label>
     <label><span>&nbsp;</span><span class="row" style="gap:6px"><button type="button" class="sm" id="cd-swap">⇄ Vertauschen</button>${nameChecked(c)?"":`<button type="button" class="sm pri" id="cd-ok">Stimmt so</button>`}</span></label>
-    <label>etron-Kundennr.<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
+    <label>etron-Kundennr.${etronLink(c)?` <span style="float:right">${etronLink(c)}</span>`:""}<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
     <label class="row muted" style="gap:6px;align-self:end"><input type="checkbox" id="cd-wa" ${c.noWhatsapp?"":"checked"}> Hat WhatsApp</label>
     <label class="wide">Notiz<input id="cd-note" value="${esc(c.note||"")}"></label></div></div>
@@ -771,7 +780,7 @@ function renderDupes(){
 }
 function exportRows(){ return Object.values(S.orders).filter(o=>o.status==="Zugeteilt"&&(o.alloc||0)>0&&inGame(S.products[o.productId])).sort((a,b)=>(S.customers[a.customerId]?.name||"").localeCompare(S.customers[b.customerId]?.name||"","de")||sortOrders(a,b)); }
 // ---------- Odoo-Import (etron onRetail = Odoo 16): Verkaufsaufträge, ein Auftrag pro Kunde, Folgezeilen ohne Kopfdaten
-const odooCfg = () => ({ key: "ref", ...(S.config?.odoo || {}) });
+const odooCfg = () => ({ key: "id", ...(S.config?.odoo || {}) }); // etron-Kundennr. = Odoo-Partner-ID (Tommy, 23.11.)
 function odooCsv(rows){
   const cfg=odooCfg(); const q=v=>{v=String(v??"");return /[,"\n]/.test(v)?`"${v.replace(/"/g,'""')}"`:v};
   const tag=(cfg.tag||"").split(",").map(x=>x.trim()).filter(Boolean).join(",");
@@ -783,6 +792,9 @@ function odooCsv(rows){
       out.push([i?"":(c.etronId||""), i?"":`Vorbestellung ${fmtDate(today())}`, ...(tag?[i?"":tag]:[]), p.articleNo||p.name||"", o.alloc]); }); }
   return "\ufeff"+out.map(r=>r.map(q).join(",")).join("\r\n");
 }
+// Link zum Kundenkonto in etron: Vorlage aus den Einstellungen, {Nr} = etron-Kundennr.
+const etronUrl = c => { const t=(S.config?.etron||{}).customerUrl||""; if(!t||!c?.etronId||!/^https?:\/\//.test(t)) return ""; return t.replace(/\{Nr\}/g, encodeURIComponent(String(c.etronId).trim())); };
+const etronLink = (c, label="In etron öffnen") => { const u=etronUrl(c); return u?`<a class="back" href="${esc(u)}" target="_blank" rel="noopener" title="Kundenkonto in etron öffnen">${label} ↗</a>`:""; };
 function odooPanel(rows){
   const cfg=odooCfg(); const noC=[...new Set(rows.filter(o=>!S.customers[o.customerId]?.etronId).map(o=>S.customers[o.customerId]?.name||"?"))];
   const noA=[...new Set(rows.filter(o=>!S.products[o.productId]?.articleNo).map(o=>S.products[o.productId]?.name||"?"))];
@@ -823,7 +835,7 @@ function renderExport(){
   <div class="row">${oqInput()}</div>
   ${odooPanel(rows)}
   <div class="row"><button class="pri" id="dl" ${rows.length?"":"disabled"}>CSV herunterladen</button><button id="cp" ${rows.length?"":"disabled"}>Als Text kopieren</button><button id="mk" ${rows.length&&S.canWrite?"":"disabled"}>Alle als „Auftrag angelegt“ markieren</button><span id="mkc"></span></div>
-  ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2>${custFlags({...c,id:cid})}<a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
+  ${shownRows.length?Object.entries(byC).map(([cid,list])=>{const c=S.customers[cid]||{};return `<div class="panel"><div class="row spread"><h2>${custFlags({...c,id:cid})}<a class="back" href="#kunde-${cid}">${esc(c.name||"?")}</a></h2><span class="muted">${c.etronId?"etron-Nr. "+esc(c.etronId)+" "+etronLink({...c,id:cid}):'<span style="color:var(--bad);font-weight:600">etron-Nr. fehlt</span>'} · ${esc(c.contact||"")}</span></div>
     <div class="tablebox"><table><thead><tr><th>Produkt</th><th class="n">Menge</th><th>Kommentar</th><th>Auftrag angelegt</th><th>Nachricht</th></tr></thead><tbody>${list.map(o=>`<tr class="${o.status==="Auftrag angelegt"?"dim":""}"><td>${esc(S.products[o.productId]?.name||"?")}${S.products[o.productId]?.articleNo?` <span class="muted">Art.-Nr. ${esc(S.products[o.productId].articleNo)}</span>`:""}${/^https?:\/\//.test(S.products[o.productId]?.etronUrl||"")?` <a href="${esc(S.products[o.productId].etronUrl)}" target="_blank" rel="noopener">etron</a>`:""}</td><td class="n">${o.alloc}</td><td>${esc(o.comment||"")}</td><td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td></tr>`).join("")}</tbody></table></div></div>`}).join(""):`<div class="empty">Gerade nichts zu exportieren. Sobald bei einem Produkt die Zuteilung abgeschlossen ist, erscheinen die Kunden hier.</div>`}
   <div class="panel"><h2>Gesamtsicherung</h2><p class="muted">Alle Produkte, Kunden und Bestellungen als eine JSON-Datei, z. B. für den Umzug in die Dropbox.</p><div class="row"><button id="bk">Alle Daten exportieren (JSON)</button></div></div>
   <textarea id="ta" hidden rows="6" style="width:100%"></textarea>`;
@@ -1028,6 +1040,7 @@ function renderSettings(){
   ${isDb ? `<div class="panel"><h2>Kollegen einladen</h2>
     <p class="muted">Mit diesem Code kann ein weiteres Gerät auf denselben Dropbox-App-Ordner zugreifen (nicht auf den Rest der Dropbox). Nur an Mitarbeiter weitergeben.</p>
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
+  ${etronPanel()}
   ${gamesPanel()}
   ${staffPanel()}
   ${templatesPanel()}
@@ -1039,7 +1052,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames();
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron();
   $("#logout").onclick = () => { $("#logout").outerHTML = `<button id="lo2" class="danger">Wirklich trennen?</button>`; $("#lo2").onclick = () => { LS.del("vb.cred"); LS.del("vb.cache"); location.hash = ""; location.reload(); }; };
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
