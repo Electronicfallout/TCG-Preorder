@@ -599,15 +599,13 @@ const EW_ACTIONS = {
   async product_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
     const r=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],"|","|",["name","ilike",q],["default_code","ilike",q],["barcode","ilike",q]],fields:["id","default_code","barcode","name","active"],limit:25}));
     dlog("INFO",`Artikelsuche nach Name/Nummer: ${r.length} Treffer`); return {items:r.map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,120),active:p.active!==false}))}; },
-  async product_by_id(c,b){ const n=parseInt(b.id,10); if(!(n>0)) throw new Error("ungültige etron-Artikel-ID"); const F=["id","default_code","name","active","product_tmpl_id"];
-    const hits=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],"|",["id","=",n],["product_tmpl_id","=",n]],fields:F,limit:20}));
-    const tid=p=>Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id;
-    const code=String(b.code||"").trim().toUpperCase(); const byCode=hits.filter(p=>code&&String(p.default_code||"").trim().toUpperCase()===code);
-    const direct=hits.filter(p=>p.id===n), tmpl=hits.filter(p=>tid(p)===n);
-    dlog("INFO",`Artikel-ID ${n}: ${hits.length} Treffer (${hits.map(p=>"Artikel "+p.id+"/Vorlage "+tid(p)+"/"+(p.default_code||"-")+(p.active===false?" archiviert":"")).join(", ")||"keine"})`);
-    const cand=[...new Set([...direct,...tmpl])]; const pick=byCode.length===1?byCode[0]:cand.length===1?cand[0]:null;
-    if(!pick){ if(!hits.length) throw new Error(`etron-Artikel-ID ${n} gibt es in etron nicht`); throw new Error(`etron-Artikel-ID ${n} ist nicht eindeutig (${hits.map(p=>(p.default_code||"ohne Nr.")+": "+ewStr(p.name,40)).join("; ")}). Bitte die Artikelnummer dazu eintragen.`); }
-    return {id:pick.id,default_code:pick.default_code||"",name:ewStr(pick.name,80),active:pick.active!==false}; },
+  async product_by_id(c,b){ const n=parseInt(b.id,10); if(!(n>0)) throw new Error("ungültige etron-Artikel-ID"); const F=["id","default_code","name","active"];
+    const hits=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],["id","=",n]],fields:F,limit:2}));
+    const p=hits.find(x=>x.id===n); dlog("INFO",`Artikel-ID ${n}: ${p?(p.default_code||"ohne Nr.")+(p.active===false?" archiviert":""):"nicht gefunden"}`);
+    if(!p) throw new Error(`etron-Artikel-ID ${n} gibt es in etron nicht. Bitte oben auf der Produktseite mit „Artikel in etron suchen“ den Artikel neu übernehmen.`);
+    const code=String(b.code||"").trim().toUpperCase(), pc=String(p.default_code||"").trim().toUpperCase();
+    if(code&&pc&&code!==pc) throw new Error(`etron-Artikel-ID ${n} ist „${ewStr(p.name,60)}“ (Art.-Nr. ${p.default_code}), beim Produkt steht aber Art.-Nr. ${b.code}. Sicherheitshalber kein Auftrag. Bitte oben auf der Produktseite den richtigen Artikel neu übernehmen.`);
+    return {id:p.id,default_code:p.default_code||"",name:ewStr(p.name,80),active:p.active!==false}; },
   async order_create(c,b){ const partner=parseInt(b.partner_id,10); if(!partner) throw new Error("etron-Kundennummer fehlt");
     const lines=(b.lines||[]).slice(0,50).map(l=>({product_id:parseInt(l.product_id,10),product_uom_qty:Math.max(1,Math.min(9999,parseInt(l.qty,10)||0))})).filter(l=>l.product_id);
     if(!lines.length) throw new Error("Keine Auftragszeilen");
