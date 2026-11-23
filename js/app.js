@@ -592,14 +592,14 @@ function orderForm(k, pid, cid, only){
   return `<div class="panel"><h2>Neue Bestellung erfassen</h2>
   <form class="form" id="${k}-f">
     ${pid?"":`<label class="wide">Produkt<select id="${k}-p" required><option value="">Produkt wählen</option>${prods.map(p=>`<option value="${p.id}">${S.game==="Alle"?esc(gameOf(p))+" · ":""}${esc(p.name)}</option>`).join("")}</select></label>`}
-    ${cid?"":`<label>Vorname<input id="${k}-fn" required autocomplete="off" placeholder="Vorname"></label><label>Nachname<input id="${k}-ln" required autocomplete="off" placeholder="Nachname"></label>`}
+    ${cid?"":custPicker(k)}
     <label class="wide" id="${k}-ml" hidden>Bei dieser Serie<select id="${k}-m"></select></label>
     <label>Menge (Stück)<input id="${k}-q" type="number" min="1" required></label>
     <label>Bestelldatum<input id="${k}-d" type="date" value="${today()}"></label>
     <label class="wide">Kommentar<input id="${k}-k" placeholder="z. B. 1 Case = 12 Stück"></label>
     <label><span>&nbsp;</span><select id="${k}-s"><option>Offen</option><option>Warteliste</option></select></label>
     <button class="pri" ${S.canWrite?"":"disabled"}>Speichern</button>
-  </form><div id="${k}-hint"></div>
+  </form><div id="${k}-hint"></div><div id="${k}-ncbox"></div>
   <p class="muted">Nachbestellung = neue Zeile mit der zusätzlichen Menge. Cases vorher in Stück umrechnen.</p></div>`;
 }
 // mode: one = nur dieses Produkt, any = egal welches der Serie, all = je eine Bestellung pro Produkt der Serie
@@ -608,15 +608,58 @@ async function saveOrder(o, mode, sib){
   if (mode==="all"){ const pair=newId("g"); let ok=true; for(const id of sib) ok = await write("orders",newId("o"),{...o,productId:id,pairId:pair},"set") && ok; return ok; }
   return write("orders",newId("o"),o,"set");
 }
+// ---------- Kunden: auswählen und gezielt neu anlegen (keine automatischen Neuanlagen mehr)
+const digits = t => String(t||"").replace(/\D/g,"").replace(/^(00|0)?43/,"").replace(/^0/,"");
+function custLabel(c){ const t=contactFields(c).tel; return `${esc(c.name)}${t?` <span class="muted">${esc(t)}</span>`:""}${c.etronId?` <span class="muted">· Nr. ${esc(c.etronId)}</span>`:""}`; }
+function custPicker(k){ const sel=S.pick?.[k] && S.customers[S.pick[k]];
+  return `<label class="wide" id="${k}-cpl">Kunde${sel?`<span class="row" style="gap:8px;flex-wrap:nowrap"><span class="picked">${custLabel(sel)}</span><button type="button" class="sm" id="${k}-cx">Anderen wählen</button></span>`
+    :`<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="${k}-cq" autocomplete="off" placeholder="Kunde suchen: Vor- oder Nachname, Telefon, etron-Nr." style="flex:1"><button type="button" class="sm" id="${k}-nc">+ Neuer Kunde</button></span>`}</label>`; }
+function custFind(q){ q=(q||"").trim(); if(q.length<2) return []; const dq=digits(q);
+  return Object.values(S.customers).filter(c=>nameMatch(q,c) || (dq.length>=4 && digits(contactFields(c).tel).includes(dq)) || String(c.etronId||"")===q).sort((a,b)=>a.name.localeCompare(b.name)).slice(0,10); }
+function custSimilar(fn, ln, tel){ const n=(fn+" "+ln).trim(); const dt=digits(tel);
+  return Object.values(S.customers).filter(c=>(n && similar(c.name,n)) || (ln && norm(nameParts(c).last)===norm(ln) && fn && norm(nameParts(c).first).startsWith(norm(fn).slice(0,2))) || (fn && ln && norm(nameParts(c).first)===norm(ln) && norm(nameParts(c).last)===norm(fn)) || (dt.length>=6 && digits(contactFields(c).tel)===dt)).slice(0,8); }
+function custNewForm(k, pre){ const [fn,...rest]=(pre||"").trim().split(/\s+/);
+  return `<div class="panel" id="${k}-nf"><h2>Neuen Kunden anlegen</h2><form class="form" id="${k}-nform">
+    <label>Vorname<input id="${k}-nfn" required autocomplete="off" value="${esc(rest.length?fn:"")}"></label>
+    <label>Nachname<input id="${k}-nln" required autocomplete="off" value="${esc(rest.length?rest.join(" "):fn||"")}"></label>
+    <label>Telefon<input id="${k}-ntel" type="tel" autocomplete="off" placeholder="+43 …"></label>
+    <label>E-Mail<input id="${k}-nmail" type="email" autocomplete="off"></label>
+    <label>etron-Nr.<input id="${k}-net" autocomplete="off" placeholder="falls bekannt"></label>
+    <label class="row muted" style="align-self:end"><input type="checkbox" id="${k}-nwa"> kein WhatsApp</label>
+    <button class="pri" id="${k}-nok" ${S.canWrite?"":"disabled"}>Kunden anlegen</button><button type="button" id="${k}-nx">Abbrechen</button>
+  </form><div id="${k}-nh"></div></div>`; }
+// onPick(cid, created) wird mit bestehendem oder neu angelegtem Kunden aufgerufen
+function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); const v=id=>$("#"+k+"-"+id).value.trim(); let okFor=null;
+  const ok=$("#"+k+"-nok"), h=$("#"+k+"-nh");
+  const check=()=>{ const fn=v("nfn"), ln=v("nln"), tel=v("ntel"); const key=norm(fn+"|"+ln+"|"+digits(tel));
+    const ex=fn&&ln?custByParts(fn,ln):null; const d=custSimilar(fn,ln,tel).filter(c=>c!==ex);
+    const btns=list=>list.map(c=>`<button type="button" class="sm" data-cid="${c.id}">${custLabel(c)}</button>`).join(" ");
+    if(ex){ h.innerHTML=`<div class="note bad">Diesen Kunden gibt es schon: ${btns([ex])} Bitte den vorhandenen verwenden.</div>`; ok.disabled=true; }
+    else if(d.length){ h.innerHTML=`<div class="note">Ähnliche Kunden gibt es schon: ${btns(d)}<br>Ist es einer davon, bitte anklicken. Nur wenn es wirklich jemand anderes ist: „Trotzdem neu anlegen“.</div>`; ok.disabled=!S.canWrite; ok.textContent= okFor===key?"Wirklich neu anlegen":"Trotzdem neu anlegen"; }
+    else { h.innerHTML=""; ok.disabled=!S.canWrite; ok.textContent="Kunden anlegen"; }
+    h.querySelectorAll("[data-cid]").forEach(b=>b.onclick=()=>{ box.innerHTML=""; onPick(b.dataset.cid,false); });
+    return {fn,ln,tel,key,ex,d}; };
+  ["nfn","nln","ntel"].forEach(id=>$("#"+k+"-"+id).oninput=check); check();
+  $("#"+k+"-nx").onclick=()=>{ box.innerHTML=""; };
+  $("#"+k+"-nform").onsubmit=async e=>{ e.preventDefault(); if(needStaff()) return; const r=check(); if(!r.fn||!r.ln) return toast("Bitte Vor- und Nachname eintragen."); if(r.ex) return;
+    if(r.d.length && okFor!==r.key){ okFor=r.key; check(); return toast("Bitte die ähnlichen Kunden prüfen, dann nochmal klicken."); }
+    const cid=newId("c"); const et=v("net"); const rec={name:r.fn+" "+r.ln,firstName:r.fn,lastName:r.ln,contact:joinContact(r.tel,v("nmail"),null),note:""};
+    if(et) rec.etronId=et; if($("#"+k+"-nwa").checked) rec.noWhatsapp=true; if(r.d.length) rec.notDupes=r.d.map(c=>c.id);
+    if(await write("customers",cid,rec,"set")){ toast("Kunde angelegt"); box.innerHTML=""; onPick(cid,true); } };
+  $("#"+k+"-nfn").focus(); }
 function bindOrderForm(k){
-  const f=$("#"+k+"-f"); if(!f) return; const fi=$("#"+k+"-fn"), li=$("#"+k+"-ln"), hint=$("#"+k+"-hint");
-  const check=()=>{ if(!fi) return; const fn=fi.value.trim(), ln=li.value.trim(), n=(fn+" "+ln).trim(); if(!n){hint.innerHTML="";return;}
-    const ex=fn&&ln?custByParts(fn,ln):null;
-    if(ex){ hint.innerHTML=`<p class="muted">Bestehender Kunde: <b>${esc(ex.name)}</b>${norm(ex.name)!==norm(n)?" (Vor- und Nachname waren vertauscht)":""}. Die Bestellung kommt zu diesem Kunden.</p>`; return; }
-    const d=Object.values(S.customers).filter(c=>similar(c.name,n) || (ln && norm(nameParts(c).last)===norm(ln) && fn && norm(nameParts(c).first).startsWith(norm(fn).slice(0,2))) || (fn && ln && norm(nameParts(c).first)===norm(ln) && norm(nameParts(c).last)===norm(fn))).slice(0,6);
-    hint.innerHTML = d.length?`<div class="note">„${esc(n)}“ ist neu. Meinst du ${d.map(c=>`<button type="button" class="sm" data-cid="${c.id}">${esc(c.name)}</button>`).join(" ")}? Sonst wird ein neuer Kunde angelegt.</div>`:(fn&&ln?`<p class="muted">Neuer Kunde: Vorname „${esc(fn)}“, Nachname „${esc(ln)}“.</p>`:"");
-    hint.querySelectorAll("[data-cid]").forEach(b=>b.onclick=()=>{ const pp=nameParts(S.customers[b.dataset.cid]); fi.value=pp.first; li.value=pp.last; S.pickCust=b.dataset.cid; check();}); };
-  if(fi){ fi.oninput=()=>{S.pickCust=null;check();}; li.oninput=()=>{S.pickCust=null;check();}; }
+  const f=$("#"+k+"-f"); if(!f) return; const hint=$("#"+k+"-hint"), box=$("#"+k+"-ncbox"); S.pick=S.pick||{};
+  const redraw=()=>{ $("#"+k+"-cpl").outerHTML=custPicker(k); bindPicker(); };
+  const pick=cid=>{ S.pick[k]=cid; hint.innerHTML=""; box.innerHTML=""; redraw(); $("#"+k+"-q")?.focus(); };
+  const bindPicker=()=>{ const cq=$("#"+k+"-cq");
+  if(cq){ const show=()=>{ const q=cq.value.trim(); if(q.length<2){ hint.innerHTML=""; return; } const r=custFind(q);
+      hint.innerHTML=`<div class="note">${r.length?`Kunde wählen: ${r.map(c=>`<button type="button" class="sm" data-cid="${c.id}">${custLabel(c)}</button>`).join(" ")}<br>Nicht dabei? `:`Kein Kunde gefunden. `}<button type="button" class="sm" id="${k}-nc2">+ „${esc(q)}“ als neuen Kunden anlegen</button></div>`;
+      hint.querySelectorAll("[data-cid]").forEach(b=>b.onclick=()=>pick(b.dataset.cid));
+      $("#"+k+"-nc2").onclick=()=>{ hint.innerHTML=""; openCustNew(k, box, q, pick); }; };
+    cq.oninput=show; cq.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); const b=hint.querySelector("[data-cid]"); if(b) b.click(); } }; }
+  $("#"+k+"-nc")?.addEventListener("click",()=>{ hint.innerHTML=""; openCustNew(k, box, cq?.value||"", pick); });
+  $("#"+k+"-cx")?.addEventListener("click",()=>{ delete S.pick[k]; redraw(); $("#"+k+"-cq")?.focus(); }); };
+  if($("#"+k+"-cpl")) bindPicker();
   const curPid=()=>{ const h=(location.hash||"").slice(1); return h.startsWith("produkt-")?h.slice(8):($("#"+k+"-p")?.value||""); };
   const modeUi=()=>{ const p=S.products[curPid()]; const sib=siblings(p); const ml=$("#"+k+"-ml"); if(!ml) return;
     ml.hidden = sib.length<2; if(sib.length<2) return;
@@ -627,12 +670,10 @@ function bindOrderForm(k){
     const h=(location.hash||"").slice(1); const pid=h.startsWith("produkt-")?h.slice(8):$("#"+k+"-p").value; if(!pid) return toast("Bitte Produkt wählen.");
     let cid = h.startsWith("kunde-")?h.slice(6):null;
     if(needStaff()) return;
-    if(!cid){ const fn=fi.value.trim(), ln=li.value.trim(); if(!fn||!ln) return toast("Bitte Vor- und Nachname eintragen.");
-      const ex=(S.pickCust&&S.customers[S.pickCust])||custByParts(fn,ln);
-      if(ex) cid=ex.id; else { cid=newId("c"); if(!await write("customers",cid,{name:fn+" "+ln,firstName:fn,lastName:ln,contact:"",note:""},"set")) return; } S.pickCust=null; }
+    if(!cid){ cid=S.pick[k]; if(!cid||!S.customers[cid]) { $("#"+k+"-cq")?.focus(); return toast("Bitte zuerst einen Kunden auswählen oder mit „+ Neuer Kunde“ anlegen."); } }
     const o={productId:pid,customerId:cid,qty:num($("#"+k+"-q").value),date:$("#"+k+"-d").value,staff:staff(),status:$("#"+k+"-s").value,alloc:null,comment:$("#"+k+"-k").value.trim(),createdAt:new Date().toISOString()};
     const mode=$("#"+k+"-ml")?.hidden===false ? $("#"+k+"-m").value : "one";
-    if(await saveOrder(o, mode, siblings(S.products[pid]).map(x=>x.id))){ toast("Bestellung gespeichert"); f.reset(); $("#"+k+"-d").value=today(); hint.innerHTML=""; }
+    if(await saveOrder(o, mode, siblings(S.products[pid]).map(x=>x.id))){ toast("Bestellung gespeichert"); delete S.pick[k]; render(); }
   };
 }
 
@@ -715,13 +756,14 @@ function renderCustomers(){
   const counts={}; Object.values(S.orders).forEach(o=>{ const c=counts[o.customerId]||(counts[o.customerId]={n:0,open:0}); if(COUNTS(o.status)){c.n++; if(o.status==="Offen"||o.status==="Zugeteilt") c.open+=(o.alloc||o.qty||0);} });
   const cs=Object.values(S.customers).map(c=>({...c,d:dupesOf(c)})).filter(c=>(!q||nameMatch(q,c)||String(c.etronId||"").includes(S.cq.trim())) && (!onlyD||c.d.length) && (!S.cnoe||!c.etronId) && (!S.cunc||!nameChecked(c))).sort((a,b)=>a.name.localeCompare(b.name,"de"));
   const dn=Object.values(S.customers).filter(c=>dupesOf(c).length).length;
-  app.innerHTML=`<div><h1>Kunden</h1><p class="sub">${Object.keys(S.customers).length} Kunden, davon ${Object.values(S.customers).filter(c=>!c.etronId).length} ohne etron-Nr. ${dn?`${dn} sehen nach Dublette aus: <a class="back" href="#dubletten">jetzt prüfen</a>.`:""}</p></div>
+  app.innerHTML=`<div class="row spread"><h1>Kunden</h1><button class="pri" id="cnew">+ Neuer Kunde</button></div><div id="cl-ncbox"></div><div><p class="sub">${Object.keys(S.customers).length} Kunden, davon ${Object.values(S.customers).filter(c=>!c.etronId).length} ohne etron-Nr. ${dn?`${dn} sehen nach Dublette aus: <a class="back" href="#dubletten">jetzt prüfen</a>.`:""}</p></div>
   <div class="row"><input id="cq" class="search" placeholder="Kunde suchen" value="${esc(S.cq||"")}"><label class="row muted"><input type="checkbox" id="cdup" ${onlyD?"checked":""}> Nur mögliche Dubletten</label><label class="row muted"><input type="checkbox" id="cnoe" ${S.cnoe?"checked":""}> Nur ohne etron-Nr.</label><label class="row muted"><input type="checkbox" id="cunc" ${S.cunc?"checked":""}> Vor-/Nachname ungeprüft (${Object.values(S.customers).filter(c=>!nameChecked(c)).length})</label></div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>etron-Nr.</th><th>Kontakt</th><th class="n">Bestellungen</th><th class="n">Stück offen</th><th>Ähnlich</th></tr></thead><tbody>
   ${cs.map(c=>`<tr class="click" data-go="kunde-${c.id}"><td>${custFlags(c)}<a href="#kunde-${c.id}">${esc(c.name)}</a></td><td><input data-cf="${c.id}" id="e-${c.id}" style="width:110px" value="${esc(c.etronId||"")}" placeholder="fehlt">${etronUrl(c)?` <a href="${esc(etronUrl(c))}" target="_blank" rel="noopener" title="In etron öffnen">↗</a>`:""}</td><td>${esc(c.contact||"")}</td><td class="n">${counts[c.id]?.n||0}</td><td class="n">${counts[c.id]?.open||""}</td><td>${c.d.map(x=>esc(x.name)).join(", ")}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Kein Kunde gefunden.</td></tr>`}
   </tbody></table></div>`;
   $("#cq").oninput=e=>{S.cq=e.target.value;render();};
   $("#cdup").onchange=e=>{S.cdup=e.target.checked;renderCustomers();};
+  $("#cnew").onclick=()=>openCustNew("cl", $("#cl-ncbox"), S.cq||"", cid=>{ location.hash="kunde-"+cid; });
   $("#cnoe").onchange=e=>{S.cnoe=e.target.checked;renderCustomers();};
   $("#cunc").onchange=e=>{S.cunc=e.target.checked;renderCustomers();};
   app.querySelectorAll("[data-cf]").forEach(el=>{ el.onclick=e=>e.stopPropagation(); el.onchange=()=>saveEtron(el.dataset.cf, el.value); });
@@ -1043,8 +1085,8 @@ const WIKI = [
     <li><b>Anlegen</b> klicken. Die Produktseite öffnet sich.</li></ol>
     <p>Varianten (Decks, Artworks) als eigenes Produkt anlegen, z. B. „ST45 | Rot“. Gehören zwei Produkte zu einem Doppel-Release, auf beiden Produktseiten unter <b>Produktdaten</b> dieselbe <b>Serie</b> eintragen. Dann gibt es eine gemeinsame Liste („Ganze Serie zuteilen“).</p>`],
   ["Vorbestellung aufnehmen (und neuen Kunden anlegen)", `<ol><li>Produkt in der Liste anklicken (oder einen Kunden unter <b>Kunden</b> öffnen).</li>
-    <li>Unten bei „Neue Bestellung erfassen“ <b>Vorname</b> und <b>Nachname</b> in die eigenen Felder eintragen. Gibt es den Kunden schon (auch mit vertauschtem Vor- und Nachnamen), wird die Bestellung automatisch ihm zugeordnet. Bei ähnlichen Namen erscheint „Meinst du …?“. Dann den vorhandenen Kunden anklicken, damit keine Doppelten entstehen.</li>
-    <li>Gibt es den Kunden noch nicht, wird er beim Speichern automatisch angelegt. Ähnliche Namen werden als Hinweis angezeigt („Meinst du …?“).</li>
+    <li>Bei „Neue Bestellung erfassen“ im Feld <b>Kunde</b> den Namen (oder Telefon / etron-Nr.) eintippen und den Kunden aus der Liste <b>auswählen</b>. Ohne ausgewählten Kunden kann keine Bestellung gespeichert werden.</li>
+    <li>Gibt es den Kunden noch nicht: <b>+ Neuer Kunde</b> anklicken (auch unter <b>Kunden</b> oben rechts) und Vorname, Nachname und Telefon eintragen. Die App zeigt ähnliche Kunden an (Name oder gleiche Telefonnummer). Ist es einer davon, bitte diesen anklicken statt neu anzulegen.</li>
     <li>Menge, Bestelldatum und eventuell einen Kommentar eintragen. Bei einer Serie wählen: nur dieses Produkt, „egal welches“ oder „beide“.</li>
     <li><b>Speichern</b>.</li></ol>
     <p>Danach beim Kunden (Reiter <b>Kunden</b>, Name anklicken) <b>Telefon/E-Mail</b> und, wenn bekannt, die <b>etron-Kundennummer</b> eintragen. Die Telefonnummer braucht man für WhatsApp-Nachrichten, die etron-Nr. für den Export.</p>
