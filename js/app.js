@@ -304,6 +304,7 @@ function renderProduct(pid){
     <div class="form">
       <label class="wide">Produktname<input id="pd-name" value="${esc(p.name||"")}"></label>
       <label>Artikelnummer<input id="pd-articleNo" value="${esc(p.articleNo||"")}" placeholder="etron-Artikelnr."></label>
+      <label>etron-Artikel-ID <span class="muted">(optional, hat Vorrang)</span><input id="pd-etronArtId" value="${esc(p.etronArtId||"")}" placeholder="z. B. 47411"></label>
       <label class="wide">etron-Link zum Artikel<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="pd-etronUrl" type="url" value="${esc(p.etronUrl||"")}" placeholder="https://… (Adresse aus dem Browser kopieren)" style="flex:1">${/^https?:\/\//.test(p.etronUrl||"")?`<a class="btn" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">Öffnen</a>`:""}</span></label>
       <label class="wide">Name in Kundennachrichten<input id="pd-msgName" value="${esc(p.msgName||"")}" placeholder="leer = Produktname (ohne Artikelnummer eintragen)"></label>
       <label>Release<input id="pd-release" value="${esc(p.release||"")}" placeholder="JJJJ-MM-TT, Q2 2027"></label>
@@ -342,7 +343,7 @@ function renderProduct(pid){
   </tbody></table></div>`;
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
-  ["name","msgName","articleNo","etronUrl","release","series","unit","packSize","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="packSize"&&v!=null&&!(v>=1&&Number.isInteger(v))){ el.value=p.packSize??""; return toast("Bitte eine ganze Zahl ab 1 eintragen."); } if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  ["name","msgName","articleNo","etronArtId","etronUrl","release","series","unit","packSize","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="packSize"&&v!=null&&!(v>=1&&Number.isInteger(v))){ el.value=p.packSize??""; return toast("Bitte eine ganze Zahl ab 1 eintragen."); } if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronArtId"&&v&&!artIdOf(v)){ el.value=p.etronArtId||""; return toast("Bitte nur die Zahl eintragen, z. B. 47411."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
   if(p.packSize) ["supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#ve-"+f); el.onchange=()=>{ const v=num(el.value); write("products",pid,{[f]:v==null?null:v*p.packSize}).then(ok=>ok&&toast(v==null?"Gespeichert":`Gespeichert: ${v*p.packSize} Stück`)); }; });
   bindAddVar(p);
   $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
@@ -551,7 +552,9 @@ const ewList = v => Array.isArray(v)?v:(v&&(v.data||v.result||v.records))||[];
 const ewStr = (v,n=120) => String(v??"").trim().slice(0,n);
 const EW_PARTNER_FIELDS = ["id","name","firstname","lastname","ref","phone","mobile","email"];
 const EW_ACTIONS = {
-  async ping(c){ await ewToken(c,true); const r=await ewCall(c,"GET","/search_extract/res.partner",{fields:["id"],limit:1}); return {ok:true,read:ewList(r).length}; },
+  async ping(c){ await ewToken(c,true); const r=await ewCall(c,"GET","/search_extract/res.partner",{fields:["id"],limit:1});
+    let prod=null, perr=""; try{ prod=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:[],fields:["id"],limit:5})).length; }catch(e){ perr=String(e.message||e).slice(0,200); }
+    return {ok:true,read:ewList(r).length,prod,perr}; },
   async partner_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
     const domain=/^\d+$/.test(q)?["|","|","|",["id","=",+q],["ref","=",q],["phone","ilike",q],["mobile","ilike",q]]:["|","|","|",["name","ilike",q],["email","ilike",q],["phone","ilike",q],["mobile","ilike",q]];
     return {items:ewList(await ewCall(c,"GET","/search_extract/res.partner",{domain,fields:EW_PARTNER_FIELDS,limit:15,order:"name"}))}; },
@@ -568,6 +571,16 @@ const EW_ACTIONS = {
       if(exact.length===1){ items.push({...exact[0],default_code:code}); } else near[code]=hits.map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,80),active:p.active!==false}));
       dlog("INFO",`Artikelsuche erweitert ${code}: ${hits.length} Treffer${hits.length?" ("+hits.map(p=>(p.default_code||"-")+"/"+(p.barcode||"-")+(p.active===false?" archiviert":"")+"→"+p.id).join(", ")+")":""}`); }
     return {items,near}; },
+  // Artikel über die interne ID: zuerst als Artikel (product.product), sonst als Produktvorlage (product.template)
+  async product_by_id(c,b){ const n=parseInt(b.id,10); if(!(n>0)) throw new Error("ungültige etron-Artikel-ID"); const F=["id","default_code","name","active","product_tmpl_id"];
+    const hits=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],"|",["id","=",n],["product_tmpl_id","=",n]],fields:F,limit:20}));
+    const tid=p=>Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id;
+    const code=String(b.code||"").trim().toUpperCase(); const byCode=hits.filter(p=>code&&String(p.default_code||"").trim().toUpperCase()===code);
+    const direct=hits.filter(p=>p.id===n), tmpl=hits.filter(p=>tid(p)===n);
+    dlog("INFO",`Artikel-ID ${n}: ${hits.length} Treffer (${hits.map(p=>"Artikel "+p.id+"/Vorlage "+tid(p)+"/"+(p.default_code||"-")+(p.active===false?" archiviert":"")).join(", ")||"keine"})`);
+    const cand=[...new Set([...direct,...tmpl])]; const pick=byCode.length===1?byCode[0]:cand.length===1?cand[0]:null;
+    if(!pick){ if(!hits.length) throw new Error(`etron-Artikel-ID ${n} gibt es in etron nicht`); throw new Error(`etron-Artikel-ID ${n} ist nicht eindeutig (${hits.map(p=>(p.default_code||"ohne Nr.")+": "+ewStr(p.name,40)).join("; ")}). Bitte die Artikelnummer dazu eintragen.`); }
+    return {id:pick.id,default_code:pick.default_code||"",name:ewStr(pick.name,80),active:pick.active!==false}; },
   async order_create(c,b){ const partner=parseInt(b.partner_id,10); if(!partner) throw new Error("etron-Kundennummer fehlt");
     const lines=(b.lines||[]).slice(0,50).map(l=>({product_id:parseInt(l.product_id,10),product_uom_qty:Math.max(1,Math.min(9999,parseInt(l.qty,10)||0))})).filter(l=>l.product_id);
     if(!lines.length) throw new Error("Keine Auftragszeilen");
@@ -593,17 +606,23 @@ async function etronCreatePartner(fn, ln, tel, mail){ dlog("INFO","Kunde in etro
 async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronId) throw new Error("keine etron-Nr.");
   const cfg=odooCfg(); let partner=parseInt(c.etronId,10);
   if(cfg.key==="ref"){ const r=await etronCall("partner_search",{q:String(c.etronId)}); const p=(r.items||[]).find(x=>String(x.ref)===String(c.etronId)); if(!p) throw new Error(`Kunde mit Kundennr. ${c.etronId} in etron nicht gefunden`); partner=p.id; }
+  const aidOf=o=>artIdOf(S.products[o.productId]?.etronArtId), artById=new Map();
+  for(const o of list.filter(aidOf)){ const pid=o.productId; if(artById.has(pid)) continue; const r=await etronCall("product_by_id",{id:aidOf(o),code:S.products[pid].articleNo||""}); artById.set(pid,r.id); }
+  const byId=list.filter(aidOf); list=list.filter(o=>!aidOf(o)); const allList=[...byId,...list];
   const miss=list.filter(o=>!S.products[o.productId]?.articleNo); if(miss.length){ dlog("WARN",`Auftrag Kunde ${cid}: Artikelnummer fehlt bei Produkt ${miss.map(o=>o.productId).join(", ")}`); } if(miss.length) throw new Error("Artikelnummer fehlt bei: "+[...new Set(miss.map(o=>S.products[o.productId]?.name||"?"))].join(", "));
   const codes=[...new Set(list.map(o=>S.products[o.productId].articleNo.trim()))];
-  const pf=await etronCall("product_find",{codes}); const found=pf.items||[]; const byCode=new Map(found.map(p=>[String(p.default_code).trim(),p.id]));
+  const pf=codes.length?await etronCall("product_find",{codes}):{items:[]}; const found=pf.items||[]; const byCode=new Map(found.map(p=>[String(p.default_code).trim(),p.id]));
   dlog("INFO",`Artikelsuche ${codes.join(", ")}: gefunden ${found.map(p=>p.default_code+"→"+p.id).join(", ")||"nichts"}`);
   const nf=codes.filter(x=>!byCode.has(x)); if(nf.length) throw new Error("Artikelnummer in etron nicht gefunden: "+nf.map(x=>{ const n=(pf.near||{})[x]||[]; return n.length?`${x} (ähnlich: ${n.slice(0,3).map(p=>(p.code||p.barcode)+(p.active?"":" archiviert")).join(", ")})`:x; }).join(", ")+". In etron beim Artikel das Feld „Interne Referenz“ prüfen.");
-  const lines=list.map(o=>({product_id:byCode.get(S.products[o.productId].articleNo.trim()),qty:o.alloc}));
-  dlog("INFO",`Auftrag anlegen: Kunde ${cid}, etron-Partner ${partner}, Positionen ${list.map(o=>o.id+"="+S.products[o.productId].articleNo.trim()+"→Artikel "+byCode.get(S.products[o.productId].articleNo.trim())+" x"+o.alloc).join(", ")}, Stichwort "${cfg.tag||""}"`);
+  const artOf=o=>artById.get(o.productId)??byCode.get(S.products[o.productId].articleNo.trim());
+  const lines=allList.map(o=>({product_id:artOf(o),qty:o.alloc}));
+  dlog("INFO",`Auftrag anlegen: Kunde ${cid}, etron-Partner ${partner}, Positionen ${allList.map(o=>o.id+"="+(S.products[o.productId].articleNo||"").trim()+"→Artikel "+artOf(o)+" x"+o.alloc).join(", ")}, Stichwort "${cfg.tag||""}"`);
   const r=await etronCall("order_create",{partner_id:partner,origin:`Vorbestellung ${fmtDate(today())}`,tag:cfg.tag||"",note:"",lines});
   const oid=etronIdOf(r); if(!oid){ dlog("ERROR",`Auftrag für Kunde ${cid}: etron hat keine Auftragsnummer zurückgegeben`); throw new Error("etron hat keine Auftragsnummer zurückgegeben. Bitte in etron nachsehen, ob der Auftrag trotzdem angelegt wurde, und das Log schicken."); }
   dlog("INFO",`Auftrag angelegt: Kunde ${cid}, etron-Auftrag ${oid}`);
-  await pool(list,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid})); return oid; }
+  await pool(allList,o=>S.db.collection("orders").doc(o.id).update({status:"Auftrag angelegt",etronOrder:oid})); return oid; }
+// "47.411", "47411", "#47411" -> 47411
+function artIdOf(v){ const t=String(v||"").replace(/[\s.#']/g,""); return /^\d{1,9}$/.test(t)&&+t>0?+t:0; }
 function etronApiPanel(){
   if(!S.desktop) return etronWebPanel();
   return `<div class="panel"><h2>etron-Schnittstelle</h2>
@@ -622,7 +641,7 @@ function etronWebPanel(){
       <label class="wide">etron-Adresse<input id="ea-url" placeholder="https://xxxxxx.wawi.onretail.eu" autocomplete="off"></label>
       <label>Client Key<input id="ea-key" autocomplete="off" spellcheck="false"></label>
       <label>Client Secret<input id="ea-sec" type="password" autocomplete="new-password" spellcheck="false"></label>
-      <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><input id="ea-art" placeholder="Art.-Nr. testen, z. B. P0044509" style="width:14em"><button id="ea-arts">Artikel suchen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
+      <button id="ea-save" class="pri">In Dropbox speichern</button><button id="ea-test">Verbindung testen</button><input id="ea-art" placeholder="Art.-Nr. oder Artikel-ID" style="width:14em"><button id="ea-arts">Artikel suchen</button><button id="ea-del" class="sm danger">Zugang löschen</button>
     </div><div id="ea-st" class="muted">Lade …</div><div id="ea-res"></div>
     <div class="row" style="margin-top:8px"><button class="sm" id="ea-log">Log herunterladen</button><span class="muted">Schritte und Fehler dieses Browsers, ohne Kundennamen/Telefonnummern.</span></div></div>`; }
 function bindEtronWeb(){ const st=$("#ea-st"); if(!st) return;
@@ -637,10 +656,10 @@ function bindEtronWeb(){ const st=$("#ea-st"); if(!st) return;
     catch(e){ toast(e.conflict?"Wurde gerade woanders geändert. Bitte nochmal speichern.":"Nicht gespeichert: "+(e.message||e)); } };
   $("#ea-del").onclick=async()=>{ if(!EW.cfg) return toast("Es ist kein Zugang gespeichert."); try{ await ewCfg(true); const r=await S.provider.write(ETRON_FILE,{},EW.rev); EW.cfg=null; EW.rev=r.rev; EW.tok=null; show(); toast("Zugang gelöscht"); }catch(e){ toast("Nicht gelöscht: "+(e.message||e)); } };
   $("#ea-test").onclick=async()=>{ const res=$("#ea-res"); res.innerHTML=`<ul class="eatest"><li>… teste</li></ul>`;
-    try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Erweiterung aktiv.</li><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li></ul>`; }
+    try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Erweiterung aktiv.</li><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li>${j.prod==null&&!j.perr?"":j.prod?`<li class="ok">✓ Artikel lesen funktioniert.</li>`:`<li class="bad">✗ Artikel lesen: ${j.perr?esc(j.perr):"etron liefert keinen einzigen Artikel. Der API-Zugang darf vermutlich keine Artikel sehen (Rechte oder Firma beim API-Benutzer in etron prüfen)."}</li>`}</ul>`; }
     catch(e){ res.innerHTML=`<ul class="eatest"><li class="bad">✗ ${esc(e.message||e)}</li></ul>`; } };
   $("#ea-arts").onclick=async()=>{ const res=$("#ea-res"), code=$("#ea-art").value.trim(); if(!code) return toast("Bitte eine Artikelnummer eintragen."); res.innerHTML=`<ul class="eatest"><li>… suche ${esc(code)}</li></ul>`;
-    try{ const j=await etronCall("product_find",{codes:[code]}); const hit=(j.items||[])[0], near=(j.near||{})[code]||[];
+    try{ let j; if(artIdOf(code)&&!/[a-z]/i.test(code)){ try{ const h=await etronCall("product_by_id",{id:artIdOf(code)}); j={items:[h],near:{}}; }catch(e){ j=await etronCall("product_find",{codes:[code]}); if(!(j.items||[]).length) throw e; } } else j=await etronCall("product_find",{codes:[code]}); const hit=(j.items||[])[0], near=(j.near||{})[code]||[];
       res.innerHTML=`<ul class="eatest">${hit?`<li class="ok">✓ Gefunden: ${esc(hit.name||"")} (etron-Artikel ${esc(String(hit.id))}${hit.active===false?", archiviert":""})</li>`:`<li class="bad">✗ ${esc(code)} nicht gefunden.</li>${near.map(p=>`<li>ähnlich: ${esc(p.code||"-")} / Barcode ${esc(p.barcode||"-")} · ${esc(p.name)}${p.active?"":" (archiviert)"}</li>`).join("")}`}</ul>`; }
     catch(e){ res.innerHTML=`<ul class="eatest"><li class="bad">✗ ${esc(e.message||e)}</li></ul>`; } };
   $("#ea-log").onclick=()=>{ let a=[]; try{ a=JSON.parse(localStorage.getItem("vb.dlog")||"[]"); }catch(e){} saveFile(`vorbestellungen-log-${today()}.txt`, new Blob([a.join("\r\n")||"(leer)"],{type:"text/plain;charset=utf-8"})); }; }
@@ -658,7 +677,7 @@ function bindEtronApi(){ if(!S.desktop) return bindEtronWeb(); const st=$("#ea-s
   $("#ea-del").onclick=async()=>{ if(!cur.set) return toast("Es ist kein Zugang gespeichert."); await desk("/api/etron/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({delete:true})}); toast("Zugang gelöscht"); load(); };
   $("#ea-test").onclick=async()=>{ const res=$("#ea-res"); if(!cur.set) return toast("Bitte zuerst den Zugang speichern.");
     res.innerHTML=`<ul class="eatest"><li>… teste</li></ul>`;
-    try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li></ul>`; }
+    try{ const j=await etronCall("ping"); res.innerHTML=`<ul class="eatest"><li class="ok">✓ Anmeldung bei etron erfolgreich.</li><li class="ok">✓ Kunden lesen funktioniert (${j.read} Testdatensatz, Inhalt wird nicht angezeigt).</li>${j.prod==null&&!j.perr?"":j.prod?`<li class="ok">✓ Artikel lesen funktioniert.</li>`:`<li class="bad">✗ Artikel lesen: ${j.perr?esc(j.perr):"etron liefert keinen einzigen Artikel. Der API-Zugang darf vermutlich keine Artikel sehen (Rechte oder Firma beim API-Benutzer in etron prüfen)."}</li>`}</ul>`; }
     catch(e){ const auth=e.etron===401||e.etron===400||e.etron===403;
       res.innerHTML=`<ul class="eatest">${!auth&&/HTTP/.test(e.message)&&!/Anmeldung/.test(e.message)?'<li class="ok">✓ Anmeldung bei etron erfolgreich.</li>':""}<li class="bad">✗ ${esc(e.message)}${auth&&/Anmeldung/.test(e.message)?" Client Key/Secret prüfen.":""}</li></ul>`; } }; }
 
@@ -682,7 +701,7 @@ async function dedupeAfterImport(before, src){
     const x=Object.values(S.products).find(q=>q.id!==p.id && !isNew("products",q.id) && q.name.trim().toLowerCase()===p.name.trim().toLowerCase() && gameOf(q)===gameOf(p)); if(!x) continue;
     for(const o of Object.values(S.orders)){ if(o.productId===p.id) await write("orders",o.id,{productId:x.id});
       else if((o.choices||[]).includes(p.id)) await write("orders",o.id,{choices:[...new Set(o.choices.map(c=>c===p.id?x.id:c))]}); }
-    const pt={}; for(const f of ["articleNo","etronUrl","msgName","series","release","unit","packSize","received","supplierOrdered","supplierConfirmed"]) if((x[f]==null||x[f]==="")&&p[f]!=null&&p[f]!=="") pt[f]=p[f];
+    const pt={}; for(const f of ["articleNo","etronArtId","etronUrl","msgName","series","release","unit","packSize","received","supplierOrdered","supplierConfirmed"]) if((x[f]==null||x[f]==="")&&p[f]!=null&&p[f]!=="") pt[f]=p[f];
     if(Object.keys(pt).length) await write("products",x.id,pt);
     await write("products",p.id,null,"delete"); st.prodMerged++; pull(); }
   // Kunden: gleicher Vor-/Nachname (auch vertauscht), Telefon passt (gleich oder eines leer), etron-Nr. widerspricht nicht
@@ -1232,7 +1251,7 @@ const LOG_DIR = "protokoll";
 const AREA = { games: "Spielsystem", orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
 const FIELD = { noWhatsapp: "Kein WhatsApp", firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
-  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronUrl: "etron-Link" };
+  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronArtId: "etron-Artikel-ID", etronUrl: "etron-Link" };
 const LOG_SKIP = new Set(["updatedAt", "_ft", "createdAt", "notDupes", "pairId", "order", "hidden"]);
 function logVal(k, v){
   if (v == null || v === "") return "–";
