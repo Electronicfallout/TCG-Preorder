@@ -17,11 +17,11 @@ Vorbestellungen, Wartelisten und Zuteilungen für One Piece, Pokémon und Riftbo
 - **etron-Export**: alle zugeteilten Bestellungen als CSV (mit etron-Kundennummer), danach als „Auftrag angelegt“ markieren.
 - Funktioniert **offline** und gleicht später ab. Ändern zwei Geräte gleichzeitig, werden die Änderungen pro Eintrag zusammengeführt statt überschrieben.
 
-## Programm für Windows (empfohlen in der Firma)
+## In der Firma: Chrome-App + Erweiterung
 
-`Vorbestellungen.exe` startet die App lokal auf dem PC (nur erreichbar vom eigenen PC, 127.0.0.1) und öffnet sie in einem Edge-Fenster. Das Programm liegt zusammen mit den Daten im Dropbox-Ordner der App; der Dropbox-Client gleicht ab, Konfliktkopien werden automatisch zusammengeführt. Die etron-Schnittstelle (Kunden, Aufträge) gibt es nur im Programm; der Zugang liegt in `etron-zugang.json` im selben Ordner, nie im Repository.
+Die App läuft in **Chrome** (als App installiert). Die etron-Schnittstelle (Kunden suchen/abgleichen, Artikel verknüpfen, Aufträge als Entwurf anlegen) läuft über die kleine Chrome-Erweiterung im Ordner `erweiterung/`. Sie leitet nur Anfragen der App an `https://*.wawi.onretail.eu/api/` weiter, nichts läuft über fremde Server. Der etron-Zugang liegt in `etron-zugang.json` in der Dropbox, nie im Repository.
 
-Paket bauen: `desktop/build.sh` (braucht Go) → `dist/TCG-Vorbestellungen-<Version>.zip` mit `Vorbestellungen.exe`, `programm\` und `LIESMICH.txt`.
+Das frühere Windows-Programm (`desktop/`, `Vorbestellungen.exe`) wird nicht mehr verwendet (Smart App Control blockiert unsignierte Programme).
 
 ## Wo liegen die Daten?
 

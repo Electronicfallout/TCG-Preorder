@@ -663,7 +663,7 @@ function artIdOf(v){ const t=String(v||"").replace(/[\s.#']/g,""); return /^\d{1
 function etronApiPanel(){
   if(!S.desktop) return etronWebPanel();
   return `<div class="panel"><h2>etron-Schnittstelle</h2>
-    <p class="muted">Zugang aus etron (API &amp; Hooks → Authentication → Client Credentials, mit einem Benutzer mit wenig Rechten). Er wird nur im Dropbox-Ordner des Programms gespeichert (<span class="mono">etron-zugang.json</span>), nie im Programmcode. Das Programm spricht direkt mit etron, nichts läuft über fremde Server.</p>
+    <p class="muted">Zugang aus etron (API &amp; Hooks → Authentication → Client Credentials). Mit dem Firmenkonto anlegen: der Benutzer braucht „Interner Benutzer“ und Verkaufsrechte, sonst können keine Aufträge angelegt werden. Er wird nur im Dropbox-Ordner des Programms gespeichert (<span class="mono">etron-zugang.json</span>), nie im Programmcode. Das Programm spricht direkt mit etron, nichts läuft über fremde Server.</p>
     <div class="form">
       <label class="wide">etron-Adresse<input id="ea-url" placeholder="https://xxxxxx.wawi.onretail.eu" autocomplete="off"></label>
       <label>Client Key<input id="ea-key" autocomplete="off" spellcheck="false"></label>
@@ -1525,7 +1525,9 @@ const WIKI = [
   ["etron auf einem PC einrichten (einmalig)", `<ol><li>Die App in <b>Chrome</b> öffnen (https://electronicfallout.github.io/TCG-Preorder/) und mit der Dropbox verbinden (Einladungscode aus Einstellungen → Kollegen einladen).</li>
     <li>Als App installieren: Chrome-Menü ⋮ → „Streamen, speichern und teilen“ → „Seite als App installieren“. Dann gibt es ein eigenes Fenster und ein Symbol auf dem Desktop.</li>
     <li>Erweiterung laden: in Chrome <span class="mono">chrome://extensions</span> öffnen → oben rechts <b>Entwicklermodus</b> einschalten → <b>Entpackte Erweiterung laden</b> → den Ordner <span class="mono">erweiterung</span> aus dem Dropbox-Ordner wählen. Den Ordner danach nicht verschieben.</li>
-    <li>App neu laden. Unter Einstellungen → etron-Schnittstelle steht dann „✓ Erweiterung aktiv“. Den Zugang muss nur ein PC einmal speichern (liegt in der Dropbox).</li></ol>`],
+    <li>App neu laden. Unter Einstellungen → etron-Schnittstelle steht dann „✓ Erweiterung aktiv“. Den Zugang muss nur ein PC einmal speichern (liegt in der Dropbox).</li>
+    <li>Zugang anlegen (nur einmal): in etron mit dem <b>Firmenkonto</b> anmelden (Benutzertyp „Interner Benutzer“ mit Verkaufsrechten, nicht das private Konto) → API &amp; Hooks → Authentication → Client Credentials. Adresse, Client Key und Secret unter Einstellungen → etron eintragen und „Verbindung testen“.</li>
+    <li>Danach einmal in der Kundenliste <b>„Mit etron abgleichen“</b> und bei den Produkten oben <b>„Artikel in etron suchen“</b> → „Übernehmen“.</li></ol>`],
   ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen. Ist eine <b>Verpackungseinheit</b> hinterlegt (z. B. 8 Displays pro Karton), kann die Menge auch direkt in VE eingetragen werden; die Stückzahl wird dann ausgerechnet.</li>
     <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Dann <b>Vorschlag berechnen</b>.</li>
     <li>Vorschlag prüfen, eventuell einzelne Zahlen in der Tabelle ändern, dann <b>Vorschlag übernehmen</b>.</li>
