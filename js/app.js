@@ -190,6 +190,29 @@ function suggest(p, mode, noFlex){
   return res;
 }
 
+// ---------- Nachzuteilen: nach abgeschlossener Zuteilung wird wieder Menge frei (Storno, Nachlieferung).
+// Bestehende Zuteilungen bleiben, nur die freie Menge geht an Bestellungen, die noch nicht alles haben
+// (Offen, Warteliste, Zugeteilt mit weniger als bestellt). „Auftrag angelegt“/„Abgeholt“ bleiben unverändert (Tommy, 25.11.).
+const NACH = new Set(["Offen","Warteliste","Zugeteilt"]);
+function nachCands(p){ return ordersOf(p.id).filter(o=>NACH.has(o.status)&&(o.qty||0)>(o.alloc||0)).sort(sortOrders); }
+function nachFree(p){ const r=num(p.received); if(r==null) return 0; return Math.max(0, r-ordersOf(p.id).filter(o=>o.status!=="Storniert").reduce((t,o)=>t+(o.alloc||0),0)); }
+function suggestRest(p, mode){
+  const cand = nachCands(p); let a = nachFree(p); const res = {};
+  cand.forEach(o=>res[o.id]=o.alloc||0);
+  const need = o => o.qty-res[o.id];
+  if (S.min1) { const had = new Set(ordersOf(p.id).filter(o=>o.status!=="Storniert"&&(o.alloc||0)>0).map(o=>o.customerId));
+    for (const o of cand){ if(a<=0) break; if(had.has(o.customerId)) continue; res[o.id]++; had.add(o.customerId); a--; } }
+  const wantR = cand.reduce((t,o)=>t+need(o),0);
+  if (wantR<=a){ cand.forEach(o=>res[o.id]=o.qty); a-=wantR; }
+  else if (mode==="fifo"){ for(const o of cand){ const g=Math.min(need(o),a); res[o.id]+=g; a-=g; } }
+  else if (wantR>0 && a>0){ const base=a; let used=0; const rest=[];
+    cand.forEach((o,i)=>{ const exact=need(o)*base/wantR; const b=Math.floor(exact+1e-9); res[o.id]+=b; used+=b; rest.push({o,r:exact-b,i}); });
+    rest.sort((x,y)=> y.r-x.r || x.i-y.i);
+    for (const {o} of rest){ if(used>=base) break; if(res[o.id]<o.qty){ res[o.id]++; used++; } } a-=used; }
+  for (const o of flexOf(p.id).filter(o=>o.status==="Offen" && (o.qty||0)>0).sort(sortOrders)){ if(a<=0) break; const g=Math.min(o.qty,a); res[o.id]=g; a-=g; }
+  return res;
+}
+
 // ---------- writes
 async function write(col,id,data,mode="update"){
   if(!S.db){ toast("Speichern nicht möglich: nicht verbunden."); return false; }
@@ -327,7 +350,9 @@ function renderProduct(pid){
   const os = [...ordersOf(pid), ...flexOf(pid)].sort(sortOrders);
   const fstat = S.fstat||"aktiv";
   const shown = sortView(os.filter(o => nameMatch(S.oq, S.customers[o.customerId])).filter(o => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType([o]) : fstat==="aktiv" ? isActive(o, sug) : o.status===fstat)), o=>o.customerId);
-  const sugSum = sug ? Object.values(sug.map).reduce((a,b)=>a+b,0) : 0;
+  const sugSum = sug ? Object.entries(sug.map).reduce((a,[id,v])=>a+v-(sug.nach?(S.orders[id]?.productId?(S.orders[id].alloc||0):0):0),0) : 0;
+  const nFree = nachFree(p), nCand = nFree>0 ? nachCands(p).length + flexOf(pid).filter(o=>o.status==="Offen"&&(o.qty||0)>0).length : 0;
+  const closed = ordersOf(pid).some(o=>o.status==="Zugeteilt"||LOCKED.has(o.status));
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
   <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a>${/^https?:\/\//.test(p.etronUrl||"")?` · <a class="back" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">In etron öffnen</a>`:""} · ${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
@@ -364,11 +389,12 @@ function renderProduct(pid){
     <div class="row">
       <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum (wer zuerst kommt)</option></select><label class="row muted" style="gap:4px" title="Zuerst bekommt jeder Kunde 1 Stück (nach Bestelldatum, falls nicht genug für alle da ist), der Rest wird wie gewählt verteilt."><input type="checkbox" id="min1" ${S.min1?"checked":""}> Jeder mind. 1 Stück</label>
       <button id="sug" ${s.rec==null?"disabled":""}>Vorschlag berechnen</button>
-      ${sug?`<button class="pri" id="apply" ${S.canWrite?"":"disabled"}>Vorschlag übernehmen (${sugSum} Stück)</button><button id="dis">Verwerfen</button>`:""}
+      ${sug?`<button class="pri" id="apply" ${S.canWrite?"":"disabled"}>${sug.nach?`Nachzuteilung übernehmen (+${sugSum} Stück)`:`Vorschlag übernehmen (${sugSum} Stück)`}</button><button id="dis">Verwerfen</button>`:""}
       <button id="close" ${s.alloc?"":"disabled"} title="Alle offenen Bestellungen mit Zuteilung auf Zugeteilt setzen">Zuteilung abschließen</button>
       <button id="rest" title="Alle offenen Bestellungen ohne Zuteilung auf Warteliste setzen">Rest auf Warteliste</button>
     </div></div>
-    ${s.rec==null?'<p class="muted">Erst den Wareneingang eintragen, dann kann ein Vorschlag berechnet werden.</p>':sug?'<p class="muted">Vorschlag steht in der Spalte „Vorschlag“. Noch nichts gespeichert.</p>':'<p class="muted">Zuteilungen können auch direkt in der Tabelle eingetragen werden. Bestellungen mit Status „Auftrag angelegt“ oder „Abgeholt“ bleiben beim Vorschlag unverändert.</p>'}
+    ${!sug&&closed&&nFree>0&&nCand?`<div class="note">Es sind wieder <b>${nFree} Stück frei</b> (z. B. durch Storno oder Nachlieferung) und ${nCand} Bestellungen haben noch nicht alles bekommen. <button class="pri sm" id="nach">Freie Menge nachzuteilen</button><br><span class="muted">Bestehende Zuteilungen bleiben. Verteilt wird wie oben gewählt (proportional oder nach Bestelldatum, „mind. 1 Stück“ zählt mit). „Auftrag angelegt“ und „Abgeholt“ bleiben unverändert.</span></div>`:""}
+    ${s.rec==null?'<p class="muted">Erst den Wareneingang eintragen, dann kann ein Vorschlag berechnet werden.</p>':sug?.nach?'<p class="muted">Nachzuteilung steht in der Spalte „Vorschlag“ (neue Gesamtmenge, in Klammern das Plus). Noch nichts gespeichert. Beim Übernehmen bekommen diese Bestellungen den Status „Zugeteilt“ und die Abholnachricht gilt wieder als offen.</p>':sug?'<p class="muted">Vorschlag steht in der Spalte „Vorschlag“. Noch nichts gespeichert.</p>':'<p class="muted">Zuteilungen können auch direkt in der Tabelle eingetragen werden. Bestellungen mit Status „Auftrag angelegt“ oder „Abgeholt“ bleiben beim Vorschlag unverändert.</p>'}
   </div>
   ${orderForm("pr", pid)}
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
@@ -382,7 +408,7 @@ function renderProduct(pid){
     <td class="mono">${esc(o.staff||"")}</td>
     <td><select data-f="status" id="s-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
     <td class="n"><input type="number" min="0" data-f="alloc" id="a-${o.id}" value="${o.alloc??""}"></td>
-    ${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.map[o.id]??""}</td>`:""}
+    ${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.map[o.id]??""}${sug.nach&&sug.map[o.id]!=null&&o.productId&&sug.map[o.id]>(o.alloc||0)?` <span class="muted">(+${sug.map[o.id]-(o.alloc||0)})</span>`:""}</td>`:""}
     <td style="text-align:center">${auftragBox([o])}</td><td>${msgBtn([o])}</td>
     <td><input class="c" data-f="comment" id="k-${o.id}" value="${esc(o.comment||"")}"></td></tr>`}).join("") || `<tr><td colspan="8" class="empty">Noch keine Bestellungen. Unten die erste erfassen.</td></tr>`}
   </tbody></table></div>`;
@@ -400,12 +426,17 @@ function renderProduct(pid){
         for(const x of fl){ const ch=(o.orders[x.id].choices||[]).filter(c=>c!==pid); o.orders[x.id]= ch.length>1 ? {...o.orders[x.id],choices:ch,_ft:undefined,updatedAt:t} : ch.length===1 ? {...o.orders[x.id],choices:undefined,_ft:undefined,productId:ch[0],updatedAt:t} : {deleted:true,updatedAt:t}; } });
       toast("Produkt gelöscht"); location.hash="produkte"; }; };
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort(); bindWaq();
-  $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,S.mode)};render();}};
-  $("#min1").onchange=e=>{S.min1=e.target.checked; try{localStorage.setItem("vb.min1",S.min1?"1":"");}catch(x){} if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,$("#mode").value)};} render();};
+  const reSug=()=>{ const m=$("#mode").value; S.sugg[pid]=S.sugg[pid].nach?{map:suggestRest(p,m),nach:true}:{map:suggest(p,m)}; };
+  $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[pid]){reSug();render();}};
+  $("#min1").onchange=e=>{S.min1=e.target.checked; try{localStorage.setItem("vb.min1",S.min1?"1":"");}catch(x){} if(S.sugg[pid]) reSug(); render();};
+  const nb=$("#nach"); if(nb) nb.onclick=()=>{ S.sugg[pid]={map:suggestRest(p,$("#mode").value),nach:true}; dlog("INFO",`Nachzuteilung berechnet: ${nFree} frei`); render(); };
   $("#sug").onclick=()=>{ S.sugg[pid]={map:suggest(p,$("#mode").value)}; render(); };
   if (sug){ $("#dis").onclick=()=>{delete S.sugg[pid];render();};
     $("#apply").onclick=async()=>{ const b=$("#apply"); b.disabled=true; const ch=Object.entries(sug.map).filter(([id,v])=>S.orders[id] && (S.orders[id].alloc!==v || !S.orders[id].productId) && !(!S.orders[id].productId && !v));
-      try{ await pool(ch, ([id,v])=>S.db.collection("orders").doc(id).update(S.orders[id].productId?{alloc:v}:{alloc:v,productId:pid,comment:[S.orders[id].comment,`war: ${orderLabel(S.orders[id])}`].filter(Boolean).join(" · ")})); delete S.sugg[pid]; toast(`${ch.length} Zuteilungen gespeichert`); render(); }catch(e){ toast("Nicht alles gespeichert: "+(e.message||e.code)); b.disabled=false; } }; }
+      // Nachzuteilung: wer mehr bekommt, steht danach auf „Zugeteilt“; eine schon gesendete Abholnachricht gilt wieder als offen (neue Stückzahl).
+      const patchOf=(id,v)=>{ const o=S.orders[id]; const pt=o.productId?{alloc:v}:{alloc:v,productId:pid,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")};
+        if(sug.nach&&v>(o.productId?(o.alloc||0):0)){ pt.status="Zugeteilt"; if(o.notified) pt.notified=null; } return pt; };
+      try{ await pool(ch, ([id,v])=>S.db.collection("orders").doc(id).update(patchOf(id,v))); delete S.sugg[pid]; if(sug.nach) dlog("INFO",`Nachzuteilung übernommen: ${ch.length} Bestellungen`); toast(sug.nach?`${ch.length} Bestellungen nachzugeteilt (Status Zugeteilt). Abholnachrichten sind offen.`:`${ch.length} Zuteilungen gespeichert`,5000); render(); }catch(e){ toast("Nicht alles gespeichert: "+(e.message||e.code)); b.disabled=false; } }; }
   bindRest(()=>ordersOf(pid)); // „egal welches“ nur auf der Serienseite
   $("#close").onclick=async()=>{ const ch=ordersOf(pid).filter(o=>o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
     try{ await pool(ch,o=>S.db.collection("orders").doc(o.id).update({status:"Zugeteilt"})); toast(`${ch.length} Bestellungen auf Zugeteilt gesetzt. Jetzt im etron-Export.`);}catch(e){toast("Fehler: "+(e.message||e.code));} };
@@ -1654,7 +1685,8 @@ const WIKI = [
   ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen. Ist eine <b>Verpackungseinheit</b> hinterlegt (z. B. 8 Displays pro Karton), kann die Menge auch direkt in VE eingetragen werden; die Stückzahl wird dann ausgerechnet.</li>
     <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Mit <b>„Jeder mind. 1 Stück“</b> bekommt zuerst jeder Kunde eins (reicht die Ware nicht für alle, nach Bestelldatum), der Rest wird dann wie gewählt verteilt. Dann <b>Vorschlag berechnen</b>.</li>
     <li>Vorschlag prüfen, eventuell einzelne Zahlen in der Tabelle ändern, dann <b>Vorschlag übernehmen</b>.</li>
-    <li><b>Zuteilung abschließen</b> setzt alle Bestellungen mit Zuteilung auf „Zugeteilt“. Wer nichts bekommt, kann auf „Warteliste“ gesetzt werden.</li></ol>`],
+    <li><b>Zuteilung abschließen</b> setzt alle Bestellungen mit Zuteilung auf „Zugeteilt“. Wer nichts bekommt, kann auf „Warteliste“ gesetzt werden.</li>
+    <li>Wird danach wieder etwas frei (Storno oder Nachlieferung im Wareneingang erhöhen), erscheint <b>„Freie Menge nachzuteilen“</b>. Bestehende Zuteilungen bleiben, nur die freie Menge wird an Warteliste und Teil-Zuteilungen verteilt.</li></ol>`],
   ["Auftrag in etron anlegen", `<p>Reiter <b>etron-Export</b> zeigt alle zugeteilten Bestellungen nach Kunde. Den Auftrag in etron anlegen und danach den <b>Haken</b> in der Spalte „Auftrag“ setzen. Der Haken geht auch direkt auf der Produktseite. Ohne etron-Nr. beim Kunden bitte zuerst die Nummer nachtragen.</p>`],
   ["Kunden benachrichtigen", `<p>In jeder Bestellzeile gibt es zwei Knöpfe:</p>
     <ul><li><b>📋 Abholung / Storno / Warteliste</b>: kopiert mit einem Klick den passenden Text (mit Spiel, Produkt und Abholdatum heute). In WhatsApp oder SMS einfügen. Die Nachricht gilt danach als gesendet.</li>
