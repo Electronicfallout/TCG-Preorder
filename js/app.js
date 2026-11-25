@@ -96,7 +96,13 @@ function similar(a,b){
 }
 const notDupe = (a,b) => (a.notDupes||[]).includes(b.id) || (b.notDupes||[]).includes(a.id);
 const sameEtron = (a,b) => a.etronId && b.etronId && String(a.etronId).trim()===String(b.etronId).trim();
-const dupesOf = c => Object.values(S.customers).filter(x => x.id!==c.id && !notDupe(c,x) && (similar(x.name,c.name) || sameEtron(x,c)));
+// Dubletten: ähnlicher Name, gleiche etron-Nr., gleiche Telefonnummer oder gleiche E-Mail (automatisch geprüft)
+const CKEYS = new WeakMap();
+const ckeys = c => { let k=CKEYS.get(c); if(!k){ const cf=contactFields(c); k={tel:telKey(cf.tel), mail:String(cf.mail||"").trim().toLowerCase()}; CKEYS.set(c,k); } return k; };
+const sameTel = (a,b) => { const x=ckeys(a).tel; return !!x && x===ckeys(b).tel; };
+const sameMail = (a,b) => { const x=ckeys(a).mail; return !!x && x===ckeys(b).mail; };
+const dupeWhy = (a,b) => [similar(a.name,b.name)&&"ähnlicher Name", sameEtron(a,b)&&"gleiche etron-Nr.", sameTel(a,b)&&"gleiche Telefonnummer", sameMail(a,b)&&"gleiche E-Mail"].filter(Boolean);
+const dupesOf = c => Object.values(S.customers).filter(x => x.id!==c.id && !notDupe(c,x) && (similar(x.name,c.name) || sameEtron(x,c) || sameTel(x,c) || sameMail(x,c)));
 // Namenssuche: jedes eingegebene Wort (auch Teile) muss im Namen vorkommen, Reihenfolge egal
 const nameMatch = (q, c) => { const w=norm(q).split(" ").filter(Boolean); if(!w.length) return true; const n=norm(c?.name||""); return w.every(x=>n.includes(x)); };
 // Anzeige-Sortierung der Vorbesteller (ändert nichts an der Zuteilungs-Reihenfolge)
@@ -191,6 +197,7 @@ function render(){
   const h=h0();
   const keepFocus = document.activeElement && document.activeElement.id; const sel = keepFocus && document.activeElement.selectionStart;
   S.waqPage = h.startsWith("produkt-") || h.startsWith("serie-");
+  try{ const nk=document.querySelector('#nav a[data-v="kunden"]'); if(nk){ const nd=Object.values(S.customers).filter(c=>dupesOf(c).length).length; nk.innerHTML=`Kunden${nd?` <span class="pill s-Warteliste" title="${nd} Kunden sehen nach Dublette aus (Name, etron-Nr., Telefon oder E-Mail)" style="font-size:11px;padding:0 6px">${nd}</span>`:""}`; } }catch(e){}
   if (h.startsWith("produkt-")) renderProduct(h.slice(8));
   else if (h.startsWith("kunde-")) renderCustomer(h.slice(6));
   else if (h.startsWith("serie-")) renderSeries(h.slice(6));
@@ -1319,8 +1326,8 @@ function renderDupes(){
     <label class="muted" style="font-size:12px">etron-Nr. <input data-cf="${c.id}" id="de-${c.id}" style="width:120px" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
     <span class="muted">${esc(c.contact||"kein Kontakt")}</span>
     <button class="sm pri" data-keep="${c.id}" data-drop="${other.id}" ${S.canWrite?"":"disabled"}>Diesen behalten</button></div>`;
-  app.innerHTML=`<div><h1>Dubletten</h1><p class="sub">${pairs.length} mögliche doppelte Einträge (ähnlicher Name oder gleiche etron-Nr.). Beim Zusammenführen wandern alle Bestellungen zum behaltenen Kunden, Kontakt und etron-Nr. werden übernommen, falls dort leer.</p></div>
-  ${pairs.length?pairs.map(([a,b])=>`<div class="panel"><div class="row spread"><h2>${sameEtron(a,b)?'<span class="pill s-Storniert" style="text-decoration:none">gleiche etron-Nr.</span> ':""}${esc(a.name)} / ${esc(b.name)}</h2>
+  app.innerHTML=`<div><h1>Dubletten</h1><p class="sub">${pairs.length} mögliche doppelte Einträge (ähnlicher Name, gleiche etron-Nr., Telefonnummer oder E-Mail). Die App prüft das automatisch bei jeder Änderung. Gehören zwei Einträge wirklich zu verschiedenen Personen (z. B. Familie mit einer Nummer), „Kein Duplikat“ klicken. Beim Zusammenführen wandern alle Bestellungen zum behaltenen Kunden, Kontakt und etron-Nr. werden übernommen, falls dort leer.</p></div>
+  ${pairs.length?pairs.map(([a,b])=>`<div class="panel"><div class="row spread"><h2>${dupeWhy(a,b).map(w=>`<span class="pill ${w==="ähnlicher Name"?"s-Warteliste":"s-Storniert"}" style="text-decoration:none">${w}</span> `).join("")}${esc(a.name)} / ${esc(b.name)}</h2>
     <button class="sm" data-no="${a.id}|${b.id}">Kein Duplikat</button></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">${card(a,b)}${card(b,a)}</div><div data-conf="${a.id}|${b.id}"></div></div>`).join("")
    :`<div class="empty">Keine möglichen Dubletten mehr. Neue Namen werden bei der Eingabe geprüft.</div>`}`;
