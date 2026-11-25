@@ -668,7 +668,7 @@ const EW_ACTIONS = {
     return {items:ewList(await ewCall(c,"GET","/search_extract/res.partner",{domain,fields:EW_PARTNER_FIELDS,limit:15,order:"name"}))}; },
   async partner_create(c,b){ const firstname=ewStr(b.firstname), lastname=ewStr(b.lastname); if(!firstname||!lastname) throw new Error("Vor- und Nachname fehlen");
     if(!ewStr(b.phone)&&!ewStr(b.email)) throw new Error("Telefon oder E-Mail ist Pflicht");
-    const values={firstname,lastname,type:"contact",customer_rank:1}; if(ewStr(b.phone)) values.mobile=ewStr(b.phone,40); if(ewStr(b.email)) values.email=ewStr(b.email);
+    const values={firstname,lastname,type:"contact",customer_rank:1}; if(ewStr(b.phone)) values.phone=ewStr(b.phone,40); /* ins Feld „Telefon“: „Mobil“ sieht man in der etron-Übersicht nicht (Tommy, 25.11.) */ if(ewStr(b.email)) values.email=ewStr(b.email);
     const cc=ewStr(b.country||"AT",2).toUpperCase(); if(/^[A-Z]{2}$/.test(cc)){ const cs=ewList(await ewCall(c,"GET","/search_read/res.country",{domain:[["code","=",cc]],fields:["id","code"],limit:1})); if(cs[0]?.id) values.country_id=cs[0].id; else throw new Error(`Land ${cc} in etron nicht gefunden`); }
     return {result:await ewCall(c,"POST","/create/res.partner",null,{values})}; },
   async product_find(c,b){ const codes=(b.codes||[]).map(x=>ewStr(x,60)).filter(Boolean).slice(0,50); if(!codes.length) return {items:[]};
@@ -1051,10 +1051,10 @@ function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); co
   let etT=null, etSeq=0; const neh=$("#"+k+"-neh");
   const etUi=()=>{ const has=!!v("net"); const l=$("#"+k+"-necl"); if(l) l.hidden=has; const cl=$("#"+k+"-ncl"); if(cl) cl.hidden=has||!$("#"+k+"-nec")?.checked; };
   const nec=$("#"+k+"-nec"); if(nec) nec.onchange=etUi;
-  const etSearch=()=>{ if(!neh) return; clearTimeout(etT); etT=setTimeout(async()=>{ const fn=v("nfn"), ln=v("nln"), tel=v("ntel"); if(ln.length<2 && tel.replace(/\D/g,"").length<6){ neh.innerHTML=""; return; }
+  const etSearch=()=>{ if(!neh) return; clearTimeout(etT); etT=setTimeout(async()=>{ if(!$("#"+k+"-nfn")) return; const fn=v("nfn"), ln=v("nln"), tel=v("ntel"); if(ln.length<2 && tel.replace(/\D/g,"").length<6){ neh.innerHTML=""; return; }
       const my=++etSeq; neh.textContent="Suche in etron …"; try{ const list=await etronFindPartners(fn,ln,tel); if(my!==etSeq) return;
         neh.innerHTML=list.length?`In etron gefunden (anklicken übernimmt die etron-Nr.): ${etronHitsHtml(list)}`:"In etron kein passender Kunde gefunden.";
-        neh.querySelectorAll("[data-epid]").forEach(b=>b.onclick=()=>{ const p=list.find(x=>String(x.id)===b.dataset.epid); $("#"+k+"-net").value=p.id; if(!v("ntel")&&etronTel(p)) $("#"+k+"-ntel").value=(p.mobile||p.phone); if(!v("nmail")&&p.email) $("#"+k+"-nmail").value=p.email; etUi(); neh.innerHTML=`✓ etron-Nr. ${p.id} übernommen (${esc(p.name||"")}).`; }); }
+        neh.querySelectorAll("[data-epid]").forEach(b=>b.onclick=()=>{ const p=list.find(x=>String(x.id)===b.dataset.epid); $("#"+k+"-net").value=p.id; if(!v("ntel")&&etronTel(p)) $("#"+k+"-ntel").value=(p.phone||p.mobile); if(!v("nmail")&&p.email) $("#"+k+"-nmail").value=p.email; etUi(); neh.innerHTML=`✓ etron-Nr. ${p.id} übernommen (${esc(p.name||"")}).`; }); }
       catch(e){ if(my===etSeq) neh.textContent="etron-Suche nicht möglich: "+(e.message||e); } },450); };
   ["nfn","nln","ntel"].forEach(id=>$("#"+k+"-"+id).oninput=()=>{ check(); etSearch(); }); $("#"+k+"-net").oninput=etUi; check(); etSearch();
   $("#"+k+"-nx").onclick=()=>{ box.innerHTML=""; };
@@ -1317,8 +1317,8 @@ function renderCustomer(cid){
 
 // Telefon/E-Mail aus etron: leere Felder in der App füllen, abweichende nur melden (nie still überschreiben)
 async function etronPartner(id){ const r=await etronCall("partner_search",{q:String(id)}); return (r.items||[]).find(p=>String(p.id)===String(id))||null; }
-function etronContactDiff(c, p){ const cf=contactFields(c), et=String((p.mobile&&p.mobile!==false?p.mobile:"")||(p.phone&&p.phone!==false?p.phone:"")||"").trim(), em=String(p.email&&p.email!==false?p.email:"").trim();
-  return {tel:{app:cf.tel||"",etron:et,same:!et||telKey(et)===telKey(cf.tel)&&!!cf.tel},mail:{app:cf.mail||"",etron:em,same:!em||em.toLowerCase()===(cf.mail||"").toLowerCase()}}; }
+function etronContactDiff(c, p){ const cf=contactFields(c), ph=String(p.phone&&p.phone!==false?p.phone:"").trim(), mo=String(p.mobile&&p.mobile!==false?p.mobile:"").trim(), et=ph||mo, em=String(p.email&&p.email!==false?p.email:"").trim();
+  return {tel:{app:cf.tel||"",etron:et,same:!et||!!cf.tel&&[ph,mo].filter(Boolean).some(x=>telKey(x)===telKey(cf.tel))},mail:{app:cf.mail||"",etron:em,same:!em||em.toLowerCase()===(cf.mail||"").toLowerCase()}}; }
 async function etronFillContact(cid, p){ try{ const c=S.customers[cid]; if(!c||!etronOn()) return null; p=p||await etronPartner(c.etronId); if(!p) return null;
     const d=etronContactDiff(c,p), cf=contactFields(c); const tel=!cf.tel&&d.tel.etron?d.tel.etron:cf.tel, mail=!cf.mail&&d.mail.etron?d.mail.etron:cf.mail; const filled=[];
     if(tel!==cf.tel) filled.push("Telefon"); if(mail!==cf.mail) filled.push("E-Mail");
