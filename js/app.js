@@ -143,7 +143,19 @@ function stats(p){
   const flex = flexOf(p.id).filter(o=>COUNTS(o.status)).reduce((s,o)=>s+(o.qty||0),0);
   return { flex, pre, alloc, open, wait, rec, free: rec==null?null:rec-alloc, n: os.filter(o=>COUNTS(o.status)).length, over: rec!=null && alloc>rec };
 }
-const relKey = r => { if(!r) return "9999"; if(/^\d{4}-\d{2}-\d{2}$/.test(r)) return r; const q=r.match(/Q(\d)\s*(\d{4})/i); if(q) return `${q[2]}-${String(q[1]*3).padStart(2,"0")}-31`; const y=r.match(/^(\d{4})$/); if(y) return `${y[1]}-12-31z`; return "9998"; };
+// Release als sortierbarer Schlüssel (JJJJ-MM-TT). Versteht: 2027-05-15, 15.05.2027, 15.5.27, 05/2027, 5.2027, 2027-05, Mai 2027, Q2 2027, H1 2027, 2027. Unbekannt/leer ans Ende.
+const MONTHS = {jan:1,jän:1,jaen:1,feb:2,mär:3,maer:3,mar:3,apr:4,mai:5,may:5,jun:6,jul:7,aug:8,sep:9,okt:10,oct:10,nov:11,dez:12,dec:12};
+const relKey = r => { r=String(r||"").trim(); if(!r) return "9999"; const P=n=>String(n).padStart(2,"0"), Y=y=>y.length===2?"20"+y:y; let m;
+  if(m=r.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)) return `${m[1]}-${P(m[2])}-${P(m[3])}`;
+  if(m=r.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/)) return `${Y(m[3])}-${P(m[2])}-${P(m[1])}`;
+  if(m=r.match(/^(\d{4})-(\d{1,2})$/)) return `${m[1]}-${P(m[2])}-32`;
+  if(m=r.match(/^(\d{1,2})[./](\d{4})$/)) return `${m[2]}-${P(m[1])}-32`;
+  if(m=r.match(/Q\s*(\d)\D*(\d{4})/i)) return `${m[2]}-${P(m[1]*3)}-33`;
+  if(m=r.match(/H\s*([12])\D*(\d{4})/i)) return `${m[2]}-${m[1]==="1"?"06":"12"}-34`;
+  if(m=r.match(/([A-Za-zÄÖÜäöü]{3,})\.?\s*(\d{4})/)){ const mo=MONTHS[m[1].toLowerCase().slice(0,3)]||MONTHS[m[1].toLowerCase().slice(0,4)]; if(mo) return `${m[2]}-${P(mo)}-32`; }
+  if(m=r.match(/^(\d{4})$/)) return `${m[1]}-12-35`;
+  if(m=r.match(/(\d{4})/)) return `${m[1]}-12-36`;
+  return "9998"; };
 const relTxt = r => /^\d{4}-\d{2}-\d{2}$/.test(r||"") ? fmtDate(r) : (r || "offen");
 const sortOrders = (a,b) => (a.date||"9999").localeCompare(b.date||"9999") || (a.createdAt||"").localeCompare(b.createdAt||"") || a.id.localeCompare(b.id);
 
@@ -485,8 +497,10 @@ function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]
 // Nichts geht über fremde Server: der Text steht nur im Link, den WhatsApp auf diesem PC öffnet.
 const waGroups = list => list.filter(r=>r.length&&msgOpenType(r)&&quickTpl(r));
 const waBtn = groups => groups.length?`<button class="sm" id="waq-go" data-wag="${esc(groups.map(r=>r.map(o=>o.id).join(",")).join(";"))}" title="Für alle mit offener Nachricht nacheinander WhatsApp mit dem fertigen Text öffnen">📱 WhatsApp nacheinander (${groups.length})</button>`:"";
-const waMode = () => { try{ return localStorage.getItem("vb.wamode")||"app"; }catch(e){ return "app"; } };
-const waLink = (num, txt) => waMode()==="web" ? `https://wa.me/${num}?text=${encodeURIComponent(txt)}` : `whatsapp://send?phone=${num}&text=${encodeURIComponent(txt)}`;
+const waMode = () => { try{ return localStorage.getItem("vb.wamode2")||"web"; }catch(e){ return "web"; } };
+// Web: immer derselbe Tab (Name "vb-whatsapp"), damit nicht für jeden Kunden ein neuer Tab aufgeht
+const waWeb = (num, txt) => `https://web.whatsapp.com/send?phone=${num}&text=${encodeURIComponent(txt)}`;
+const waLink = (num, txt) => waMode()==="web" ? waWeb(num,txt) : `whatsapp://send?phone=${num}&text=${encodeURIComponent(txt)}`;
 function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
   if(q.i>=n){ return `<div class="panel" id="waq"><div class="row spread"><h2>WhatsApp: fertig</h2><button class="sm" id="waq-x">Schließen</button></div>
     <p>${q.sent} Nachrichten erledigt und als gesendet markiert.${q.skipped.length?` Übersprungen (${q.skipped.length}): ${q.skipped.map(ids=>{ const o=S.orders[ids[0]]; const c=S.customers[o?.customerId]; return c?`<a href="#kunde-${o.customerId}">${esc(c.name)}</a>`:""; }).join(", ")}`:""}</p>
@@ -496,13 +510,13 @@ function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
   const needTag=q.list.some(ids=>{ const l=ids.map(id=>S.orders[id]).filter(Boolean); return l.length&&autoTplId(l)==="t-abholbereit"; });
   return `<div class="panel" id="waq"><div class="row spread"><h2>${n>1?`WhatsApp nacheinander · ${q.i+1} von ${n}`:"WhatsApp an einen Kunden"}</h2><span class="row" style="gap:6px">
       ${needTag?`<label class="row muted" style="gap:4px">Abholung ab <input type="date" id="waq-tag" value="${esc(q.tag)}"></label>`:""}
-      <select id="waq-mode" title="Womit WhatsApp geöffnet wird"><option value="app" ${waMode()==="app"?"selected":""}>WhatsApp-App am PC</option><option value="web" ${waMode()==="web"?"selected":""}>WhatsApp Web (Browser)</option></select>
+      <select id="waq-mode" title="Womit WhatsApp geöffnet wird"><option value="web" ${waMode()==="web"?"selected":""}>WhatsApp Web (Browser-Tab)</option><option value="app" ${waMode()==="app"?"selected":""}>WhatsApp-App am PC</option></select>
       <button class="sm" id="waq-x">Beenden</button></span></div>
     <p><b><a href="#kunde-${os[0]?.customerId||""}">${esc(c.name||"?")}</a></b> <span class="muted">${esc(cp.tel||"keine Telefonnummer")} · Vorlage „${esc(t?.name||"-")}“</span></p>
     ${canWa?"":`<div class="note bad">${!t?"Für diesen Kunden ist keine Nachricht mehr offen.":!cp.wa?"Keine Telefonnummer hinterlegt.":"Bei diesem Kunden ist „kein WhatsApp“ eingetragen."} ${t?"Text kopieren und anders schicken, oder überspringen.":"Bitte überspringen."}</div>`}
     <textarea id="waq-t" rows="6" style="width:100%">${esc(txt)}</textarea>
-    <div class="row">${canWa?`<a class="btn pri" id="waq-open" href="${esc(waLink(cp.wa,txt))}" ${waMode()==="web"?'target="_blank" rel="noopener"':""}>WhatsApp öffnen und weiter</a>`:t?`<button class="pri" id="waq-copy">Text kopieren, als gesendet markieren und weiter</button>`:""}
-      <button id="waq-skip">Überspringen</button><span class="muted">In WhatsApp nur noch auf Senden drücken, dann hier weiter.</span></div></div>`; }
+    <div class="row">${canWa?`<a class="btn pri" id="waq-open" href="${esc(waLink(cp.wa,txt))}" ${waMode()==="web"?'target="vb-whatsapp"':""}>WhatsApp öffnen und weiter</a>`:t?`<button class="pri" id="waq-copy">Text kopieren, als gesendet markieren und weiter</button>`:""}
+      <button id="waq-skip">Überspringen</button><span class="muted">In WhatsApp nur noch auf Senden drücken, dann hier weiter.</span></div><div id="waq-fb"></div></div>`; }
 function drawWaq(){ const b=$("#waq-box"); if(!b) return; b.innerHTML=waqHtml(); bindWaq(); }
 function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff()) return; const list=go.dataset.wag.split(";").map(x=>x.split(",")).filter(r=>r[0]);
     S.waq={list,i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO",`WhatsApp nacheinander gestartet: ${list.length} Nachrichten`); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); };
@@ -510,12 +524,20 @@ function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff(
   const q=S.waq; if(!q||!$("#waq")) return;
   const x=$("#waq-x"); if(x) x.onclick=()=>{ dlog("INFO",`WhatsApp nacheinander beendet: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); S.waq=null; drawWaq(); };
   const tg=$("#waq-tag"); if(tg) tg.onchange=e=>{ q.tag=e.target.value||today(); drawWaq(); };
-  const md=$("#waq-mode"); if(md) md.onchange=e=>{ try{ localStorage.setItem("vb.wamode",e.target.value); }catch(_){} drawWaq(); };
+  const md=$("#waq-mode"); if(md) md.onchange=e=>{ try{ localStorage.setItem("vb.wamode2",e.target.value); }catch(_){} drawWaq(); };
   if(q.i>=q.list.length) return;
   const os=q.list[q.i].map(id=>S.orders[id]).filter(Boolean), c=S.customers[os[0]?.customerId]||{}, cp=contactParts(c), t=os.length?quickTpl(os):null;
   const ta=$("#waq-t"), op=$("#waq-open"); if(ta&&op) ta.oninput=()=>{ op.href=waLink(cp.wa,ta.value); };
   const next=()=>{ q.i++; drawWaq(); if(q.i>=q.list.length) dlog("INFO",`WhatsApp nacheinander fertig: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); };
-  if(op) op.onclick=()=>{ q.sent++; markSent(os, t); setTimeout(next, 300); };
+  const done=()=>{ q.sent++; markSent(os, t); next(); };
+  // Prüfen, ob sich WhatsApp wirklich geöffnet hat (Fenster verliert den Fokus). Sonst nicht als gesendet markieren, sondern WhatsApp Web anbieten.
+  if(op) op.onclick=()=>{ if(waMode()==="web"){ setTimeout(done,300); return; } if(op.dataset.busy) return; op.dataset.busy="1"; let left=false; const away=()=>{ left=true; };
+    window.addEventListener("blur",away); document.addEventListener("visibilitychange",away);
+    setTimeout(()=>{ window.removeEventListener("blur",away); document.removeEventListener("visibilitychange",away); delete op.dataset.busy;
+      if(left) return done();
+      dlog("WARN",`WhatsApp (${waMode()}) hat sich nicht geöffnet`);
+      const fb=$("#waq-fb"); if(fb){ fb.innerHTML=`<div class="note bad">WhatsApp hat sich nicht geöffnet${waMode()==="app"?" (die WhatsApp-App ist auf diesem PC vermutlich nicht installiert oder Chrome darf sie nicht öffnen)":" (vielleicht hat Chrome das neue Fenster blockiert, dann oben rechts in der Adressleiste erlauben)"}. <a class="btn" id="waq-web" href="${esc(waWeb(cp.wa,(ta?.value)||""))}" target="vb-whatsapp">Mit WhatsApp Web öffnen</a> <button class="sm" id="waq-ok">Ist doch offen: als gesendet markieren und weiter</button></div>`;
+        $("#waq-web").onclick=()=>{ try{ localStorage.setItem("vb.wamode2","web"); }catch(_){} setTimeout(done,300); }; $("#waq-ok").onclick=done; } }, 1500); };
   const cpb=$("#waq-copy"); if(cpb) cpb.onclick=async()=>{ if(!await copyText(ta.value)) return toast("Kopieren nicht möglich"); await markSent(os,t); q.sent++; toast("Kopiert und als gesendet markiert"); next(); };
   const sk=$("#waq-skip"); if(sk) sk.onclick=()=>{ q.skipped.push(q.list[q.i]); next(); }; }
 
