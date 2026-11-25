@@ -352,7 +352,8 @@ function renderProduct(pid){
   </div>
   ${orderForm("pr", pid)}
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
-    <span class="row" style="gap:6px">${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+    <span class="row" style="gap:6px">${waBtn(waGroups(os.filter(o=>nameMatch(S.oq, S.customers[o.customerId])).map(o=>[o])))}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+  <div id="waq-box">${waqHtml()}</div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${shown.map(o=>{const c=S.customers[o.customerId];const d=c?dupesOf(c):[];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}">
     <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a>${!o.productId?` <span class="pill s-Offen" title="${esc(orderLabel(o))}">egal welches</span>`:o.pairId?` <span class="gtag">Teil von „beide“</span>`:""}${d.length?` <span class="pill s-Warteliste" title="Ähnlich: ${esc(d.map(x=>x.name).join(", "))}">Dublette?</span>`:""}</td>
@@ -378,7 +379,7 @@ function renderProduct(pid){
         for(const x of own) o.orders[x.id]={deleted:true,updatedAt:t};
         for(const x of fl){ const ch=(o.orders[x.id].choices||[]).filter(c=>c!==pid); o.orders[x.id]= ch.length>1 ? {...o.orders[x.id],choices:ch,_ft:undefined,updatedAt:t} : ch.length===1 ? {...o.orders[x.id],choices:undefined,_ft:undefined,productId:ch[0],updatedAt:t} : {deleted:true,updatedAt:t}; } });
       toast("Produkt gelöscht"); location.hash="produkte"; }; };
-  $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort();
+  $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort(); bindWaq();
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,S.mode)};render();}};
   $("#min1").onchange=e=>{S.min1=e.target.checked; try{localStorage.setItem("vb.min1",S.min1?"1":"");}catch(x){} if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,$("#mode").value)};} render();};
   $("#sug").onclick=()=>{ S.sugg[pid]={map:suggest(p,$("#mode").value)}; render(); };
@@ -470,6 +471,43 @@ function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]
   let tel=(t.replace(mail,"").match(/\+?[\d][\d\s/()-]{5,}/)||[])[0]||""; tel=tel.replace(/[^\d+]/g,"");
   const wa = tel ? (tel.startsWith("+") ? tel.slice(1) : tel.startsWith("00") ? tel.slice(2) : tel.startsWith("0") ? "43"+tel.slice(1) : tel) : "";
   return { mail, tel, wa }; }
+// ---------- WhatsApp nacheinander (halbautomatisch): die App öffnet WhatsApp mit fertigem Text, gesendet wird von Hand.
+// Nichts geht über fremde Server: der Text steht nur im Link, den WhatsApp auf diesem PC öffnet.
+const waGroups = list => list.filter(r=>r.length&&msgOpenType(r)&&quickTpl(r));
+const waBtn = groups => groups.length?`<button class="sm" id="waq-go" data-wag="${esc(groups.map(r=>r.map(o=>o.id).join(",")).join(";"))}" title="Für alle mit offener Nachricht nacheinander WhatsApp mit dem fertigen Text öffnen">📱 WhatsApp nacheinander (${groups.length})</button>`:"";
+const waMode = () => { try{ return localStorage.getItem("vb.wamode")||"app"; }catch(e){ return "app"; } };
+const waLink = (num, txt) => waMode()==="web" ? `https://wa.me/${num}?text=${encodeURIComponent(txt)}` : `whatsapp://send?phone=${num}&text=${encodeURIComponent(txt)}`;
+function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
+  if(q.i>=n){ return `<div class="panel" id="waq"><div class="row spread"><h2>WhatsApp nacheinander: fertig</h2><button class="sm" id="waq-x">Schließen</button></div>
+    <p>${q.sent} Nachrichten erledigt und als gesendet markiert.${q.skipped.length?` Übersprungen (${q.skipped.length}): ${q.skipped.map(ids=>{ const o=S.orders[ids[0]]; const c=S.customers[o?.customerId]; return c?`<a href="#kunde-${o.customerId}">${esc(c.name)}</a>`:""; }).join(", ")}`:""}</p>
+    <p class="muted">Bitte in WhatsApp kurz prüfen, ob alle wirklich gesendet sind. Eine nicht gesendete Nachricht kannst du beim Kunden über „Nachricht“ erneut schicken.</p></div>`; }
+  const os=q.list[q.i].map(id=>S.orders[id]).filter(Boolean); const c=S.customers[os[0]?.customerId]||{}; const cp=contactParts(c); const t=os.length?quickTpl(os):null;
+  const canWa=!!cp.wa&&!c.noWhatsapp&&!!t; const txt=t?fillTemplate(t.text,os,q.tag):"";
+  const needTag=q.list.some(ids=>{ const l=ids.map(id=>S.orders[id]).filter(Boolean); return l.length&&autoTplId(l)==="t-abholbereit"; });
+  return `<div class="panel" id="waq"><div class="row spread"><h2>WhatsApp nacheinander · ${q.i+1} von ${n}</h2><span class="row" style="gap:6px">
+      ${needTag?`<label class="row muted" style="gap:4px">Abholung ab <input type="date" id="waq-tag" value="${esc(q.tag)}"></label>`:""}
+      <select id="waq-mode" title="Womit WhatsApp geöffnet wird"><option value="app" ${waMode()==="app"?"selected":""}>WhatsApp-App am PC</option><option value="web" ${waMode()==="web"?"selected":""}>WhatsApp Web (Browser)</option></select>
+      <button class="sm" id="waq-x">Beenden</button></span></div>
+    <p><b><a href="#kunde-${os[0]?.customerId||""}">${esc(c.name||"?")}</a></b> <span class="muted">${esc(cp.tel||"keine Telefonnummer")} · Vorlage „${esc(t?.name||"-")}“</span></p>
+    ${canWa?"":`<div class="note bad">${!t?"Für diesen Kunden ist keine Nachricht mehr offen.":!cp.wa?"Keine Telefonnummer hinterlegt.":"Bei diesem Kunden ist „kein WhatsApp“ eingetragen."} ${t?"Text kopieren und anders schicken, oder überspringen.":"Bitte überspringen."}</div>`}
+    <textarea id="waq-t" rows="6" style="width:100%">${esc(txt)}</textarea>
+    <div class="row">${canWa?`<a class="btn pri" id="waq-open" href="${esc(waLink(cp.wa,txt))}" ${waMode()==="web"?'target="_blank" rel="noopener"':""}>WhatsApp öffnen und weiter</a>`:t?`<button class="pri" id="waq-copy">Text kopieren, als gesendet markieren und weiter</button>`:""}
+      <button id="waq-skip">Überspringen</button><span class="muted">In WhatsApp nur noch auf Senden drücken, dann hier weiter.</span></div></div>`; }
+function drawWaq(){ const b=$("#waq-box"); if(!b) return; b.innerHTML=waqHtml(); bindWaq(); }
+function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff()) return; const list=go.dataset.wag.split(";").map(x=>x.split(",")).filter(r=>r[0]);
+    S.waq={list,i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO",`WhatsApp nacheinander gestartet: ${list.length} Nachrichten`); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); };
+  const q=S.waq; if(!q||!$("#waq")) return;
+  const x=$("#waq-x"); if(x) x.onclick=()=>{ dlog("INFO",`WhatsApp nacheinander beendet: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); S.waq=null; drawWaq(); };
+  const tg=$("#waq-tag"); if(tg) tg.onchange=e=>{ q.tag=e.target.value||today(); drawWaq(); };
+  const md=$("#waq-mode"); if(md) md.onchange=e=>{ try{ localStorage.setItem("vb.wamode",e.target.value); }catch(_){} drawWaq(); };
+  if(q.i>=q.list.length) return;
+  const os=q.list[q.i].map(id=>S.orders[id]).filter(Boolean), c=S.customers[os[0]?.customerId]||{}, cp=contactParts(c), t=os.length?quickTpl(os):null;
+  const ta=$("#waq-t"), op=$("#waq-open"); if(ta&&op) ta.oninput=()=>{ op.href=waLink(cp.wa,ta.value); };
+  const next=()=>{ q.i++; drawWaq(); if(q.i>=q.list.length) dlog("INFO",`WhatsApp nacheinander fertig: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); };
+  if(op) op.onclick=()=>{ q.sent++; markSent(os, t); setTimeout(next, 300); };
+  const cpb=$("#waq-copy"); if(cpb) cpb.onclick=async()=>{ if(!await copyText(ta.value)) return toast("Kopieren nicht möglich"); await markSent(os,t); q.sent++; toast("Kopiert und als gesendet markiert"); next(); };
+  const sk=$("#waq-skip"); if(sk) sk.onclick=()=>{ q.skipped.push(q.list[q.i]); next(); }; }
+
 function msgDialog(ids){
   const os=ids.map(id=>S.orders[id]).filter(Boolean); if(!os.length) return; const cid=os[0].customerId; let c=S.customers[cid]||{};
   const tpls=templates(); const st=autoTplId(os);
@@ -1044,7 +1082,7 @@ function renderSeries(anyPid){
   // Zeilen: Paare („beide“) zusammenfassen, sonst eine Zeile pro Bestellung
   const rowsMap = new Map();
   for (const o of all.sort(sortOrders)){ const k = o.pairId || o.id; if(!rowsMap.has(k)) rowsMap.set(k, []); rowsMap.get(k).push(o); }
-  let rows = [...rowsMap.values()];
+  let rows = [...rowsMap.values()]; const waAll = waGroups(rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])));
   rows = rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])).filter(r => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType(r) : r.some(o => fstat==="aktiv" ? isActive(o, sug) : o.status===fstat)));
   rows = sortView(rows, r=>r[0]?.customerId);
   const wish = r => { const o=r[0]; if(r.length>1||o.pairId) return "beide"; if(!o.productId) return "egal"; if(o.choices) return "egal → "+(S.products[o.productId]?.name||"?"); return "nur "+(S.products[o.productId]?.name||"?"); };
@@ -1070,7 +1108,8 @@ function renderSeries(anyPid){
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
   ${orderForm("se", null, null, ids)}
-  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${waBtn(waAll)}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+  <div id="waq-box">${waqHtml()}</div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n nowrap">${r.length>1?r.map(x=>`<span title="${esc(S.products[x.productId]?.name||"")}">${x.qty??"?"}</span>`).join(" + "):o.qty??""}</td><td>${fmtDate(o.date)}</td>
@@ -1084,7 +1123,7 @@ function renderSeries(anyPid){
   app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const ids2=el.closest("tr").dataset.row.split(","); const v=el.value;
     if (v==="Storniert") return cancelOrders(ids2);
     await pool(ids2, id=>S.db.collection("orders").doc(id).update({status:v})); toast("Gespeichert"); });
-  $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort();
+  $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort(); bindWaq();
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[key]){S.sugg[key]=seriesSuggest(sib,S.mode);render();}};
   $("#min1").onchange=e=>{S.min1=e.target.checked; try{localStorage.setItem("vb.min1",S.min1?"1":"");}catch(x){} if(S.sugg[key]){S.sugg[key]=seriesSuggest(sib,$("#mode").value);} render();};
   $("#sug").onclick=()=>{ S.sugg[key]=seriesSuggest(sib,$("#mode").value); render(); };
@@ -1554,6 +1593,11 @@ const WIKI = [
     <li>App neu laden. Unter Einstellungen → etron-Schnittstelle steht dann „✓ Erweiterung aktiv“. Den Zugang muss nur ein PC einmal speichern (liegt in der Dropbox).</li>
     <li>Zugang anlegen (nur einmal): in etron mit dem <b>Firmenkonto</b> anmelden (Benutzertyp „Interner Benutzer“ mit Verkaufsrechten, nicht das private Konto) → API &amp; Hooks → Authentication → Client Credentials. Adresse, Client Key und Secret unter Einstellungen → etron eintragen und „Verbindung testen“.</li>
     <li>Danach einmal in der Kundenliste <b>„Mit etron abgleichen“</b> und bei den Produkten oben <b>„Artikel in etron suchen“</b> → „Übernehmen“.</li></ol>`],
+  ["Kunden per WhatsApp benachrichtigen (nacheinander)", `<ol><li>Auf der Produkt- oder Serienseite oben bei den Bestellungen auf <b>„📱 WhatsApp nacheinander“</b> klicken. Die Zahl sagt, wie viele Nachrichten noch offen sind (Abholung, Storno, Warteliste).</li>
+    <li>Die App zeigt den ersten Kunden mit dem fertigen Text (Vorlage mit {Stück}, {Tag} usw.). Der Text kann vorher noch geändert werden. „Abholung ab“ setzt das Datum für alle.</li>
+    <li><b>„WhatsApp öffnen und weiter“</b>: WhatsApp öffnet sich mit dem Text, dort nur noch <b>Senden</b> drücken. Die Nachricht wird in der App als gesendet markiert, und der nächste Kunde kommt.</li>
+    <li>Ohne Telefonnummer oder mit „kein WhatsApp“: Text kopieren oder überspringen. Übersprungene stehen am Ende in der Liste.</li>
+    <li>Oben wählst du, ob die <b>WhatsApp-App am PC</b> (empfohlen) oder <b>WhatsApp Web</b> geöffnet wird. Beim ersten Mal fragt Chrome, ob WhatsApp geöffnet werden darf: „Immer erlauben“ anhaken.</li></ol>`],
   ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen. Ist eine <b>Verpackungseinheit</b> hinterlegt (z. B. 8 Displays pro Karton), kann die Menge auch direkt in VE eingetragen werden; die Stückzahl wird dann ausgerechnet.</li>
     <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Mit <b>„Jeder mind. 1 Stück“</b> bekommt zuerst jeder Kunde eins (reicht die Ware nicht für alle, nach Bestelldatum), der Rest wird dann wie gewählt verteilt. Dann <b>Vorschlag berechnen</b>.</li>
     <li>Vorschlag prüfen, eventuell einzelne Zahlen in der Tabelle ändern, dann <b>Vorschlag übernehmen</b>.</li>
