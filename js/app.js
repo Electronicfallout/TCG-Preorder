@@ -591,7 +591,7 @@ const EW_ACTIONS = {
       diag=parts.join(" · "); dlog("INFO","Diagnose Artikel: "+diag); }
     return {ok:true,read:ewList(r).length,prod,perr,diag}; },
   async partner_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
-    const domain=/^\d+$/.test(q)?["|","|","|",["id","=",+q],["ref","=",q],["phone","ilike",q],["mobile","ilike",q]]:["|","|","|",["name","ilike",q],["email","ilike",q],["phone","ilike",q],["mobile","ilike",q]];
+    const domain=/^\d+$/.test(q)?["|","|","|",["id","=",+q],["ref","=",q],["phone","ilike",q],["mobile","ilike",q]]:["|","|","|","|",["name","ilike",q],["email","ilike",q],["phone","ilike",q],["mobile","ilike",q],["ref","=ilike",q]];
     return {items:ewList(await ewCall(c,"GET","/search_extract/res.partner",{domain,fields:EW_PARTNER_FIELDS,limit:15,order:"name"}))}; },
   async partner_create(c,b){ const firstname=ewStr(b.firstname), lastname=ewStr(b.lastname); if(!firstname||!lastname) throw new Error("Vor- und Nachname fehlen");
     const values={firstname,lastname,type:"contact",customer_rank:1}; if(ewStr(b.phone)) values.mobile=ewStr(b.phone,40); if(ewStr(b.email)) values.email=ewStr(b.email);
@@ -1148,14 +1148,21 @@ function bindCet(){ const x=$("#cet-x"); if(x) x.onclick=()=>{ S.cet=null; drawC
 function renderCustomers(){
   const q=norm(S.cq||""); const onlyD=S.cdup;
   const counts={}; Object.values(S.orders).forEach(o=>{ const c=counts[o.customerId]||(counts[o.customerId]={n:0,open:0}); if(COUNTS(o.status)){c.n++; if(o.status==="Offen"||o.status==="Zugeteilt") c.open+=(o.alloc||o.qty||0);} });
-  const cs=Object.values(S.customers).map(c=>({...c,d:dupesOf(c)})).filter(c=>(!q||nameMatch(q,c)||String(c.etronId||"").includes(S.cq.trim())) && (!onlyD||c.d.length) && (!S.cnoe||!c.etronId) && (!S.cunc||!nameChecked(c))).sort((a,b)=>a.name.localeCompare(b.name,"de"));
+  const eq=String(S.ceq||"").replace(/[\s.#]/g,"");
+  const cs=Object.values(S.customers).map(c=>({...c,d:dupesOf(c)})).filter(c=>(!q||nameMatch(q,c)||String(c.etronId||"").includes(S.cq.trim())) && (!eq||String(c.etronId||"").trim()===eq||String(c.etronRef||"").trim().toLowerCase()===eq.toLowerCase()) && (!onlyD||c.d.length) && (!S.cnoe||!c.etronId) && (!S.cunc||!nameChecked(c))).sort((a,b)=>a.name.localeCompare(b.name,"de"));
   const dn=Object.values(S.customers).filter(c=>dupesOf(c).length).length;
   app.innerHTML=`<div class="row spread"><h1>Kunden</h1><div class="row">${etronOn()?`<button id="cet" ${S.cet?.running?"disabled":""}>Mit etron abgleichen</button>`:""}<button class="pri" id="cnew">+ Neuer Kunde</button></div></div><div id="cl-ncbox"></div><div id="cet-box">${cetHtml()}</div><div><p class="sub">${Object.keys(S.customers).length} Kunden, davon ${Object.values(S.customers).filter(c=>!c.etronId).length} ohne etron-Nr. ${dn?`${dn} sehen nach Dublette aus: <a class="back" href="#dubletten">jetzt prüfen</a>.`:""}</p></div>
-  <div class="row"><input id="cq" class="search" placeholder="Kunde suchen" value="${esc(S.cq||"")}"><label class="row muted"><input type="checkbox" id="cdup" ${onlyD?"checked":""}> Nur mögliche Dubletten</label><label class="row muted"><input type="checkbox" id="cnoe" ${S.cnoe?"checked":""}> Nur ohne etron-Nr.</label><label class="row muted"><input type="checkbox" id="cunc" ${S.cunc?"checked":""}> Vor-/Nachname ungeprüft (${Object.values(S.customers).filter(c=>!nameChecked(c)).length})</label></div>
+  <div class="row"><input id="cq" class="search" placeholder="Kunde suchen" value="${esc(S.cq||"")}"><input id="ceq" class="search" style="max-width:190px" placeholder="etron-Nr. oder Referenz" value="${esc(S.ceq||"")}"><label class="row muted"><input type="checkbox" id="cdup" ${onlyD?"checked":""}> Nur mögliche Dubletten</label><label class="row muted"><input type="checkbox" id="cnoe" ${S.cnoe?"checked":""}> Nur ohne etron-Nr.</label><label class="row muted"><input type="checkbox" id="cunc" ${S.cunc?"checked":""}> Vor-/Nachname ungeprüft (${Object.values(S.customers).filter(c=>!nameChecked(c)).length})</label></div>
+  ${eq?`<div class="note" id="ceq-info">${cs.length?`${cs.length} Kunde${cs.length>1?"n":""} mit etron-Nr./Referenz ${esc(eq)}${cs.length>1?" (Dublette?)":""}.`:`Kein Kunde in der App hat die etron-Nr. oder Referenz ${esc(eq)}.`}${etronOn()?` <button class="sm" id="ceq-et">In etron nachsehen</button> <span id="ceq-r"></span>`:""}</div>`:""}
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>etron-Nr.</th><th>Kontakt</th><th class="n">Bestellungen</th><th class="n">Stück offen</th><th>Ähnlich</th></tr></thead><tbody>
   ${cs.map(c=>`<tr class="click" data-go="kunde-${c.id}"><td>${custFlags(c)}<a href="#kunde-${c.id}">${esc(c.name)}</a></td><td><input data-cf="${c.id}" id="e-${c.id}" style="width:110px" value="${esc(c.etronId||"")}" placeholder="fehlt">${etronUrl(c)?` <a href="${esc(etronUrl(c))}" target="_blank" rel="noopener" title="In etron öffnen">↗</a>`:""}</td><td>${esc(c.contact||"")}</td><td class="n">${counts[c.id]?.n||0}</td><td class="n">${counts[c.id]?.open||""}</td><td>${c.d.map(x=>esc(x.name)).join(", ")}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Kein Kunde gefunden.</td></tr>`}
   </tbody></table></div>`;
   $("#cq").oninput=e=>{S.cq=e.target.value;render();};
+  $("#ceq").oninput=e=>{S.ceq=e.target.value;render();};
+  const ceb=$("#ceq-et"); if(ceb) ceb.onclick=async()=>{ const out=$("#ceq-r"); out.textContent="… suche"; ceb.disabled=true;
+    try{ const r=await etronCall("partner_search",{q:eq}); const hits=(r.items||[]).filter(p=>String(p.id)===eq||String(p.ref||"").toLowerCase()===eq.toLowerCase());
+      out.innerHTML=hits.length?hits.map(p=>{ const inApp=Object.values(S.customers).find(c=>String(c.etronId||"")===String(p.id)); return `<b>Nr. ${p.id}</b>${p.ref?` · Ref. ${esc(String(p.ref))}`:""}: ${esc(p.name||"")} <span class="muted">${esc(etronTel(p))}${p.email?" · "+esc(p.email):""}</span>${inApp?` → in der App: <a href="#kunde-${inApp.id}">${esc(inApp.name)}</a>`:" → noch mit keinem Kunden in der App verknüpft"}`; }).join("<br>"):`<span class="bad">In etron gibt es keinen Kunden mit Nr. oder Referenz ${esc(eq)}.</span>`; }
+    catch(e){ out.innerHTML=`<span class="bad">✗ ${esc(e.message||e)}</span>`; } ceb.disabled=false; };
   $("#cdup").onchange=e=>{S.cdup=e.target.checked;renderCustomers();};
   $("#cnew").onclick=()=>openCustNew("cl", $("#cl-ncbox"), S.cq||"", cid=>{ location.hash="kunde-"+cid; });
   $("#cnoe").onchange=e=>{S.cnoe=e.target.checked;renderCustomers();};
