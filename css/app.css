@@ -56,7 +56,7 @@ input,select,textarea{font:inherit;color:var(--fg);background:var(--surface);bor
 input[type=number]{width:72px;text-align:right}
 td input,td select{padding:4px 6px}
 td input.c{width:100%;min-width:100px}
-td select{max-width:150px}
+td select{max-width:128px}
 td input[type=number]{width:58px}
 td button.sm,td .btn.sm{padding:4px 8px}
 td input[type=date]{max-width:140px}
@@ -133,3 +133,6 @@ ul.eatest{list-style:none;padding:0;margin:10px 0 0}
 ul.eatest li{padding:3px 0}
 ul.eatest li.ok{color:var(--ok)}
 ul.eatest li.bad{color:var(--bad)}
+/* Serie: zweite Kopfzeile (Bestellt/Zuteilung je Produkt) unter der ersten festhalten */
+thead tr.h2 th{top:var(--th1,30px)}
+thead tr.h2 th:first-child{left:auto;z-index:2;background:var(--surface2)}

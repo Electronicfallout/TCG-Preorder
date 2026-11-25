@@ -1188,19 +1188,28 @@ function renderSeries(anyPid){
   const sib = siblings(p0); const ids = sib.map(p=>p.id); const key = "serie:"+seriesOf(p0); const sug = S.sugg[key];
   const all = Object.values(S.orders).filter(o=>ids.includes(o.productId) || (!o.productId && (o.choices||[]).some(c=>ids.includes(c))));
   const fstat = S.fstat||"aktiv";
-  // Zeilen: Paare („beide“) zusammenfassen, sonst eine Zeile pro Bestellung
+  // Eine Zeile pro Kunde (Tommy, 25.11.): alle Bestellungen des Kunden in dieser Serie, je Produkt Menge und Zuteilung nebeneinander.
   const rowsMap = new Map();
-  for (const o of all.sort(sortOrders)){ const k = o.pairId || o.id; if(!rowsMap.has(k)) rowsMap.set(k, []); rowsMap.get(k).push(o); }
+  for (const o of all.sort(sortOrders)){ const k = o.customerId || o.id; if(!rowsMap.has(k)) rowsMap.set(k, []); rowsMap.get(k).push(o); }
   let rows = [...rowsMap.values()]; const waAll = waGroups(rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])));
   rows = rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])).filter(r => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType(r) : (fstat==="aktiv" && msgOpen(r)) || r.some(o => fstat==="aktiv" ? isActive(o, sug) : o.status===fstat)));
   rows = sortView(rows, r=>r[0]?.customerId);
-  const wish = r => { const o=r[0]; if(r.length>1||o.pairId) return "beide"; if(!o.productId) return "egal"; if(o.choices) return "egal → "+(S.products[o.productId]?.name||"?"); return "nur "+(S.products[o.productId]?.name||"?"); };
   const st = sib.map(p=>({p, s:stats(p)}));
-  const cell = (r, pid) => { const o = r.find(x=>x.productId===pid);
-    if (o) return `<td class="n"><input type="number" min="0" data-f="alloc" data-oid="${o.id}" id="sa-${o.id}" value="${o.alloc??""}" title="Bestellt ${o.qty??"?"}"></td>${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.res[o.id]??""}</td>`:""}`;
-    const f = r.find(x=>!x.productId && (x.choices||[]).includes(pid));
-    if (f) return `<td class="n"><input type="number" min="0" data-flex="${f.id}" data-pid="${pid}" id="sf-${f.id}-${pid}" placeholder="–"></td>${sug?`<td class="n" style="font-weight:700;color:var(--accent)">${sug.flex[f.id]?.pid===pid?sug.flex[f.id].n:""}</td>`:""}`;
+  const hasFlex = all.some(o=>!o.productId);
+  const live = r => r.filter(x=>x.status!=="Storniert").length ? r.filter(x=>x.status!=="Storniert") : r;
+  // Menge je Produkt: eine Bestellung = Eingabefeld, mehrere = Summe als Text
+  const qcell = (r, pid) => { const os = live(r).filter(x=>x.productId===pid);
+    if (!os.length) return `<td class="n muted">·</td>`;
+    if (os.length===1) return `<td class="n"><input type="number" min="0" data-q="${os[0].id}" id="sq-${os[0].id}" value="${os[0].qty??""}" title="Bestellt"></td>`;
+    return `<td class="n" title="${os.length} Bestellungen">${os.reduce((t,x)=>t+(x.qty||0),0)}</td>`; };
+  const cell = (r, pid) => { const os = live(r).filter(x=>x.productId===pid); const sv = x => sug ? `<td class="n" style="font-weight:700;color:var(--accent)">${x}</td>` : "";
+    const f = live(r).find(x=>!x.productId && (x.choices||[]).includes(pid));
+    if (os.length===1 && !f) return `<td class="n"><input type="number" min="0" data-f="alloc" data-oid="${os[0].id}" id="sa-${os[0].id}" value="${os[0].alloc??""}" title="Bestellt ${os[0].qty??"?"}"></td>${sv(sug?.res[os[0].id]??"")}`;
+    if (os.length>1) return `<td class="n" title="${os.length} Bestellungen, einzeln auf der Produktseite änderbar">${os.reduce((t,x)=>t+(x.alloc||0),0)||""}</td>${sv(os.reduce((t,x)=>t+(sug?.res[x.id]||0),0)||"")}`;
+    if (f) return `<td class="n">${os.length?`<input type="number" min="0" data-f="alloc" data-oid="${os[0].id}" id="sa-${os[0].id}" value="${os[0].alloc??""}" title="Bestellt ${os[0].qty??"?"}"> + `:""}<input type="number" min="0" data-flex="${f.id}" data-pid="${pid}" id="sf-${f.id}-${pid}" placeholder="egal" title="„egal welches“ diesem Produkt zuteilen"></td>${sv(((os[0]&&sug?.res[os[0].id])||0)+(sug?.flex[f.id]?.pid===pid?sug.flex[f.id].n:0)||"")}`;
     return `<td class="n muted">·</td>${sug?"<td></td>":""}`; };
+  const stSel = r => { const ss=[...new Set(r.map(x=>x.status))]; const one=ss.length===1?ss[0]:null;
+    return `<select data-rs id="ss-${r[0].id}" title="${one?"":"Gemischt: "+esc(ss.join(", "))+". Eine Auswahl gilt für alle Bestellungen des Kunden in dieser Serie."}">${one?"":`<option selected disabled>gemischt</option>`}${STATUSES.map(x=>`<option ${x===one?"selected":""}>${x}</option>`).join("")}</select>`; };
   const sugSum = sug ? Object.values(sug.res).reduce((a,b)=>a+b,0)+Object.values(sug.flex).reduce((a,b)=>a+b.n,0) : 0;
   app.innerHTML = `<a class="back" href="#produkte">← Produkte</a>
   <div class="row spread"><div><h1>Serie ${esc(seriesOf(p0))}</h1><p class="sub">${esc(gameOf(p0))} · ${sib.map(p=>`<a class="back" href="#produkt-${p.id}">${esc(p.name)}</a>`).join(" · ")}</p></div>${addVarBtn()}</div><div id="addvbox"></div>
@@ -1219,17 +1228,20 @@ function renderSeries(anyPid){
   ${orderForm("se", null, null, ids)}
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${waBtn(waAll)}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen, Warteliste, Nachricht offen)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div id="waq-box">${waqHtml()}</div>
-  <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
-  ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
-    <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td><td>${esc(wish(r))}</td><td class="n nowrap">${r.length>1?r.map(x=>`<span title="${esc(S.products[x.productId]?.name||"")}">${x.qty??"?"}</span>`).join(" + "):o.qty??""}</td><td>${fmtDate(o.date)}</td>
-    <td><select data-rs id="ss-${o.id}">${STATUSES.map(x=>`<option ${x===o.status?"selected":""}>${x}</option>`).join("")}</select></td>
-    ${sib.map(p=>cell(r,p.id)).join("")}<td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(o.comment||"")}</td></tr>`}).join("")||`<tr><td colspan="9" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
+  <div class="tablebox"><table><thead><tr><th rowspan="2">Kunde</th><th colspan="${sib.length+(hasFlex?1:0)}" style="text-align:center">Bestellt</th><th colspan="${sib.length*(sug?2:1)}" style="text-align:center">Zuteilung</th><th rowspan="2">Bestellt am</th><th rowspan="2">Status</th><th rowspan="2">Auftrag</th><th rowspan="2">Nachricht</th><th rowspan="2">Kommentar</th></tr>
+    <tr class="h2">${sib.map(p=>`<th class="n">${esc(p.name)}</th>`).join("")}${hasFlex?'<th class="n" title="Kunde will eines davon, egal welches">egal</th>':""}${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}</tr></thead><tbody>
+  ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];const fl=live(r).filter(x=>!x.productId);const cm=[...new Set(r.map(x=>x.comment).filter(Boolean))].join(" · ");return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
+    <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td>
+    ${sib.map(p=>qcell(r,p.id)).join("")}${hasFlex?`<td class="n">${fl.reduce((t,x)=>t+(x.qty||0),0)||'<span class="muted">·</span>'}</td>`:""}
+    ${sib.map(p=>cell(r,p.id)).join("")}<td>${fmtDate(o.date)}</td><td>${stSel(r)}</td>
+    <td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(cm)}</td></tr>`}).join("")||`<tr><td colspan="${5+sib.length*2}" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
   </tbody></table></div>`;
   app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
   app.querySelectorAll("input[data-oid]").forEach(el=>el.onchange=()=>saveAlloc(el.dataset.oid, num(el.value)));
+  app.querySelectorAll("input[data-q]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!(v>0)){ el.value=S.orders[el.dataset.q]?.qty??""; return toast("Menge muss mindestens 1 sein. Zum Entfernen den Status auf Storniert setzen."); } write("orders",el.dataset.q,{qty:v}).then(ok=>ok&&toast("Gespeichert")); });
   app.querySelectorAll("input[data-flex]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!v) return; const o=S.orders[el.dataset.flex];
     write("orders",o.id,{productId:el.dataset.pid,alloc:v,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")}).then(ok=>ok&&toast("Zugeteilt")); });
-  app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const ids2=el.closest("tr").dataset.row.split(","); const v=el.value;
+  app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const v=el.value; const ids2=el.closest("tr").dataset.row.split(",").filter(id=>v==="Storniert"||S.orders[id]?.status!=="Storniert");
     if (v==="Storniert") return cancelOrders(ids2);
     await pool(ids2, id=>S.db.collection("orders").doc(id).update({status:v})); toast("Gespeichert"); });
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort(); bindWaq();
