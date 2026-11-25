@@ -506,7 +506,7 @@ function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
     <p>${q.sent} Nachrichten erledigt und als gesendet markiert.${q.skipped.length?` Übersprungen (${q.skipped.length}): ${q.skipped.map(ids=>{ const o=S.orders[ids[0]]; const c=S.customers[o?.customerId]; return c?`<a href="#kunde-${o.customerId}">${esc(c.name)}</a>`:""; }).join(", ")}`:""}</p>
     <p class="muted">Bitte in WhatsApp kurz prüfen, ob alle wirklich gesendet sind. Eine nicht gesendete Nachricht kannst du beim Kunden über „Nachricht“ erneut schicken.</p></div>`; }
   const os=q.list[q.i].map(id=>S.orders[id]).filter(Boolean); const c=S.customers[os[0]?.customerId]||{}; const cp=contactParts(c); const t=os.length?quickTpl(os):null;
-  const canWa=!!cp.wa&&!c.noWhatsapp&&!!t; const txt=t?fillTemplate(t.text,os,q.tag):"";
+  const canWa=!!cp.wa&&!c.noWhatsapp&&!!t; if(q.txtI!==q.i||q.txtTag!==q.tag){ q.txt=t?fillTemplate(t.text,os,q.tag):""; q.txtI=q.i; q.txtTag=q.tag; } const txt=q.txt;
   const needTag=q.list.some(ids=>{ const l=ids.map(id=>S.orders[id]).filter(Boolean); return l.length&&autoTplId(l)==="t-abholbereit"; });
   return `<div class="panel" id="waq"><div class="row spread"><h2>${n>1?`WhatsApp nacheinander · ${q.i+1} von ${n}`:"WhatsApp an einen Kunden"}</h2><span class="row" style="gap:6px">
       ${needTag?`<label class="row muted" style="gap:4px">Abholung ab <input type="date" id="waq-tag" value="${esc(q.tag)}"></label>`:""}
@@ -515,8 +515,14 @@ function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
     <p><b><a href="#kunde-${os[0]?.customerId||""}">${esc(c.name||"?")}</a></b> <span class="muted">${esc(cp.tel||"keine Telefonnummer")} · Vorlage „${esc(t?.name||"-")}“</span></p>
     ${canWa?"":`<div class="note bad">${!t?"Für diesen Kunden ist keine Nachricht mehr offen.":!cp.wa?"Keine Telefonnummer hinterlegt.":"Bei diesem Kunden ist „kein WhatsApp“ eingetragen."} ${t?"Text kopieren und anders schicken, oder überspringen.":"Bitte überspringen."}</div>`}
     <textarea id="waq-t" rows="6" style="width:100%">${esc(txt)}</textarea>
-    <div class="row">${canWa?`<a class="btn pri" id="waq-open" href="${esc(waLink(cp.wa,txt))}" ${waMode()==="web"?'target="vb-whatsapp"':""}>WhatsApp öffnen und weiter</a>`:t?`<button class="pri" id="waq-copy">Text kopieren, als gesendet markieren und weiter</button>`:""}
-      <button id="waq-skip">Überspringen</button><span class="muted">In WhatsApp nur noch auf Senden drücken, dann hier weiter.</span></div><div id="waq-fb"></div></div>`; }
+    <div class="row">${canWa?`<a class="btn pri" id="waq-open" href="${esc(waLink(cp.wa,txt))}" ${waMode()==="web"?'target="_blank" rel="noopener"':""}>WhatsApp öffnen und weiter</a>`:t?`<button class="pri" id="waq-copy">Text kopieren, als gesendet markieren und weiter</button>`:""}
+      <button id="waq-skip">Überspringen</button><span class="muted">In WhatsApp nur noch auf Senden drücken, dann hier weiter.</span></div>
+    ${canWa?`<details class="muted"><summary>Geht nichts auf?</summary><p>1. <button type="button" class="sm" id="waq-win">Anders öffnen</button> 2. <button type="button" class="sm" id="waq-cpl">Link kopieren</button> und in einem Chrome-Tab in die Adresszeile einfügen. 3. Oder den Text oben kopieren und in WhatsApp selbst einfügen.</p><p class="mono" style="word-break:break-all;font-size:11px">${esc(waLink(cp.wa,txt).slice(0,160))}…</p></details>`:""}<div id="waq-fb">${waqFb(q,cp)}</div></div>`; }
+// Hinweis nach dem Klick: steht in S.waq, damit er ein Neuzeichnen der Seite übersteht.
+function waqFb(q,cp){ const u=q.txt!=null?q.txt:""; if(!q.fb) return "";
+  if(q.fb==="opened") return `<div class="note">Geöffnet. Nach dem Senden: <button class="sm pri" id="waq-ok">Als gesendet markieren und weiter</button></div>`;
+  if(q.fb==="blocked") return `<div class="note bad">Chrome hat das Fenster blockiert. Oben rechts in der Adresszeile auf das Symbol „Pop-up blockiert“ klicken und für diese Seite immer erlauben, dann nochmal „Anders öffnen“.</div>`;
+  return `<div class="note bad">WhatsApp scheint sich nicht geöffnet zu haben${q.fbMode==="app"?" (die WhatsApp-App ist auf diesem PC vermutlich nicht installiert oder Chrome darf sie nicht öffnen)":" (vielleicht hat Chrome das neue Fenster blockiert: oben rechts in der Adresszeile erlauben)"}. Die Nachricht ist noch nicht als gesendet markiert. <a class="btn" id="waq-web" href="${esc(waWeb(cp.wa,u))}" target="_blank" rel="noopener">Mit WhatsApp Web öffnen</a> <button class="sm" id="waq-ok">Ist doch offen: als gesendet markieren und weiter</button></div>`; }
 function drawWaq(){ const b=$("#waq-box"); if(!b) return; b.innerHTML=waqHtml(); bindWaq(); }
 function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff()) return; const list=go.dataset.wag.split(";").map(x=>x.split(",")).filter(r=>r[0]);
     S.waq={list,i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO",`WhatsApp nacheinander gestartet: ${list.length} Nachrichten`); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); };
@@ -527,17 +533,22 @@ function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff(
   const md=$("#waq-mode"); if(md) md.onchange=e=>{ try{ localStorage.setItem("vb.wamode2",e.target.value); }catch(_){} drawWaq(); };
   if(q.i>=q.list.length) return;
   const os=q.list[q.i].map(id=>S.orders[id]).filter(Boolean), c=S.customers[os[0]?.customerId]||{}, cp=contactParts(c), t=os.length?quickTpl(os):null;
-  const ta=$("#waq-t"), op=$("#waq-open"); if(ta&&op) ta.oninput=()=>{ op.href=waLink(cp.wa,ta.value); };
-  const next=()=>{ q.i++; drawWaq(); if(q.i>=q.list.length) dlog("INFO",`WhatsApp nacheinander fertig: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); };
+  const ta=$("#waq-t"), op=$("#waq-open"); if(ta) ta.oninput=()=>{ q.txt=ta.value; if(op) op.href=waLink(cp.wa,ta.value); };
+  const next=()=>{ q.i++; q.fb=null; drawWaq(); if(q.i>=q.list.length) dlog("INFO",`WhatsApp nacheinander fertig: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); };
   const done=()=>{ q.sent++; markSent(os, t); next(); };
   // Prüfen, ob sich WhatsApp wirklich geöffnet hat (Fenster verliert den Fokus). Sonst nicht als gesendet markieren, sondern WhatsApp Web anbieten.
-  if(op) op.onclick=()=>{ if(waMode()==="web"){ setTimeout(done,300); return; } if(op.dataset.busy) return; op.dataset.busy="1"; let left=false; const away=()=>{ left=true; };
+  const win=$("#waq-win"); if(win) win.onclick=()=>{ const u=waLink(cp.wa,ta?.value||""); let w=null; try{ w=window.open(u,"_blank"); }catch(e){ dlog("ERROR","WhatsApp window.open: "+(e.message||e)); }
+    dlog(w?"INFO":"WARN",`WhatsApp anders öffnen (${waMode()}): ${w?"Fenster geöffnet":"vom Browser blockiert"}`);
+    q.fb=w?"opened":"blocked"; drawWaq(); };
+  const ok=$("#waq-ok"); if(ok) ok.onclick=done;
+  const wb=$("#waq-web"); if(wb) wb.onclick=()=>{ try{ localStorage.setItem("vb.wamode2","web"); }catch(_){} dlog("INFO","WhatsApp Web über Hinweis geöffnet"); q.fb="opened"; setTimeout(drawWaq,300); };
+  const cpl=$("#waq-cpl"); if(cpl) cpl.onclick=async()=>{ const ok=await copyText(waLink(cp.wa,ta?.value||"")); toast(ok?"Link kopiert: in einem Chrome-Tab in die Adresszeile einfügen":"Kopieren nicht möglich"); };
+  if(op) op.onclick=()=>{ dlog("INFO",`WhatsApp-Link geklickt (${waMode()})`); if(op.dataset.busy) return; op.dataset.busy="1"; const i0=q.i; let left=false; const away=()=>{ left=true; };
     window.addEventListener("blur",away); document.addEventListener("visibilitychange",away);
     setTimeout(()=>{ window.removeEventListener("blur",away); document.removeEventListener("visibilitychange",away); delete op.dataset.busy;
-      if(left) return done();
+      if(S.waq!==q||q.i!==i0) return; if(left) return done();
       dlog("WARN",`WhatsApp (${waMode()}) hat sich nicht geöffnet`);
-      const fb=$("#waq-fb"); if(fb){ fb.innerHTML=`<div class="note bad">WhatsApp hat sich nicht geöffnet${waMode()==="app"?" (die WhatsApp-App ist auf diesem PC vermutlich nicht installiert oder Chrome darf sie nicht öffnen)":" (vielleicht hat Chrome das neue Fenster blockiert, dann oben rechts in der Adressleiste erlauben)"}. <a class="btn" id="waq-web" href="${esc(waWeb(cp.wa,(ta?.value)||""))}" target="vb-whatsapp">Mit WhatsApp Web öffnen</a> <button class="sm" id="waq-ok">Ist doch offen: als gesendet markieren und weiter</button></div>`;
-        $("#waq-web").onclick=()=>{ try{ localStorage.setItem("vb.wamode2","web"); }catch(_){} setTimeout(done,300); }; $("#waq-ok").onclick=done; } }, 1500); };
+      q.fb="notopen"; q.fbMode=waMode(); drawWaq(); }, 1500); };
   const cpb=$("#waq-copy"); if(cpb) cpb.onclick=async()=>{ if(!await copyText(ta.value)) return toast("Kopieren nicht möglich"); await markSent(os,t); q.sent++; toast("Kopiert und als gesendet markiert"); next(); };
   const sk=$("#waq-skip"); if(sk) sk.onclick=()=>{ q.skipped.push(q.list[q.i]); next(); }; }
 
