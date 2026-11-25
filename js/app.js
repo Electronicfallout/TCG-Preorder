@@ -502,7 +502,8 @@ function msgOpen(list){ const os=list.filter(o=>o&&["Zugeteilt","Auftrag angeleg
 function msgClass(n, os){ if(!n || (os && msgOpen(os))) return "msg-new"; const id=notifiedTid(n); return id==="t-storno"?"msg-storno":id==="t-warteliste"?"msg-wait":"msg-ok"; }
 function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
   const q=quickTpl(os);
-  const wa1 = S.waqPage && q && msgOpenType(os) ? `<button class="sm" data-wa1="${os.map(o=>o.id).join(",")}" title="WhatsApp nur für diesen Kunden öffnen">📱</button>` : "";
+  let wa1 = ""; if(S.waqPage && q && msgOpenType(os)){ const c=S.customers[os[0].customerId], cp=contactParts(c); const ids=os.map(o=>o.id).join(",");
+    wa1 = cp.wa&&!c?.noWhatsapp ? `<a class="btn sm" data-wa1="${ids}" href="${esc(waLink(cp.wa,fillTemplate(q.text,os,today())))}" target="_blank" rel="noopener" title="WhatsApp mit fertigem Text öffnen (${esc(q.name)})">📱</a>` : `<button class="sm" data-wa1="${ids}" title="WhatsApp nur für diesen Kunden: keine Nummer oder kein WhatsApp, Text kopieren">📱</button>`; }
   return `<span class="row" style="gap:4px;flex-wrap:nowrap">${wa1}${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n, os)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button>${S.customers[os[0].customerId]?.noWhatsapp?`<span class="pill" style="background:var(--grey-soft)" title="Kunde hat kein WhatsApp: per SMS schicken">SMS</span>`:""}</span>`; }
 const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
 const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
@@ -557,7 +558,8 @@ function waqFb(q,cp){ const u=q.txt!=null?q.txt:""; if(!q.fb) return "";
 function drawWaq(){ const b=$("#waq-box"); if(!b) return; b.innerHTML=waqHtml(); bindWaq(); }
 function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff()) return; const list=go.dataset.wag.split(";").map(x=>x.split(",")).filter(r=>r[0]);
     S.waq={list,i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO",`WhatsApp nacheinander gestartet: ${list.length} Nachrichten`); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); };
-  app.querySelectorAll("[data-wa1]").forEach(b=>b.onclick=e=>{ e.stopPropagation(); if(needStaff()) return; S.waq={list:[b.dataset.wa1.split(",")],i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO","WhatsApp einzeln gestartet"); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); });
+  app.querySelectorAll("[data-wa1]").forEach(b=>b.onclick=e=>{ e.stopPropagation(); if(needStaff()){ e.preventDefault(); return; } S.waq={list:[b.dataset.wa1.split(",")],i:0,tag:today(),sent:0,skipped:[]};
+    const direct=b.tagName==="A"; dlog("INFO",direct?`WhatsApp einzeln direkt geöffnet (${waMode()})`:"WhatsApp einzeln gestartet"); drawWaq(); if(direct) S.waq?.watch?.(); else $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); });
   const q=S.waq; if(!q||!$("#waq")) return;
   const x=$("#waq-x"); if(x) x.onclick=()=>{ dlog("INFO",`WhatsApp nacheinander beendet: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); S.waq=null; drawWaq(); };
   const tg=$("#waq-tag"); if(tg) tg.onchange=e=>{ q.tag=e.target.value||today(); drawWaq(); };
@@ -574,12 +576,14 @@ function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff(
   const ok=$("#waq-ok"); if(ok) ok.onclick=done;
   const wb=$("#waq-web"); if(wb) wb.onclick=()=>{ try{ localStorage.setItem("vb.wamode2","web"); }catch(_){} dlog("INFO","WhatsApp Web über Hinweis geöffnet"); q.fb="opened"; setTimeout(drawWaq,300); };
   const cpl=$("#waq-cpl"); if(cpl) cpl.onclick=async()=>{ const ok=await copyText(waLink(cp.wa,ta?.value||"")); toast(ok?"Link kopiert: in einem Chrome-Tab in die Adresszeile einfügen":"Kopieren nicht möglich"); };
-  if(op) op.onclick=()=>{ dlog("INFO",`WhatsApp-Link geklickt (${waMode()})`); if(op.dataset.busy) return; op.dataset.busy="1"; const i0=q.i; let left=false; const away=()=>{ left=true; };
+  // Nach dem Öffnen: hat sich WhatsApp wirklich geöffnet (Fenster verliert den Fokus)? Dann als gesendet markieren, sonst Hinweis zeigen.
+  q.watch=()=>{ if(q.busy) return; q.busy=1; const i0=q.i; let left=false; const away=()=>{ left=true; };
     window.addEventListener("blur",away); document.addEventListener("visibilitychange",away);
-    setTimeout(()=>{ window.removeEventListener("blur",away); document.removeEventListener("visibilitychange",away); delete op.dataset.busy;
+    setTimeout(()=>{ window.removeEventListener("blur",away); document.removeEventListener("visibilitychange",away); q.busy=0;
       if(S.waq!==q||q.i!==i0) return; if(left) return done();
       dlog("WARN",`WhatsApp (${waMode()}) hat sich nicht geöffnet`);
       q.fb="notopen"; q.fbMode=waMode(); drawWaq(); }, 1500); };
+  if(op) op.onclick=()=>{ dlog("INFO",`WhatsApp-Link geklickt (${waMode()})`); q.watch(); };
   const cpb=$("#waq-copy"); if(cpb) cpb.onclick=async()=>{ if(!await copyText(ta.value)) return toast("Kopieren nicht möglich"); await markSent(os,t); q.sent++; toast("Kopiert und als gesendet markiert"); next(); };
   const sk=$("#waq-skip"); if(sk) sk.onclick=()=>{ q.skipped.push(q.list[q.i]); next(); }; }
 
