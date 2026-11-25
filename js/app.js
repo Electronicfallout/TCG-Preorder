@@ -545,16 +545,24 @@ const setWaMode = v => { try{ localStorage.setItem("vb.wamode3", v==="web"?"web"
 const waTarget = () => waMode()==="web" ? 'target="_blank" rel="noopener"' : "";
 // Einmalige Bereinigung (Tommy, 25.11.): importierte Bestellungen ohne „Bestellt am“ bekommen 01.11.2026, leeres Kürzel wird „TU“. Nichts Vorhandenes wird überschrieben.
 const FIX_DATE="2026-11-01", FIX_STAFF="TU";
-const fixTargets = () => Object.entries(S.orders).filter(([id,o])=>o&&!o.deleted&&!String(o.date||"").trim());
+// Auch unlesbare Daten (z. B. „1.11.2026“ oder Excel-Zahlen aus dem Import), fehlendes Kürzel und fehlender Status werden erkannt.
+const isoOk = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d||""));
+const isoFix = d => { const t=String(d??"").trim(); if(!t) return FIX_DATE; let m;
+  if(m=t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  if(m=t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/)) return `${m[3].length===2?"20"+m[3]:m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  if(/^\d{5}(\.\d+)?$/.test(t)){ const x=new Date(Date.UTC(1899,11,30)+Math.floor(+t)*864e5); return x.toISOString().slice(0,10); }
+  return FIX_DATE; };
+const fixNeed = o => !isoOk(o.date) || !String(o.staff||"").trim() || !STATUSES.includes(o.status);
+const fixTargets = () => Object.entries(S.orders).filter(([id,o])=>o&&!o.deleted&&fixNeed(o));
 function fixPanel(){ const t=fixTargets(); if(!t.length) return "";
-  const ns=t.filter(([,o])=>!String(o.staff||"").trim()).length;
-  return `<div class="panel"><h2>Alte Bestellungen ohne Datum</h2><p>${t.length} Bestellungen haben kein „Bestellt am“${ns?`, davon ${ns} auch ohne Mitarbeiter-Kürzel`:""}.</p>
-  <div class="row"><button id="fixd" ${S.canWrite?"":"disabled"}>Datum ${fmtDate(FIX_DATE)} eintragen${ns?` und Kürzel ${FIX_STAFF}`:""}</button><span id="fixc"></span></div>
-  <p class="muted">Betrifft nur Bestellungen ohne Datum. Ein vorhandenes Kürzel bleibt unverändert.</p></div>`; }
+  const nd=t.filter(([,o])=>!isoOk(o.date)).length, ns=t.filter(([,o])=>!String(o.staff||"").trim()).length, nt=t.filter(([,o])=>!STATUSES.includes(o.status)).length;
+  return `<div class="panel"><h2>Unvollständige Bestellungen</h2><p>${t.length} Bestellungen sind unvollständig: ${[nd?`${nd} ohne gültiges „Bestellt am“`:"",ns?`${ns} ohne Mitarbeiter-Kürzel`:"",nt?`${nt} ohne Status`:""].filter(Boolean).join(", ")}.</p>
+  <div class="row"><button id="fixd" ${S.canWrite?"":"disabled"}>Ergänzen</button><span id="fixc"></span></div>
+  <p class="muted">Fehlendes Datum wird ${fmtDate(FIX_DATE)} (ein lesbares Datum wie „1.11.2026“ wird nur umgewandelt), fehlendes Kürzel ${FIX_STAFF}, fehlender Status „Offen“. Vorhandene Angaben bleiben unverändert.</p></div>`; }
 function bindFix(){ const b=$("#fixd"); if(!b) return; b.onclick=()=>{ const t=fixTargets();
   $("#fixc").innerHTML=` <button class="sm danger" id="fixok">Ja, ${t.length} Bestellungen ändern</button>`;
-  $("#fixok").onclick=()=>{ const ts=now(); let n=0; S.doc.update(d=>{ for(const [id] of t){ const o=d.orders[id]; if(!o||o.deleted||String(o.date||"").trim()) continue; o.date=FIX_DATE; if(!String(o.staff||"").trim()) o.staff=FIX_STAFF; o.updatedAt=ts; n++; } });
-    dlog("INFO",`Bereinigung: ${n} Bestellungen ohne Datum auf ${FIX_DATE} gesetzt`); toast(`${n} Bestellungen ergänzt`); render(); }; }; }
+  $("#fixok").onclick=()=>{ const ts=now(); let n=0; S.doc.update(d=>{ for(const [id] of t){ const o=d.orders[id]; if(!o||o.deleted||!fixNeed(o)) continue; if(!isoOk(o.date)) o.date=isoFix(o.date); if(!String(o.staff||"").trim()) o.staff=FIX_STAFF; if(!STATUSES.includes(o.status)) o.status="Offen"; o.updatedAt=ts; n++; } });
+    dlog("INFO",`Bereinigung: ${n} unvollständige Bestellungen ergänzt`); toast(`${n} Bestellungen ergänzt`); render(); }; }; }
 function waPanel(){ return `<div class="panel"><h2>WhatsApp</h2><p class="muted">Gilt für den 📱-Knopf und „WhatsApp nacheinander“ auf diesem PC.</p>
   <div class="row"><label class="row" style="gap:6px"><input type="radio" name="wamode" value="app" ${waMode()==="app"?"checked":""}> WhatsApp-App am PC</label><label class="row" style="gap:6px"><input type="radio" name="wamode" value="web" ${waMode()==="web"?"checked":""}> WhatsApp Web (Browser-Tab)</label></div>
   <p class="muted">Bei der App fragt Chrome beim ersten Mal „WhatsApp öffnen?“. Dort „Immer erlauben“ anhaken, dann geht sie künftig direkt auf.</p></div>`; }
