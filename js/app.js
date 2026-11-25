@@ -190,6 +190,7 @@ function render(){
   if (!S.skipImport && !Object.keys(S.products).length && !Object.keys(S.orders).length && h0()!=="einstellungen") return renderImport();
   const h=h0();
   const keepFocus = document.activeElement && document.activeElement.id; const sel = keepFocus && document.activeElement.selectionStart;
+  S.waqPage = h.startsWith("produkt-") || h.startsWith("serie-");
   if (h.startsWith("produkt-")) renderProduct(h.slice(8));
   else if (h.startsWith("kunde-")) renderCustomer(h.slice(6));
   else if (h.startsWith("serie-")) renderSeries(h.slice(6));
@@ -450,7 +451,8 @@ function msgOpen(list){ const os=list.filter(o=>o&&["Zugeteilt","Auftrag angeleg
 function msgClass(n, os){ if(!n || (os && msgOpen(os))) return "msg-new"; const id=notifiedTid(n); return id==="t-storno"?"msg-storno":id==="t-warteliste"?"msg-wait":"msg-ok"; }
 function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
   const q=quickTpl(os);
-  return `<span class="row" style="gap:4px;flex-wrap:nowrap">${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n, os)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button>${S.customers[os[0].customerId]?.noWhatsapp?`<span class="pill" style="background:var(--grey-soft)" title="Kunde hat kein WhatsApp: per SMS schicken">SMS</span>`:""}</span>`; }
+  const wa1 = S.waqPage && q && msgOpenType(os) ? `<button class="sm" data-wa1="${os.map(o=>o.id).join(",")}" title="WhatsApp nur für diesen Kunden öffnen">📱</button>` : "";
+  return `<span class="row" style="gap:4px;flex-wrap:nowrap">${wa1}${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n, os)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button>${S.customers[os[0].customerId]?.noWhatsapp?`<span class="pill" style="background:var(--grey-soft)" title="Kunde hat kein WhatsApp: per SMS schicken">SMS</span>`:""}</span>`; }
 const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
 const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
 const fmtTag = d => d ? WEEKDAYS[new Date(d+"T12:00:00").getDay()]+", "+fmtDate(d) : "";
@@ -478,13 +480,13 @@ const waBtn = groups => groups.length?`<button class="sm" id="waq-go" data-wag="
 const waMode = () => { try{ return localStorage.getItem("vb.wamode")||"app"; }catch(e){ return "app"; } };
 const waLink = (num, txt) => waMode()==="web" ? `https://wa.me/${num}?text=${encodeURIComponent(txt)}` : `whatsapp://send?phone=${num}&text=${encodeURIComponent(txt)}`;
 function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
-  if(q.i>=n){ return `<div class="panel" id="waq"><div class="row spread"><h2>WhatsApp nacheinander: fertig</h2><button class="sm" id="waq-x">Schließen</button></div>
+  if(q.i>=n){ return `<div class="panel" id="waq"><div class="row spread"><h2>WhatsApp: fertig</h2><button class="sm" id="waq-x">Schließen</button></div>
     <p>${q.sent} Nachrichten erledigt und als gesendet markiert.${q.skipped.length?` Übersprungen (${q.skipped.length}): ${q.skipped.map(ids=>{ const o=S.orders[ids[0]]; const c=S.customers[o?.customerId]; return c?`<a href="#kunde-${o.customerId}">${esc(c.name)}</a>`:""; }).join(", ")}`:""}</p>
     <p class="muted">Bitte in WhatsApp kurz prüfen, ob alle wirklich gesendet sind. Eine nicht gesendete Nachricht kannst du beim Kunden über „Nachricht“ erneut schicken.</p></div>`; }
   const os=q.list[q.i].map(id=>S.orders[id]).filter(Boolean); const c=S.customers[os[0]?.customerId]||{}; const cp=contactParts(c); const t=os.length?quickTpl(os):null;
   const canWa=!!cp.wa&&!c.noWhatsapp&&!!t; const txt=t?fillTemplate(t.text,os,q.tag):"";
   const needTag=q.list.some(ids=>{ const l=ids.map(id=>S.orders[id]).filter(Boolean); return l.length&&autoTplId(l)==="t-abholbereit"; });
-  return `<div class="panel" id="waq"><div class="row spread"><h2>WhatsApp nacheinander · ${q.i+1} von ${n}</h2><span class="row" style="gap:6px">
+  return `<div class="panel" id="waq"><div class="row spread"><h2>${n>1?`WhatsApp nacheinander · ${q.i+1} von ${n}`:"WhatsApp an einen Kunden"}</h2><span class="row" style="gap:6px">
       ${needTag?`<label class="row muted" style="gap:4px">Abholung ab <input type="date" id="waq-tag" value="${esc(q.tag)}"></label>`:""}
       <select id="waq-mode" title="Womit WhatsApp geöffnet wird"><option value="app" ${waMode()==="app"?"selected":""}>WhatsApp-App am PC</option><option value="web" ${waMode()==="web"?"selected":""}>WhatsApp Web (Browser)</option></select>
       <button class="sm" id="waq-x">Beenden</button></span></div>
@@ -496,6 +498,7 @@ function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
 function drawWaq(){ const b=$("#waq-box"); if(!b) return; b.innerHTML=waqHtml(); bindWaq(); }
 function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff()) return; const list=go.dataset.wag.split(";").map(x=>x.split(",")).filter(r=>r[0]);
     S.waq={list,i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO",`WhatsApp nacheinander gestartet: ${list.length} Nachrichten`); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); };
+  app.querySelectorAll("[data-wa1]").forEach(b=>b.onclick=e=>{ e.stopPropagation(); if(needStaff()) return; S.waq={list:[b.dataset.wa1.split(",")],i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO","WhatsApp einzeln gestartet"); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); });
   const q=S.waq; if(!q||!$("#waq")) return;
   const x=$("#waq-x"); if(x) x.onclick=()=>{ dlog("INFO",`WhatsApp nacheinander beendet: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); S.waq=null; drawWaq(); };
   const tg=$("#waq-tag"); if(tg) tg.onchange=e=>{ q.tag=e.target.value||today(); drawWaq(); };
@@ -533,7 +536,8 @@ function msgDialog(ids){
       ${cp.wa?`<a class="btn" id="m-w" href="#" target="_blank" rel="noopener" ${noWa?"hidden":""}>WhatsApp öffnen</a>`:""}
       ${cp.tel?`<a class="btn" id="m-sms" href="#" ${noWa?"":"hidden"}>SMS öffnen</a>`:""}
       ${cp.mail?`<a class="btn" id="m-e" href="#">E-Mail öffnen</a>`:""}
-      <button id="m-s">Als gesendet markieren</button><button id="m-x2">Schließen</button></div>
+      <button id="m-s">Als gesendet markieren</button>${os.some(o=>o.notified)?`<button id="m-un" title="Gesendet-Markierung entfernen, die Nachricht gilt dann wieder als offen">Als ungesendet markieren</button>`:""}<button id="m-x2">Schließen</button></div>
+    ${(()=>{ const n=os.find(o=>o.notified)?.notified; return n?`<p class="muted">Zuletzt als gesendet markiert: „${esc(n.template||"")}“ am ${esc(fmtDate(n.date))}${n.staff?" von "+esc(n.staff):""}.</p>`:""; })()}
     <p class="muted">Kopieren und z. B. in WhatsApp oder SMS einfügen. „Als gesendet markieren“ merkt sich Datum und Vorlage bei der Bestellung.</p></div>`;
     const ta=box.querySelector("#m-x");
     const links=()=>{ const t=encodeURIComponent(ta.value); const w=box.querySelector("#m-w"); if(w) w.href=`https://wa.me/${cp.wa}?text=${t}`; const sm=box.querySelector("#m-sms"); if(sm) sm.href=`sms:${cp.tel}?&body=${t}`;
@@ -553,6 +557,7 @@ function msgDialog(ids){
     box.querySelector("#m-wa").onchange=e=>save({noWhatsapp:!e.target.checked}, e.target.checked?"Gespeichert: hat WhatsApp":"Gespeichert: kein WhatsApp");
     for(const sel of ["#m-w","#m-e","#m-sms"]){ const a=box.querySelector(sel); if(a) a.addEventListener("click", e=>{ if(needStaff()){ e.preventDefault(); return; } mark(); }); }
     box.querySelector("#m-s").onclick=async()=>{ if(needStaff()) return; await mark(); toast("Als gesendet markiert"); box.remove(); };
+    const un=box.querySelector("#m-un"); if(un) un.onclick=async()=>{ if(needStaff()) return; un.disabled=true; try{ await pool(os.filter(o=>o.notified),o=>S.db.collection("orders").doc(o.id).update({notified:null})); toast("Wieder als ungesendet markiert"); box.remove(); }catch(e){ un.disabled=false; toast("Nicht gespeichert: "+(e.message||e)); } };
     box.querySelector("#m-x2").onclick=()=>box.remove();
     box.onclick=e=>{ if(e.target===box) box.remove(); };
   };
