@@ -645,7 +645,9 @@ const EW_ACTIONS = {
     const domain=/^\d+$/.test(q)?["|","|","|",["id","=",+q],["ref","=",q],["phone","ilike",q],["mobile","ilike",q]]:["|","|","|","|",["name","ilike",q],["email","ilike",q],["phone","ilike",q],["mobile","ilike",q],["ref","=ilike",q]];
     return {items:ewList(await ewCall(c,"GET","/search_extract/res.partner",{domain,fields:EW_PARTNER_FIELDS,limit:15,order:"name"}))}; },
   async partner_create(c,b){ const firstname=ewStr(b.firstname), lastname=ewStr(b.lastname); if(!firstname||!lastname) throw new Error("Vor- und Nachname fehlen");
+    if(!ewStr(b.phone)&&!ewStr(b.email)) throw new Error("Telefon oder E-Mail ist Pflicht");
     const values={firstname,lastname,type:"contact",customer_rank:1}; if(ewStr(b.phone)) values.mobile=ewStr(b.phone,40); if(ewStr(b.email)) values.email=ewStr(b.email);
+    const cc=ewStr(b.country||"AT",2).toUpperCase(); if(/^[A-Z]{2}$/.test(cc)){ const cs=ewList(await ewCall(c,"GET","/search_read/res.country",{domain:[["code","=",cc]],fields:["id","code"],limit:1})); if(cs[0]?.id) values.country_id=cs[0].id; else throw new Error(`Land ${cc} in etron nicht gefunden`); }
     return {result:await ewCall(c,"POST","/create/res.partner",null,{values})}; },
   async product_find(c,b){ const codes=(b.codes||[]).map(x=>ewStr(x,60)).filter(Boolean).slice(0,50); if(!codes.length) return {items:[]};
     const F=["id","default_code","barcode","name","active"], norm=x=>String(x||"").trim().toUpperCase();
@@ -693,7 +695,10 @@ async function etronFindPartners(fn, ln, tel){ const qs=[]; const d=String(tel||
   const seen=new Map(); for(const q of qs){ const r=await etronCall("partner_search",{q}); for(const p of r.items||[]) if(p&&p.id&&!seen.has(p.id)) seen.set(p.id,p); }
   const f=norm(fn||""); return [...seen.values()].sort((a,b)=>(norm(b.name||"").includes(f)?1:0)-(norm(a.name||"").includes(f)?1:0)).slice(0,10); }
 function etronHitsHtml(list){ return list.map(p=>`<button type="button" class="sm" data-epid="${p.id}">Nr. ${p.id}: ${esc(p.name||"")}${etronTel(p)?` <span class="muted">${esc(etronTel(p))}</span>`:""}${p.email?` <span class="muted">${esc(p.email)}</span>`:""}</button>`).join(" "); }
-async function etronCreatePartner(fn, ln, tel, mail){ dlog("INFO","Kunde in etron anlegen"); const r=await etronCall("partner_create",{firstname:fn,lastname:ln,phone:tel,email:mail}); const id=etronIdOf(r); if(!id){ dlog("ERROR","Kunde in etron anlegen: keine Kundennummer in der Antwort"); throw new Error("etron hat keine Kundennummer zurückgegeben"); } dlog("INFO",`Kunde in etron angelegt: Partner ${id}`); return id; }
+const COUNTRIES = [["AT","Österreich"],["DE","Deutschland"],["CH","Schweiz"],["IT","Italien"],["SI","Slowenien"],["HU","Ungarn"],["CZ","Tschechien"],["SK","Slowakei"],["LI","Liechtenstein"]];
+const countrySel = (id, v="AT") => `<select id="${id}">${COUNTRIES.map(([c,n])=>`<option value="${c}" ${c===v?"selected":""}>${n}</option>`).join("")}</select>`;
+async function etronCreatePartner(fn, ln, tel, mail, country="AT"){ if(!String(tel||"").trim()&&!String(mail||"").trim()) throw new Error("Für etron bitte Telefon oder E-Mail eintragen (eines ist Pflicht)");
+  dlog("INFO",`Kunde in etron anlegen (Land ${country})`); const r=await etronCall("partner_create",{firstname:fn,lastname:ln,phone:tel,email:mail,country}); const id=etronIdOf(r); if(!id){ dlog("ERROR","Kunde in etron anlegen: keine Kundennummer in der Antwort"); throw new Error("etron hat keine Kundennummer zurückgegeben"); } dlog("INFO",`Kunde in etron angelegt: Partner ${id}`); return id; }
 // Auftrag für einen Kunden: zugeteilte Positionen -> etron-Auftrag (Entwurf)
 async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronId) throw new Error("keine etron-Nr.");
   const cfg=odooCfg(); let partner=parseInt(c.etronId,10);
@@ -1006,7 +1011,7 @@ function custNewForm(k, pre){ const [fn,...rest]=(pre||"").trim().split(/\s+/);
     <label>E-Mail<input id="${k}-nmail" type="email" autocomplete="off"></label>
     <label>etron-Nr.<input id="${k}-net" autocomplete="off" placeholder="falls bekannt"></label>
     <label class="row muted" style="align-self:end"><input type="checkbox" id="${k}-nwa"> kein WhatsApp</label>
-    ${etronOn()?`<label class="row muted" style="align-self:end" id="${k}-necl"><input type="checkbox" id="${k}-nec" checked> auch in etron anlegen</label>`:""}
+    ${etronOn()?`<label class="row muted" style="align-self:end" id="${k}-necl"><input type="checkbox" id="${k}-nec" checked> auch in etron anlegen</label><label id="${k}-ncl">Land (etron)${countrySel(k+"-ncty")}</label>`:""}
     <button class="pri" id="${k}-nok" ${S.canWrite?"":"disabled"}>Kunden anlegen</button><button type="button" id="${k}-nx">Abbrechen</button>
   </form><div id="${k}-nh"></div>${etronOn()?`<div id="${k}-neh" class="muted"></div>`:""}</div>`; }
 // onPick(cid, created) wird mit bestehendem oder neu angelegtem Kunden aufgerufen
@@ -1022,7 +1027,8 @@ function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); co
     return {fn,ln,tel,key,ex,d}; };
   // etron: passende Kunden zeigen (Name/Telefon), Klick übernimmt die etron-Nr.
   let etT=null, etSeq=0; const neh=$("#"+k+"-neh");
-  const etUi=()=>{ const has=!!v("net"); const l=$("#"+k+"-necl"); if(l) l.hidden=has; };
+  const etUi=()=>{ const has=!!v("net"); const l=$("#"+k+"-necl"); if(l) l.hidden=has; const cl=$("#"+k+"-ncl"); if(cl) cl.hidden=has||!$("#"+k+"-nec")?.checked; };
+  const nec=$("#"+k+"-nec"); if(nec) nec.onchange=etUi;
   const etSearch=()=>{ if(!neh) return; clearTimeout(etT); etT=setTimeout(async()=>{ const fn=v("nfn"), ln=v("nln"), tel=v("ntel"); if(ln.length<2 && tel.replace(/\D/g,"").length<6){ neh.innerHTML=""; return; }
       const my=++etSeq; neh.textContent="Suche in etron …"; try{ const list=await etronFindPartners(fn,ln,tel); if(my!==etSeq) return;
         neh.innerHTML=list.length?`In etron gefunden (anklicken übernimmt die etron-Nr.): ${etronHitsHtml(list)}`:"In etron kein passender Kunde gefunden.";
@@ -1033,7 +1039,8 @@ function openCustNew(k, box, pre, onPick){ box.innerHTML=custNewForm(k, pre); co
   $("#"+k+"-nform").onsubmit=async e=>{ e.preventDefault(); if(needStaff()) return; const r=check(); if(!r.fn||!r.ln) return toast("Bitte Vor- und Nachname eintragen."); if(r.ex) return;
     if(r.d.length && okFor!==r.key){ okFor=r.key; check(); return toast("Bitte die ähnlichen Kunden prüfen, dann nochmal klicken."); }
     const cid=newId("c"); const et=v("net"); const rec={name:r.fn+" "+r.ln,firstName:r.fn,lastName:r.ln,contact:joinContact(r.tel,v("nmail"),null),note:""};
-    if(!et && etronOn() && $("#"+k+"-nec")?.checked){ ok.disabled=true; try{ const id=await etronCreatePartner(r.fn,r.ln,r.tel,v("nmail")); rec.etronId=String(id); toast(`In etron angelegt: Nr. ${id}`); }
+    if(!et && etronOn() && $("#"+k+"-nec")?.checked){ if(!r.tel.trim()&&!v("nmail")) return toast("Für etron bitte Telefon oder E-Mail eintragen (eines ist Pflicht). Oder Haken „auch in etron anlegen“ entfernen.");
+      ok.disabled=true; try{ const id=await etronCreatePartner(r.fn,r.ln,r.tel,v("nmail"),$("#"+k+"-ncty")?.value||"AT"); rec.etronId=String(id); toast(`In etron angelegt: Nr. ${id}`); }
       catch(e){ ok.disabled=false; return toast("In etron nicht angelegt: "+(e.message||e)+". Haken „auch in etron anlegen“ entfernen, um nur hier anzulegen."); } }
     if(et) rec.etronId=et; if($("#"+k+"-nwa").checked) rec.noWhatsapp=true; if(r.d.length) rec.notDupes=r.d.map(c=>c.id);
     if(await write("customers",cid,rec,"set")){ toast("Kunde angelegt"); box.innerHTML=""; onPick(cid,true); } };
@@ -1273,9 +1280,9 @@ function renderCustomer(cid){
     catch(e){ h.textContent="etron nicht lesbar: "+(e.message||e); } };
   const ets=$("#cd-ets"); if(ets) ets.onclick=async()=>{ const h=$("#cd-eth"); const np=nameParts(c), tel=contactFields(c).tel; h.textContent="Suche in etron …";
     try{ const list=await etronFindPartners(np.first,np.last,tel);
-      h.innerHTML=(list.length?`Gefunden (anklicken übernimmt die etron-Nr.): ${etronHitsHtml(list)} `:"In etron kein passender Kunde. ")+`<button type="button" class="sm pri" id="cd-etn">Neu in etron anlegen</button>`;
+      h.innerHTML=(list.length?`Gefunden (anklicken übernimmt die etron-Nr.): ${etronHitsHtml(list)} `:"In etron kein passender Kunde. ")+`${countrySel("cd-ncty")} <button type="button" class="sm pri" id="cd-etn">Neu in etron anlegen</button>`;
       h.querySelectorAll("[data-epid]").forEach(b=>b.onclick=async()=>{ const p=list.find(x=>String(x.id)===b.dataset.epid); if(await write("customers",cid,{etronId:b.dataset.epid,...(p?.ref?{etronRef:String(p.ref)}:{})})){ const r=await etronFillContact(cid,p); toast("etron-Nr. übernommen."+fillMsg(r),6000); } });
-      $("#cd-etn").onclick=async()=>{ if(needStaff()) return; const b=$("#cd-etn"); b.disabled=true; try{ const id=await etronCreatePartner(np.first,np.last,tel,contactFields(c).mail); await write("customers",cid,{etronId:String(id)}); toast(`In etron angelegt: Nr. ${id}`); }catch(e){ b.disabled=false; toast("Nicht angelegt: "+(e.message||e)); } }; }
+      $("#cd-etn").onclick=async()=>{ if(needStaff()) return; const b=$("#cd-etn"); b.disabled=true; try{ const id=await etronCreatePartner(np.first,np.last,tel,contactFields(c).mail,$("#cd-ncty")?.value||"AT"); await write("customers",cid,{etronId:String(id)}); toast(`In etron angelegt: Nr. ${id}`); }catch(e){ b.disabled=false; toast("Nicht angelegt: "+(e.message||e)); } }; }
     catch(e){ h.textContent="etron-Suche nicht möglich: "+(e.message||e); } };
   if($("#cd-ok")) $("#cd-ok").onclick=()=>saveName($("#cd-fn").value,$("#cd-ln").value);
   $("#cd-wa").onchange=e=>write("customers",cid,{noWhatsapp:!e.target.checked}).then(ok=>ok&&toast("Gespeichert"));
