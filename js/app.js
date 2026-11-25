@@ -8,6 +8,7 @@ const STATUSES = ["Offen","Zugeteilt","Auftrag angelegt","Abgeholt","Warteliste"
 const LOCKED = new Set(["Auftrag angelegt","Abgeholt"]);         // Zuteilung steht fest
 const COUNTS = s => s !== "Storniert" && s !== "Warteliste";       // zählt zur Vorbestellung
 const S = { products:{}, customers:{}, orders:{}, loaded:{p:false,c:false,o:false}, db:null, canWrite:true, downloads:null, err:null, sugg:{} };
+try{ S.min1 = localStorage.getItem("vb.min1")==="1"; }catch(e){}
 const $ = s => document.querySelector(s);
 const app = $("#app");
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -148,12 +149,21 @@ function suggest(p, mode, noFlex){
   const res = {}; avail = Math.max(0, avail);
   const want = flex.reduce((s,o)=>s+o.qty,0);
   if (want <= avail){ flex.forEach(o=>res[o.id]=o.qty); }
-  else if (mode==="fifo"){ let a=avail; for(const o of flex){ const g=Math.min(o.qty,a); res[o.id]=g; a-=g; } }
   else {
-    let used=0; const rest=[];
-    flex.forEach((o,i)=>{ const exact=o.qty*avail/want; const b=Math.floor(exact+1e-9); res[o.id]=b; used+=b; rest.push({o,r:exact-b,i}); });
-    rest.sort((x,y)=> y.r-x.r || x.i-y.i);
-    for (const {o} of rest){ if(used>=avail) break; if(res[o.id]<o.qty){ res[o.id]++; used++; } }
+    // Option „Jeder mindestens 1 Stück“: zuerst 1 Stück pro Kunde (nach Bestelldatum; reicht die Ware nicht für alle, bekommen die Früheren eins),
+    // der Rest wird wie gewählt verteilt. Kunden, die schon fest zugeteilt (Zugeteilt/Abgeholt …) etwas haben, zählen als versorgt.
+    const base = {}; let a = avail;
+    if (S.min1) { const had = new Set(fixed.filter(o=>(o.alloc||0)>0).map(o=>o.customerId));
+      for (const o of flex){ if(a<=0) break; if(had.has(o.customerId)) continue; base[o.id]=1; had.add(o.customerId); a--; } }
+    const need = o => o.qty-(base[o.id]||0), wantR = flex.reduce((t,o)=>t+need(o),0);
+    flex.forEach(o=>res[o.id]=base[o.id]||0);
+    if (mode==="fifo"){ for(const o of flex){ const g=Math.min(need(o),a); res[o.id]+=g; a-=g; } }
+    else if (wantR>0 && a>0) {
+      let used=0; const rest=[];
+      flex.forEach((o,i)=>{ const exact=need(o)*a/wantR; const b=Math.floor(exact+1e-9); res[o.id]+=b; used+=b; rest.push({o,r:exact-b,i}); });
+      rest.sort((x,y)=> y.r-x.r || x.i-y.i);
+      for (const {o} of rest){ if(used>=a) break; if(res[o.id]<o.qty){ res[o.id]++; used++; } }
+    }
   }
   if (noFlex) return res;
   // Was übrig bleibt, geht an „egal welches“-Bestellungen der Serie (nach Bestelldatum)
@@ -332,7 +342,7 @@ function renderProduct(pid){
     </div></div>
   <div class="panel"><div class="row spread"><h2>Zuteilung</h2>
     <div class="row">
-      <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum (wer zuerst kommt)</option></select>
+      <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum (wer zuerst kommt)</option></select><label class="row muted" style="gap:4px" title="Zuerst bekommt jeder Kunde 1 Stück (nach Bestelldatum, falls nicht genug für alle da ist), der Rest wird wie gewählt verteilt."><input type="checkbox" id="min1" ${S.min1?"checked":""}> Jeder mind. 1 Stück</label>
       <button id="sug" ${s.rec==null?"disabled":""}>Vorschlag berechnen</button>
       ${sug?`<button class="pri" id="apply" ${S.canWrite?"":"disabled"}>Vorschlag übernehmen (${sugSum} Stück)</button><button id="dis">Verwerfen</button>`:""}
       <button id="close" ${s.alloc?"":"disabled"} title="Alle offenen Bestellungen mit Zuteilung auf Zugeteilt setzen">Zuteilung abschließen</button>
@@ -370,6 +380,7 @@ function renderProduct(pid){
       toast("Produkt gelöscht"); location.hash="produkte"; }; };
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort();
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,S.mode)};render();}};
+  $("#min1").onchange=e=>{S.min1=e.target.checked; try{localStorage.setItem("vb.min1",S.min1?"1":"");}catch(x){} if(S.sugg[pid]){S.sugg[pid]={map:suggest(p,$("#mode").value)};} render();};
   $("#sug").onclick=()=>{ S.sugg[pid]={map:suggest(p,$("#mode").value)}; render(); };
   if (sug){ $("#dis").onclick=()=>{delete S.sugg[pid];render();};
     $("#apply").onclick=async()=>{ const b=$("#apply"); b.disabled=true; const ch=Object.entries(sug.map).filter(([id,v])=>S.orders[id] && (S.orders[id].alloc!==v || !S.orders[id].productId) && !(!S.orders[id].productId && !v));
@@ -1052,7 +1063,7 @@ function renderSeries(anyPid){
     <td class="n" style="${s.over?"color:var(--bad);font-weight:700":""}">${s.free??""}</td></tr>`).join("")}
   </tbody></table></div>
   <div class="panel"><div class="row spread"><h2>Zuteilung für die ganze Serie</h2><div class="row">
-    <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum</option></select>
+    <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum</option></select><label class="row muted" style="gap:4px" title="Zuerst bekommt jeder Kunde 1 Stück (nach Bestelldatum, falls nicht genug für alle da ist), der Rest wird wie gewählt verteilt."><input type="checkbox" id="min1" ${S.min1?"checked":""}> Jeder mind. 1 Stück</label>
     <button id="sug" ${st.some(x=>x.s.rec==null)?"disabled":""}>Vorschlag berechnen</button>
     ${sug?`<button class="pri" id="apply">Vorschlag übernehmen (${sugSum} Stück)</button><button id="dis">Verwerfen</button>`:""}
     <button id="close">Zuteilung abschließen</button><button id="rest" title="Alle offenen Bestellungen ohne Zuteilung auf Warteliste setzen">Rest auf Warteliste</button></div></div>
@@ -1075,6 +1086,7 @@ function renderSeries(anyPid){
     await pool(ids2, id=>S.db.collection("orders").doc(id).update({status:v})); toast("Gespeichert"); });
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort();
   $("#mode").onchange=e=>{S.mode=e.target.value; if(S.sugg[key]){S.sugg[key]=seriesSuggest(sib,S.mode);render();}};
+  $("#min1").onchange=e=>{S.min1=e.target.checked; try{localStorage.setItem("vb.min1",S.min1?"1":"");}catch(x){} if(S.sugg[key]){S.sugg[key]=seriesSuggest(sib,$("#mode").value);} render();};
   $("#sug").onclick=()=>{ S.sugg[key]=seriesSuggest(sib,$("#mode").value); render(); };
   if (sug){ $("#dis").onclick=()=>{delete S.sugg[key];render();};
     $("#apply").onclick=async()=>{ $("#apply").disabled=true;
@@ -1533,7 +1545,7 @@ const WIKI = [
     <li>Zugang anlegen (nur einmal): in etron mit dem <b>Firmenkonto</b> anmelden (Benutzertyp „Interner Benutzer“ mit Verkaufsrechten, nicht das private Konto) → API &amp; Hooks → Authentication → Client Credentials. Adresse, Client Key und Secret unter Einstellungen → etron eintragen und „Verbindung testen“.</li>
     <li>Danach einmal in der Kundenliste <b>„Mit etron abgleichen“</b> und bei den Produkten oben <b>„Artikel in etron suchen“</b> → „Übernehmen“.</li></ol>`],
   ["Ware ist da: zuteilen", `<ol><li>Auf der Produktseite unter Produktdaten den <b>Wareneingang</b> eintragen. Ist eine <b>Verpackungseinheit</b> hinterlegt (z. B. 8 Displays pro Karton), kann die Menge auch direkt in VE eingetragen werden; die Stückzahl wird dann ausgerechnet.</li>
-    <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Dann <b>Vorschlag berechnen</b>.</li>
+    <li>Bei „Zuteilung“ wählen: <b>Proportional</b> (fair verteilt) oder <b>Nach Bestelldatum</b>. Mit <b>„Jeder mind. 1 Stück“</b> bekommt zuerst jeder Kunde eins (reicht die Ware nicht für alle, nach Bestelldatum), der Rest wird dann wie gewählt verteilt. Dann <b>Vorschlag berechnen</b>.</li>
     <li>Vorschlag prüfen, eventuell einzelne Zahlen in der Tabelle ändern, dann <b>Vorschlag übernehmen</b>.</li>
     <li><b>Zuteilung abschließen</b> setzt alle Bestellungen mit Zuteilung auf „Zugeteilt“. Wer nichts bekommt, kann auf „Warteliste“ gesetzt werden.</li></ol>`],
   ["Auftrag in etron anlegen", `<p>Reiter <b>etron-Export</b> zeigt alle zugeteilten Bestellungen nach Kunde. Den Auftrag in etron anlegen und danach den <b>Haken</b> in der Spalte „Auftrag“ setzen. Der Haken geht auch direkt auf der Produktseite. Ohne etron-Nr. beim Kunden bitte zuerst die Nummer nachtragen.</p>`],
