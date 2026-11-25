@@ -10,6 +10,7 @@ Vorbestellungen, Wartelisten und Zuteilungen für One Piece, Pokémon und Riftbo
 - **Serien** (z. B. zwei Pokémon-Produkte einer Serie): Kunden bestellen „nur A“, „nur B“, „egal welches“ oder „beide“. „Egal welches“-Bestellungen bekommen bei der Zuteilung das Produkt, von dem nach den festen Wünschen noch etwas übrig ist.
 - **Serien-Liste**: alle Produkte einer Serie (z. B. Doppel-Release) in einer Tabelle mit gemeinsamer Zuteilung. Eine Zeile pro Kunde: bestellte Menge und Zuteilung je Produkt nebeneinander.
 - **Excel-Import** (Einstellungen): Spalten wie Name, Telefon, E-Mail, Produkt A, Produkt B werden direkt im Browser eingelesen. Die Datei wird nirgends hochgeladen.
+- **Unvollständige Bestellungen** (Einstellungen): ergänzt fehlendes oder unlesbares Bestelldatum (01.11.2026), fehlendes Kürzel (TU) und fehlenden Status (Offen). Vorhandene Angaben bleiben.
 - **Bestellungen** mit Status: Offen, Zugeteilt, Auftrag angelegt, Abgeholt, Warteliste, Storniert. Stornierte und Wartelisten-Einträge zählen nicht zur Vorbestellsumme.
 - **Zuteilung** per Vorschlag: proportional (Reststücke nach größtem Rest, bei Gleichstand die frühere Bestellung) oder nach Bestelldatum.
 - **Kunden** mit etron-Kundennummer und Kontakt. Die App prüft automatisch auf mögliche **Dubletten** (ähnlicher Name, gleiche etron-Nr., Telefonnummer oder E-Mail) und zeigt sie zum Zusammenführen.
