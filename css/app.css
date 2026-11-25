@@ -136,3 +136,12 @@ ul.eatest li.bad{color:var(--bad)}
 /* Serie: zweite Kopfzeile (Bestellt/Zuteilung je Produkt) unter der ersten festhalten */
 thead tr.h2 th{top:var(--th1,30px)}
 thead tr.h2 th:first-child{left:auto;z-index:2;background:var(--surface2)}
+/* Serie kompakt: pro Produkt eine schmale Spalte, oben bestellt, darunter zugeteilt */
+.sertab th.pc{text-align:center;max-width:70px;overflow:hidden;text-overflow:ellipsis}
+.sertab td.pc{text-align:center;padding:4px 3px;width:60px}
+.sertab td.pc input{width:52px;display:block;margin:0 auto 3px;padding:3px 4px;text-align:right}
+.sertab td.pc input.sq::placeholder{color:var(--muted)}
+.sertab td.pc input.sa{border-color:var(--accent);color:var(--accent);font-weight:600}
+.sertab td.pc div.sq,.sertab td.pc div.sa{width:52px;margin:0 auto 3px;text-align:right;padding:3px 4px}
+.sertab td.pc div.sa{color:var(--accent);font-weight:600}
+.sertab td.pc .sv{font-size:12px;font-weight:700;color:var(--accent)}

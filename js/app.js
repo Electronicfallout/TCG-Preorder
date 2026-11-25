@@ -1196,18 +1196,21 @@ function renderSeries(anyPid){
   rows = sortView(rows, r=>r[0]?.customerId);
   const st = sib.map(p=>({p, s:stats(p)}));
   const hasFlex = all.some(o=>!o.productId);
+  const shortN = (()=>{ const w=sib.map(p=>String(p.name||"").split(/\s+/)); let k=0; while(sib.length>1 && w.every(x=>x.length>k+1 && x[k].toLowerCase()===w[0][k].toLowerCase())) k++;
+    return w.map((x,i)=>{ const t=x.slice(k).join(" ")||sib[i].name; const code=(t.match(/\b[A-Z]{1,4}-?\d{1,3}[A-Z]?\b/)||[])[0]; return code||(t.length>14?t.slice(0,13)+"…":t); }); })();
   const live = r => r.filter(x=>x.status!=="Storniert").length ? r.filter(x=>x.status!=="Storniert") : r;
-  // Menge je Produkt: eine Bestellung = Eingabefeld, mehrere = Summe als Text
-  const qcell = (r, pid) => { const os = live(r).filter(x=>x.productId===pid);
-    if (!os.length) return `<td class="n muted">·</td>`;
-    if (os.length===1) return `<td class="n"><input type="number" min="0" data-q="${os[0].id}" id="sq-${os[0].id}" value="${os[0].qty??""}" title="Bestellt"></td>`;
-    return `<td class="n" title="${os.length} Bestellungen">${os.reduce((t,x)=>t+(x.qty||0),0)}</td>`; };
-  const cell = (r, pid) => { const os = live(r).filter(x=>x.productId===pid); const sv = x => sug ? `<td class="n" style="font-weight:700;color:var(--accent)">${x}</td>` : "";
-    const f = live(r).find(x=>!x.productId && (x.choices||[]).includes(pid));
-    if (os.length===1 && !f) return `<td class="n"><input type="number" min="0" data-f="alloc" data-oid="${os[0].id}" id="sa-${os[0].id}" value="${os[0].alloc??""}" title="Bestellt ${os[0].qty??"?"}"></td>${sv(sug?.res[os[0].id]??"")}`;
-    if (os.length>1) return `<td class="n" title="${os.length} Bestellungen, einzeln auf der Produktseite änderbar">${os.reduce((t,x)=>t+(x.alloc||0),0)||""}</td>${sv(os.reduce((t,x)=>t+(sug?.res[x.id]||0),0)||"")}`;
-    if (f) return `<td class="n">${os.length?`<input type="number" min="0" data-f="alloc" data-oid="${os[0].id}" id="sa-${os[0].id}" value="${os[0].alloc??""}" title="Bestellt ${os[0].qty??"?"}"> + `:""}<input type="number" min="0" data-flex="${f.id}" data-pid="${pid}" id="sf-${f.id}-${pid}" placeholder="egal" title="„egal welches“ diesem Produkt zuteilen"></td>${sv(((os[0]&&sug?.res[os[0].id])||0)+(sug?.flex[f.id]?.pid===pid?sug.flex[f.id].n:0)||"")}`;
-    return `<td class="n muted">·</td>${sug?"<td></td>":""}`; };
+  // Kompakt (Tommy, 25.11.): pro Produkt eine schmale Spalte, oben bestellt, darunter zugeteilt. Leeres Feld oben = neue Vorbestellung.
+  const sv = x => sug && x!=="" && x!=null ? `<div class="sv" title="Vorschlag">→ ${x}</div>` : "";
+  const cell = (r, pid) => { const os = live(r).filter(x=>x.productId===pid); const f = live(r).find(x=>!x.productId && (x.choices||[]).includes(pid)); const cid=r[0].customerId;
+    let top, bot, sg="";
+    if (!os.length) top = `<input type="number" min="0" class="sq" data-newq="${cid}" data-pid="${pid}" id="sn-${cid}-${pid}" placeholder="+" title="Neue Vorbestellung: Menge eintragen">`;
+    else if (os.length===1) top = `<input type="number" min="0" class="sq" data-q="${os[0].id}" id="sq-${os[0].id}" value="${os[0].qty??""}" title="Bestellt">`;
+    else top = `<div class="sq" title="${os.length} Bestellungen, einzeln auf der Produktseite änderbar">${os.reduce((t,x)=>t+(x.qty||0),0)}</div>`;
+    if (os.length===1) { bot = `<input type="number" min="0" class="sa" data-f="alloc" data-oid="${os[0].id}" id="sa-${os[0].id}" value="${os[0].alloc??""}" title="Zugeteilt (bestellt ${os[0].qty??"?"})">`; sg = sug?.res[os[0].id]??""; }
+    else if (os.length>1) { bot = `<div class="sa" title="Zugeteilt">${os.reduce((t,x)=>t+(x.alloc||0),0)||"–"}</div>`; sg = os.reduce((t,x)=>t+(sug?.res[x.id]||0),0)||""; }
+    else bot = "";
+    if (f) { bot += `<input type="number" min="0" class="sa" data-flex="${f.id}" data-pid="${pid}" id="sf-${f.id}-${pid}" placeholder="egal" title="„egal welches“ diesem Produkt zuteilen">`; if(sug?.flex[f.id]?.pid===pid) sg = (Number(sg)||0)+sug.flex[f.id].n; }
+    return `<td class="pc">${top}${bot}${sv(sg)}</td>`; };
   const stSel = r => { const ss=[...new Set(r.map(x=>x.status))]; const one=ss.length===1?ss[0]:null;
     return `<select data-rs id="ss-${r[0].id}" title="${one?"":"Gemischt: "+esc(ss.join(", "))+". Eine Auswahl gilt für alle Bestellungen des Kunden in dieser Serie."}">${one?"":`<option selected disabled>gemischt</option>`}${STATUSES.map(x=>`<option ${x===one?"selected":""}>${x}</option>`).join("")}</select>`; };
   const sugSum = sug ? Object.values(sug.res).reduce((a,b)=>a+b,0)+Object.values(sug.flex).reduce((a,b)=>a+b.n,0) : 0;
@@ -1228,16 +1231,19 @@ function renderSeries(anyPid){
   ${orderForm("se", null, null, ids)}
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${waBtn(waAll)}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen, Warteliste, Nachricht offen)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div id="waq-box">${waqHtml()}</div>
-  <div class="tablebox"><table><thead><tr><th rowspan="2">Kunde</th><th colspan="${sib.length+(hasFlex?1:0)}" style="text-align:center">Bestellt</th><th colspan="${sib.length*(sug?2:1)}" style="text-align:center">Zuteilung</th><th rowspan="2">Bestellt am</th><th rowspan="2">Status</th><th rowspan="2">Auftrag</th><th rowspan="2">Nachricht</th><th rowspan="2">Kommentar</th></tr>
-    <tr class="h2">${sib.map(p=>`<th class="n">${esc(p.name)}</th>`).join("")}${hasFlex?'<th class="n" title="Kunde will eines davon, egal welches">egal</th>':""}${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}</tr></thead><tbody>
+  <p class="muted" style="margin:4px 0">Je Produkt: oben bestellt, darunter <span style="color:var(--accent);font-weight:600">zugeteilt</span>${sug?", „→“ ist der Vorschlag":""}. In ein leeres Feld „+“ eine Menge eintragen legt eine neue Vorbestellung an.</p>
+  <div class="tablebox"><table class="sertab"><thead><tr><th>Kunde</th>${sib.map((p,i)=>`<th class="pc" title="${esc(p.name)}">${esc(shortN[i])}</th>`).join("")}${hasFlex?'<th class="pc" title="Kunde will eines davon, egal welches">egal</th>':""}<th>Bestellt am</th><th>Status</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];const fl=live(r).filter(x=>!x.productId);const cm=[...new Set(r.map(x=>x.comment).filter(Boolean))].join(" · ");return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td>
-    ${sib.map(p=>qcell(r,p.id)).join("")}${hasFlex?`<td class="n">${fl.reduce((t,x)=>t+(x.qty||0),0)||'<span class="muted">·</span>'}</td>`:""}
-    ${sib.map(p=>cell(r,p.id)).join("")}<td>${fmtDate(o.date)}</td><td>${stSel(r)}</td>
-    <td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(cm)}</td></tr>`}).join("")||`<tr><td colspan="${5+sib.length*2}" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
+    ${sib.map(p=>cell(r,p.id)).join("")}${hasFlex?`<td class="pc">${fl.reduce((t,x)=>t+(x.qty||0),0)||'<span class="muted">·</span>'}</td>`:""}
+    <td>${fmtDate(o.date)}</td><td>${stSel(r)}</td>
+    <td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(cm)}</td></tr>`}).join("")||`<tr><td colspan="${7+sib.length}" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
   </tbody></table></div>`;
   app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
   app.querySelectorAll("input[data-oid]").forEach(el=>el.onchange=()=>saveAlloc(el.dataset.oid, num(el.value)));
+  app.querySelectorAll("input[data-newq]").forEach(el=>el.onchange=async()=>{ const v=num(el.value); if(!(v>0)){ el.value=""; return; } if(needStaff()){ el.value=""; return; }
+    const ok=await write("orders",newId("o"),{productId:el.dataset.pid,customerId:el.dataset.newq,qty:v,date:today(),staff:staff(),status:"Offen",alloc:null,comment:"",createdAt:new Date().toISOString()},"set");
+    if(ok){ dlog("INFO",`Vorbestellung in Serienansicht angelegt: ${v} Stück`); toast(`Vorbestellung angelegt: ${v}× ${S.products[el.dataset.pid]?.name||""}`); } });
   app.querySelectorAll("input[data-q]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!(v>0)){ el.value=S.orders[el.dataset.q]?.qty??""; return toast("Menge muss mindestens 1 sein. Zum Entfernen den Status auf Storniert setzen."); } write("orders",el.dataset.q,{qty:v}).then(ok=>ok&&toast("Gespeichert")); });
   app.querySelectorAll("input[data-flex]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!v) return; const o=S.orders[el.dataset.flex];
     write("orders",o.id,{productId:el.dataset.pid,alloc:v,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")}).then(ok=>ok&&toast("Zugeteilt")); });
