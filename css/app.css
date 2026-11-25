@@ -1,5 +1,5 @@
 
-/* Layout: sticky top bar with tabs, single content column up to 1180px, tables scroll inside their own box */
+/* Layout: sticky top bar with tabs, content uses the full window width (Tommy, 25.11.), tables scroll inside their own box */
 :root{
   --bg:#f5f6f8; --surface:#ffffff; --surface2:#eef1f5; --fg:#17202c; --muted:#5d6878; --line:#d9dee6;
   --accent:#1d4ed8; --accent-fg:#ffffff; --accent-soft:#e3ebfd;
@@ -18,7 +18,7 @@
 body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:14px;line-height:1.45}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
 .bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
-.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:none;margin:0 auto;padding-left:max(24px,env(safe-area-inset-left,0px));padding-right:max(24px,env(safe-area-inset-right,0px))}
 .bar .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding-block:10px}
 .brand{font-family:var(--f-head);font-weight:800;font-size:17px;letter-spacing:-.01em;margin-right:auto}
 .games{display:flex;flex-wrap:wrap;gap:2px;background:var(--surface2);border-radius:8px;padding:3px}
