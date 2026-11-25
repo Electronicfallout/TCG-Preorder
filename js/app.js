@@ -1244,12 +1244,12 @@ function renderSeries(anyPid){
   <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${waBtn(waAll)}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen, Warteliste, Nachricht offen)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div id="waq-box">${waqHtml()}</div>
   <p class="muted" style="margin:4px 0">Je Produkt: oben bestellt, darunter <span style="color:var(--accent);font-weight:600">zugeteilt</span>${sug?", „→“ ist der Vorschlag":""}. In ein leeres Feld „+“ eine Menge eintragen legt eine neue Vorbestellung an.</p>
-  <div class="tablebox"><table class="sertab"><thead><tr><th>Kunde</th>${sib.map((p,i)=>`<th class="pc" title="${esc(p.name)}">${esc(shortN[i])}</th>`).join("")}${hasFlex?'<th class="pc" title="Kunde will eines davon, egal welches">egal</th>':""}<th>Bestellt am</th><th>Status</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
+  <div class="tablebox"><table class="sertab"><thead><tr><th>Kunde</th>${sib.map((p,i)=>`<th class="pc" title="${esc(p.name)}">${esc(shortN[i])}</th>`).join("")}${hasFlex?'<th class="pc" title="Kunde will eines davon, egal welches">egal</th>':""}<th>Bestellt am</th><th title="Wer die Vorbestellung aufgenommen hat">MA</th><th>Status</th><th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];const fl=live(r).filter(x=>!x.productId);const cm=[...new Set(r.map(x=>x.comment).filter(Boolean))].join(" · ");return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
     <td>${custFlags(c)}<a href="#kunde-${o.customerId}">${esc(c?.name||"?")}</a></td>
     ${sib.map(p=>cell(r,p.id)).join("")}${hasFlex?`<td class="pc">${fl.reduce((t,x)=>t+(x.qty||0),0)||'<span class="muted">·</span>'}</td>`:""}
-    <td>${fmtDate(o.date)}</td><td>${stSel(r)}</td>
-    <td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(cm)}</td></tr>`}).join("")||`<tr><td colspan="${7+sib.length}" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
+    <td>${fmtDate(o.date)}</td><td class="mono">${esc([...new Set(r.map(x=>x.staff).filter(Boolean))].join(", "))}</td><td>${stSel(r)}</td>
+    <td style="text-align:center">${auftragBox(r)}</td><td>${msgBtn(r)}</td><td class="muted">${esc(cm)}</td></tr>`}).join("")||`<tr><td colspan="${8+sib.length}" class="empty">Noch keine Bestellungen für diese Serie.</td></tr>`}
   </tbody></table></div>`;
   app.querySelectorAll("[data-rec]").forEach(el=>el.onchange=()=>write("products",el.dataset.rec,{received:num(el.value)}).then(ok=>ok&&toast("Gespeichert")));
   app.querySelectorAll("input[data-oid]").forEach(el=>el.onchange=()=>saveAlloc(el.dataset.oid, num(el.value)));
