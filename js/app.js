@@ -509,7 +509,7 @@ function msgClass(n, os){ if(!n || (os && msgOpen(os))) return "msg-new"; const 
 function msgBtn(list){ const os=list.filter(Boolean); if(!os.length) return ""; const n=os.find(o=>o.notified)?.notified;
   const q=quickTpl(os);
   let wa1 = ""; if(S.waqPage && q && msgOpenType(os)){ const c=S.customers[os[0].customerId], cp=contactParts(c); const ids=os.map(o=>o.id).join(",");
-    wa1 = cp.wa&&!c?.noWhatsapp ? `<a class="btn sm" data-wa1="${ids}" href="${esc(waLink(cp.wa,fillTemplate(q.text,os,today())))}" target="_blank" rel="noopener" title="WhatsApp mit fertigem Text öffnen (${esc(q.name)})">📱</a>` : `<button class="sm" data-wa1="${ids}" title="WhatsApp nur für diesen Kunden: keine Nummer oder kein WhatsApp, Text kopieren">📱</button>`; }
+    wa1 = cp.wa&&!c?.noWhatsapp ? `<a class="btn sm" data-wa1="${ids}" href="${esc(waLink(cp.wa,fillTemplate(q.text,os,today())))}" ${waTarget()} title="WhatsApp mit fertigem Text öffnen (${esc(q.name)})">📱</a>` : `<button class="sm" data-wa1="${ids}" title="WhatsApp nur für diesen Kunden: keine Nummer oder kein WhatsApp, Text kopieren">📱</button>`; }
   return `<span class="row" style="gap:4px;flex-wrap:wrap;min-width:0">${wa1}${q?`<button class="sm" data-copy="${os.map(o=>o.id).join(",")}" title="Text „${esc(q.name)}“ mit heutigem Datum kopieren und als gesendet markieren">📋 ${esc(QUICK[q.id]||q.name)}</button>`:""}<button class="sm ${msgClass(n, os)}" data-msg="${os.map(o=>o.id).join(",")}" title="${n?`Zuletzt: ${esc(n.template)} am ${fmtDate(n.date)} (${esc(n.staff||"")})`:"Noch keine Nachricht gesendet"}">${n?"✓ ":""}Nachricht</button>${S.customers[os[0].customerId]?.noWhatsapp?`<span class="pill" style="background:var(--grey-soft)" title="Kunde hat kein WhatsApp: per SMS schicken">SMS</span>`:""}</span>`; }
 const firstName = n => (n||"").trim().split(/\s+/)[0] || "";
 const WEEKDAYS=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
@@ -520,8 +520,12 @@ function fillTemplate(text, os, tag){
   const mn=id=>{ const p=S.products[id]; return p?(p.msgName||p.name):"?"; };
   const prod=os.map(x=>x.productId?mn(x.productId):(x.choices||[]).map(mn).join(" oder ")).join(" und ");
   const menge=os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ");
-  const map={ Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), "Stück": String(os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ")), Stueck: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
-  return text.replace(/\{([\wÄÖÜäöüß]+)\}/g, (m,k)=> k in map ? map[k] : m);
+  // {Bestellt}: bestellte Menge. {Teillieferung}: nur wenn weniger zugeteilt als bestellt ein fertiger Satz, sonst leer (Tommy, 25.11.).
+  const bestellt=os.map(x=>x.qty||"").filter(Boolean).join(" + ");
+  const part=os.filter(x=>(x.alloc||0)>0&&(x.qty||0)>(x.alloc||0));
+  const teil=part.length?`Leider konnten wir ${part.length===1?`nur ${part[0].alloc} von ${part[0].qty} bestellten Stück`:"nicht alle bestellten Stück"} für dich reservieren.`:"";
+  const map={ Bestellt: String(bestellt), Teillieferung: teil, Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), "Stück": String(os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ")), Stueck: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
+  return text.replace(/\{([\wÄÖÜäöüß]+)\}/g, (m,k)=> k in map ? map[k] : m).replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n");
 }
 // Telefon/E-Mail einzeln bearbeiten; sonstiger Text im Kontaktfeld bleibt erhalten
 function contactFields(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]+@[^\s·,;]+/)||[])[0]||""; const tel=((t.replace(mail,"").match(/\+?[\d][\d\s/()-]{5,}/)||[])[0]||"").trim();
@@ -535,7 +539,13 @@ function contactParts(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]
 // Nichts geht über fremde Server: der Text steht nur im Link, den WhatsApp auf diesem PC öffnet.
 const waGroups = list => list.filter(r=>r.length&&msgOpenType(r)&&quickTpl(r));
 const waBtn = groups => groups.length?`<button class="sm" id="waq-go" data-wag="${esc(groups.map(r=>r.map(o=>o.id).join(",")).join(";"))}" title="Für alle mit offener Nachricht nacheinander WhatsApp mit dem fertigen Text öffnen">📱 WhatsApp nacheinander (${groups.length})</button>`:"";
-const waMode = () => { try{ return localStorage.getItem("vb.wamode2")||"web"; }catch(e){ return "web"; } };
+// Womit WhatsApp geöffnet wird: Einstellung pro PC (Einstellungen → WhatsApp). Standard: WhatsApp-App am PC (Tommy, 25.11.).
+const waMode = () => { try{ return localStorage.getItem("vb.wamode3")||"app"; }catch(e){ return "app"; } };
+const setWaMode = v => { try{ localStorage.setItem("vb.wamode3", v==="web"?"web":"app"); }catch(e){} dlog("INFO","WhatsApp-Modus: "+v); };
+const waTarget = () => waMode()==="web" ? 'target="_blank" rel="noopener"' : "";
+function waPanel(){ return `<div class="panel"><h2>WhatsApp</h2><p class="muted">Gilt für den 📱-Knopf und „WhatsApp nacheinander“ auf diesem PC.</p>
+  <div class="row"><label class="row" style="gap:6px"><input type="radio" name="wamode" value="app" ${waMode()==="app"?"checked":""}> WhatsApp-App am PC</label><label class="row" style="gap:6px"><input type="radio" name="wamode" value="web" ${waMode()==="web"?"checked":""}> WhatsApp Web (Browser-Tab)</label></div>
+  <p class="muted">Bei der App fragt Chrome beim ersten Mal „WhatsApp öffnen?“. Dort „Immer erlauben“ anhaken, dann geht sie künftig direkt auf.</p></div>`; }
 // Web: immer derselbe Tab (Name "vb-whatsapp"), damit nicht für jeden Kunden ein neuer Tab aufgeht
 const waWeb = (num, txt) => `https://web.whatsapp.com/send?phone=${num}&text=${encodeURIComponent(txt)}`;
 // WhatsApp Web immer im selben Tab „vb-wa“ öffnen, damit nicht pro Kunde ein neuer Tab entsteht (Tommy, 25.11.).
@@ -557,7 +567,7 @@ function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
     <p><b><a href="#kunde-${os[0]?.customerId||""}">${esc(c.name||"?")}</a></b> <span class="muted">${esc(cp.tel||"keine Telefonnummer")} · Vorlage „${esc(t?.name||"-")}“</span></p>
     ${canWa?"":`<div class="note bad">${!t?"Für diesen Kunden ist keine Nachricht mehr offen.":!cp.wa?"Keine Telefonnummer hinterlegt.":"Bei diesem Kunden ist „kein WhatsApp“ eingetragen."} ${t?"Text kopieren und anders schicken, oder überspringen.":"Bitte überspringen."}</div>`}
     <textarea id="waq-t" rows="6" style="width:100%">${esc(txt)}</textarea>
-    <div class="row">${canWa?`<a class="btn pri" id="waq-open" href="${esc(waLink(cp.wa,txt))}" ${waMode()==="web"?'target="_blank" rel="noopener"':""}>WhatsApp öffnen und weiter</a>`:t?`<button class="pri" id="waq-copy">Text kopieren, als gesendet markieren und weiter</button>`:""}
+    <div class="row">${canWa?`<a class="btn pri" id="waq-open" href="${esc(waLink(cp.wa,txt))}" ${waTarget()}>WhatsApp öffnen und weiter</a>`:t?`<button class="pri" id="waq-copy">Text kopieren, als gesendet markieren und weiter</button>`:""}
       <button id="waq-skip">Überspringen</button><span class="muted">In WhatsApp nur noch auf Senden drücken, dann hier weiter.</span></div>
     ${canWa?`<details class="muted"><summary>Geht nichts auf?</summary><p>1. <button type="button" class="sm" id="waq-win">Anders öffnen</button> 2. <button type="button" class="sm" id="waq-cpl">Link kopieren</button> und in einem Chrome-Tab in die Adresszeile einfügen. 3. Oder den Text oben kopieren und in WhatsApp selbst einfügen.</p><p class="mono" style="word-break:break-all;font-size:11px">${esc(waLink(cp.wa,txt).slice(0,160))}…</p></details>`:""}<div id="waq-fb">${waqFb(q,cp)}</div></div>`; }
 // Hinweis nach dem Klick: steht in S.waq, damit er ein Neuzeichnen der Seite übersteht.
@@ -573,7 +583,7 @@ function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff(
   const q=S.waq; if(!q||!$("#waq")) return;
   const x=$("#waq-x"); if(x) x.onclick=()=>{ dlog("INFO",`WhatsApp nacheinander beendet: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); S.waq=null; drawWaq(); };
   const tg=$("#waq-tag"); if(tg) tg.onchange=e=>{ q.tag=e.target.value||today(); drawWaq(); };
-  const md=$("#waq-mode"); if(md) md.onchange=e=>{ try{ localStorage.setItem("vb.wamode2",e.target.value); }catch(_){} drawWaq(); };
+  const md=$("#waq-mode"); if(md) md.onchange=e=>{ setWaMode(e.target.value); render(); };
   if(q.i>=q.list.length) return;
   const os=q.list[q.i].map(id=>S.orders[id]).filter(Boolean), c=S.customers[os[0]?.customerId]||{}, cp=contactParts(c), t=os.length?quickTpl(os):null;
   const ta=$("#waq-t"), op=$("#waq-open"); if(ta) ta.oninput=()=>{ q.txt=ta.value; if(op) op.href=waLink(cp.wa,ta.value); };
@@ -584,7 +594,7 @@ function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff(
     dlog(w?"INFO":"WARN",`WhatsApp anders öffnen (${waMode()}): ${w?"Fenster geöffnet":"vom Browser blockiert"}`);
     q.fb=w?"opened":"blocked"; drawWaq(); };
   const ok=$("#waq-ok"); if(ok) ok.onclick=done;
-  const wb=$("#waq-web"); if(wb) wb.onclick=()=>{ try{ localStorage.setItem("vb.wamode2","web"); }catch(_){} dlog("INFO","WhatsApp Web über Hinweis geöffnet"); q.fb="opened"; setTimeout(drawWaq,300); };
+  const wb=$("#waq-web"); if(wb) wb.onclick=()=>{ dlog("INFO","WhatsApp Web über Hinweis geöffnet"); q.fb="opened"; setTimeout(drawWaq,300); };
   const cpl=$("#waq-cpl"); if(cpl) cpl.onclick=async()=>{ const ok=await copyText(waLink(cp.wa,ta?.value||"")); toast(ok?"Link kopiert: in einem Chrome-Tab in die Adresszeile einfügen":"Kopieren nicht möglich"); };
   // Nach dem Öffnen: hat sich WhatsApp wirklich geöffnet (Fenster verliert den Fokus)? Dann als gesendet markieren, sonst Hinweis zeigen.
   q.watch=()=>{ if(q.busy) return; q.busy=1; const i0=q.i; let left=false; const away=()=>{ left=true; };
@@ -980,7 +990,7 @@ function bindStaff(){
 }
 function templatesPanel(){
   return `<div class="panel"><h2>Nachrichtenvorlagen</h2>
-    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Stück} {Tag} {Mitarbeiter} {Datum}. {Stück} ist die zugeteilte Stückzahl (ohne Zuteilung die bestellte Menge; {Menge} geht weiterhin). {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
+    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Stück} {Bestellt} {Teillieferung} {Tag} {Mitarbeiter} {Datum}. {Stück} ist die zugeteilte Stückzahl (ohne Zuteilung die bestellte Menge; {Menge} geht weiterhin), {Bestellt} die bestellte Menge, z. B. „{Stück} von {Bestellt} Stück“. {Teillieferung} ergibt nur bei weniger als bestellt den Satz „Leider konnten wir nur 1 von 2 bestellten Stück für dich reservieren.“, sonst bleibt es leer. {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
     ${templates().map(t=>`<div class="panel" style="gap:8px"><div class="row"><input id="tn-${t.id}" value="${esc(t.name)}" style="flex:1 1 200px"><button class="sm" data-tsave="${t.id}">Speichern</button><button class="sm danger" data-tdel="${t.id}">Löschen</button></div>
       <textarea id="tt-${t.id}" rows="7" style="width:100%">${esc(t.text)}</textarea></div>`).join("")}
     <div class="row"><button id="tnew">Neue Vorlage</button></div></div>`;
@@ -1727,6 +1737,7 @@ function renderSettings(){
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
   ${etronPanel()}
   ${etronApiPanel()}
+  ${waPanel()}
   ${gamesPanel()}
   ${staffPanel()}
   ${templatesPanel()}
@@ -1738,7 +1749,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi();
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi(); document.querySelectorAll('input[name="wamode"]').forEach(r=>r.onchange=()=>{ setWaMode(r.value); toast(r.value==="web"?"WhatsApp Web wird verwendet":"WhatsApp-App am PC wird verwendet"); });
   if (isDisk) { bindMigrate();
     $("#openlog").onclick = () => desk("/api/openlog", { method: "POST" }).then(r => r.json()).then(j => toast("Log: " + j.path, 6000));
     $("#openlogdir").onclick = () => desk("/api/openlog?folder=1", { method: "POST" }).then(r => r.json()).then(j => toast("Ordner: " + j.path, 6000)); $("#quit").onclick = async () => { await S.doc.sync(); try { await desk("/api/quit", { method: "POST" }); } catch (e) {}
