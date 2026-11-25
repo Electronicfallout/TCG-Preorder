@@ -192,8 +192,9 @@ function suggest(p, mode, noFlex){
 
 // ---------- Nachzuteilen: nach abgeschlossener Zuteilung wird wieder Menge frei (Storno, Nachlieferung).
 // Bestehende Zuteilungen bleiben, nur die freie Menge geht an Bestellungen, die noch nicht alles haben
-// (Offen, Warteliste, Zugeteilt mit weniger als bestellt). „Auftrag angelegt“/„Abgeholt“ bleiben unverändert (Tommy, 25.11.).
-const NACH = new Set(["Offen","Warteliste","Zugeteilt"]);
+// (alle außer Storniert, die weniger als bestellt haben). Hat die Bestellung schon einen etron-Auftrag („Auftrag angelegt“/„Abgeholt“),
+// bleibt der Status, und im Kommentar steht, dass die Menge im etron-Auftrag angepasst werden muss (Tommy, 25.11.).
+const NACH = new Set(["Offen","Warteliste","Zugeteilt","Auftrag angelegt","Abgeholt"]);
 function nachCands(p){ return ordersOf(p.id).filter(o=>NACH.has(o.status)&&(o.qty||0)>(o.alloc||0)).sort(sortOrders); }
 function nachFree(p){ const r=num(p.received); if(r==null) return 0; return Math.max(0, r-ordersOf(p.id).filter(o=>o.status!=="Storniert").reduce((t,o)=>t+(o.alloc||0),0)); }
 function suggestRest(p, mode){
@@ -393,6 +394,8 @@ function renderProduct(pid){
       <button id="close" ${s.alloc?"":"disabled"} title="Alle offenen Bestellungen mit Zuteilung auf Zugeteilt setzen">Zuteilung abschließen</button>
       <button id="rest" title="Alle offenen Bestellungen ohne Zuteilung auf Warteliste setzen">Rest auf Warteliste</button>
     </div></div>
+    ${!sug&&closed&&nFree>0&&!nCand?`<div class="note">Es sind ${nFree} Stück frei, aber keine Bestellung wartet noch auf Ware (alle haben ihre bestellte Menge oder sind storniert). Wer wieder Interesse hat: Status auf „Warteliste“ oder „Offen“ setzen, dann erscheint hier „Freie Menge nachzuteilen“.</div>`:""}
+    ${sug?.nach&&Object.keys(sug.map).some(id=>LOCKED.has(S.orders[id]?.status)&&sug.map[id]>(S.orders[id].alloc||0))?`<div class="note">Einige Bestellungen mit mehr Stück haben schon einen etron-Auftrag. Ihr Status bleibt, im Kommentar steht dann „Menge im etron-Auftrag anpassen“. Das bitte in etron von Hand ändern.</div>`:""}
     ${!sug&&closed&&nFree>0&&nCand?`<div class="note">Es sind wieder <b>${nFree} Stück frei</b> (z. B. durch Storno oder Nachlieferung) und ${nCand} Bestellungen haben noch nicht alles bekommen. <button class="pri sm" id="nach">Freie Menge nachzuteilen</button><br><span class="muted">Bestehende Zuteilungen bleiben. Verteilt wird wie oben gewählt (proportional oder nach Bestelldatum, „mind. 1 Stück“ zählt mit). „Auftrag angelegt“ und „Abgeholt“ bleiben unverändert.</span></div>`:""}
     ${s.rec==null?'<p class="muted">Erst den Wareneingang eintragen, dann kann ein Vorschlag berechnet werden.</p>':sug?.nach?'<p class="muted">Nachzuteilung steht in der Spalte „Vorschlag“ (neue Gesamtmenge, in Klammern das Plus). Noch nichts gespeichert. Beim Übernehmen bekommen diese Bestellungen den Status „Zugeteilt“ und die Abholnachricht gilt wieder als offen.</p>':sug?'<p class="muted">Vorschlag steht in der Spalte „Vorschlag“. Noch nichts gespeichert.</p>':'<p class="muted">Zuteilungen können auch direkt in der Tabelle eingetragen werden. Bestellungen mit Status „Auftrag angelegt“ oder „Abgeholt“ bleiben beim Vorschlag unverändert.</p>'}
   </div>
@@ -435,7 +438,8 @@ function renderProduct(pid){
     $("#apply").onclick=async()=>{ const b=$("#apply"); b.disabled=true; const ch=Object.entries(sug.map).filter(([id,v])=>S.orders[id] && (S.orders[id].alloc!==v || !S.orders[id].productId) && !(!S.orders[id].productId && !v));
       // Nachzuteilung: wer mehr bekommt, steht danach auf „Zugeteilt“; eine schon gesendete Abholnachricht gilt wieder als offen (neue Stückzahl).
       const patchOf=(id,v)=>{ const o=S.orders[id]; const pt=o.productId?{alloc:v}:{alloc:v,productId:pid,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")};
-        if(sug.nach&&v>(o.productId?(o.alloc||0):0)){ pt.status="Zugeteilt"; if(o.notified) pt.notified=null; } return pt; };
+        const plus=v-(o.productId?(o.alloc||0):0);
+        if(sug.nach&&plus>0){ if(LOCKED.has(o.status)) pt.comment=[o.comment,`+${plus} nachzugeteilt am ${fmtDate(today())}: Menge im etron-Auftrag${o.etronOrder?" "+o.etronOrder:""} anpassen`].filter(Boolean).join(" · "); else pt.status="Zugeteilt"; if(o.notified) pt.notified=null; } return pt; };
       try{ await pool(ch, ([id,v])=>S.db.collection("orders").doc(id).update(patchOf(id,v))); delete S.sugg[pid]; if(sug.nach) dlog("INFO",`Nachzuteilung übernommen: ${ch.length} Bestellungen`); toast(sug.nach?`${ch.length} Bestellungen nachzugeteilt (Status Zugeteilt). Abholnachrichten sind offen.`:`${ch.length} Zuteilungen gespeichert`,5000); render(); }catch(e){ toast("Nicht alles gespeichert: "+(e.message||e.code)); b.disabled=false; } }; }
   bindRest(()=>ordersOf(pid)); // „egal welches“ nur auf der Serienseite
   $("#close").onclick=async()=>{ const ch=ordersOf(pid).filter(o=>o.status==="Offen"&&(o.alloc||0)>0); if(!ch.length) return toast("Keine offene Bestellung mit Zuteilung.");
@@ -532,6 +536,10 @@ const waBtn = groups => groups.length?`<button class="sm" id="waq-go" data-wag="
 const waMode = () => { try{ return localStorage.getItem("vb.wamode2")||"web"; }catch(e){ return "web"; } };
 // Web: immer derselbe Tab (Name "vb-whatsapp"), damit nicht für jeden Kunden ein neuer Tab aufgeht
 const waWeb = (num, txt) => `https://web.whatsapp.com/send?phone=${num}&text=${encodeURIComponent(txt)}`;
+// WhatsApp Web immer im selben Tab „vb-wa“ öffnen, damit nicht pro Kunde ein neuer Tab entsteht (Tommy, 25.11.).
+// Klappt das nicht (Pop-up blockiert), läuft der Klick normal weiter über den Link (neuer Tab) mit Prüfung und Hinweis.
+function waTab(e, url){ if(waMode()!=="web") return false; let w=null; try{ w=window.open(url,"vb-wa"); }catch(x){ dlog("WARN","WhatsApp-Tab: "+(x.message||x)); }
+  if(!w){ dlog("WARN","WhatsApp-Tab blockiert, öffne als neuen Tab"); return false; } e.preventDefault(); try{ w.focus(); }catch(x){} dlog("INFO","WhatsApp Web im selben Tab geöffnet"); return true; }
 const waLink = (num, txt) => waMode()==="web" ? waWeb(num,txt) : `whatsapp://send?phone=${num}&text=${encodeURIComponent(txt)}`;
 function waqHtml(){ const q=S.waq; if(!q) return ""; const n=q.list.length;
   if(q.i>=n){ return `<div class="panel" id="waq"><div class="row spread"><h2>WhatsApp: fertig</h2><button class="sm" id="waq-x">Schließen</button></div>
@@ -559,7 +567,7 @@ function drawWaq(){ const b=$("#waq-box"); if(!b) return; b.innerHTML=waqHtml();
 function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff()) return; const list=go.dataset.wag.split(";").map(x=>x.split(",")).filter(r=>r[0]);
     S.waq={list,i:0,tag:today(),sent:0,skipped:[]}; dlog("INFO",`WhatsApp nacheinander gestartet: ${list.length} Nachrichten`); drawWaq(); $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); };
   app.querySelectorAll("[data-wa1]").forEach(b=>b.onclick=e=>{ e.stopPropagation(); if(needStaff()){ e.preventDefault(); return; } S.waq={list:[b.dataset.wa1.split(",")],i:0,tag:today(),sent:0,skipped:[]};
-    const direct=b.tagName==="A"; dlog("INFO",direct?`WhatsApp einzeln direkt geöffnet (${waMode()})`:"WhatsApp einzeln gestartet"); drawWaq(); if(direct) S.waq?.watch?.(); else $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); });
+    const direct=b.tagName==="A"; dlog("INFO",direct?`WhatsApp einzeln direkt geöffnet (${waMode()})`:"WhatsApp einzeln gestartet"); drawWaq(); if(direct){ if(waTab(e, b.href)) S.waq?.done?.(); else S.waq?.watch?.(); } else $("#waq")?.scrollIntoView({block:"start",behavior:"smooth"}); });
   const q=S.waq; if(!q||!$("#waq")) return;
   const x=$("#waq-x"); if(x) x.onclick=()=>{ dlog("INFO",`WhatsApp nacheinander beendet: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); S.waq=null; drawWaq(); };
   const tg=$("#waq-tag"); if(tg) tg.onchange=e=>{ q.tag=e.target.value||today(); drawWaq(); };
@@ -570,7 +578,7 @@ function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff(
   const next=()=>{ q.i++; q.fb=null; drawWaq(); if(q.i>=q.list.length) dlog("INFO",`WhatsApp nacheinander fertig: ${q.sent} geöffnet, ${q.skipped.length} übersprungen`); };
   const done=()=>{ q.sent++; markSent(os, t); next(); };
   // Prüfen, ob sich WhatsApp wirklich geöffnet hat (Fenster verliert den Fokus). Sonst nicht als gesendet markieren, sondern WhatsApp Web anbieten.
-  const win=$("#waq-win"); if(win) win.onclick=()=>{ const u=waLink(cp.wa,ta?.value||""); let w=null; try{ w=window.open(u,"_blank"); }catch(e){ dlog("ERROR","WhatsApp window.open: "+(e.message||e)); }
+  const win=$("#waq-win"); if(win) win.onclick=()=>{ const u=waLink(cp.wa,ta?.value||""); let w=null; try{ w=window.open(u,waMode()==="web"?"vb-wa":"_blank"); }catch(e){ dlog("ERROR","WhatsApp window.open: "+(e.message||e)); }
     dlog(w?"INFO":"WARN",`WhatsApp anders öffnen (${waMode()}): ${w?"Fenster geöffnet":"vom Browser blockiert"}`);
     q.fb=w?"opened":"blocked"; drawWaq(); };
   const ok=$("#waq-ok"); if(ok) ok.onclick=done;
@@ -583,7 +591,8 @@ function bindWaq(){ const go=$("#waq-go"); if(go) go.onclick=()=>{ if(needStaff(
       if(S.waq!==q||q.i!==i0) return; if(left) return done();
       dlog("WARN",`WhatsApp (${waMode()}) hat sich nicht geöffnet`);
       q.fb="notopen"; q.fbMode=waMode(); drawWaq(); }, 1500); };
-  if(op) op.onclick=()=>{ dlog("INFO",`WhatsApp-Link geklickt (${waMode()})`); q.watch(); };
+  q.done=done;
+  if(op) op.onclick=e=>{ dlog("INFO",`WhatsApp-Link geklickt (${waMode()})`); if(waTab(e, op.href)) return done(); q.watch(); };
   const cpb=$("#waq-copy"); if(cpb) cpb.onclick=async()=>{ if(!await copyText(ta.value)) return toast("Kopieren nicht möglich"); await markSent(os,t); q.sent++; toast("Kopiert und als gesendet markiert"); next(); };
   const sk=$("#waq-skip"); if(sk) sk.onclick=()=>{ q.skipped.push(q.list[q.i]); next(); }; }
 
