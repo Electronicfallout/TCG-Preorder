@@ -353,7 +353,7 @@ function renderProduct(pid){
   </div>
   ${orderForm("pr", pid)}
   <div class="row spread"><h2>Bestellungen (${shown.length})</h2>
-    <span class="row" style="gap:6px">${waBtn(waGroups(os.filter(o=>nameMatch(S.oq, S.customers[o.customerId])).map(o=>[o])))}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+    <span class="row" style="gap:6px">${waBtn(waGroups(os.filter(o=>nameMatch(S.oq, S.customers[o.customerId])).map(o=>[o])))}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen, Warteliste, Nachricht offen)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div id="waq-box">${waqHtml()}</div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th class="n">Menge</th><th>Bestellt am</th><th>MA</th><th>Status</th><th class="n">Zuteilung</th>${sug?'<th class="n">Vorschlag</th>':""}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${shown.map(o=>{const c=S.customers[o.customerId];const d=c?dupesOf(c):[];return `<tr data-o="${o.id}" class="${o.status==="Storniert"?"dim":""}">
@@ -438,7 +438,8 @@ async function quickCopy(ids){ if(needStaff()) return; const os=ids.map(id=>S.or
 const TID_BY_NAME = {Abholbereit:"t-abholbereit", Storno:"t-storno", Warteliste:"t-warteliste"};
 const MSG_OPEN = "Nachricht noch nicht gesendet";
 // „aktiv“ = noch offen: Status Offen oder Warteliste. Während ein Zuteilungsvorschlag offen ist, auch Zugeteilte (die der Vorschlag ändern kann).
-const isActive = (o, sug) => o.status==="Offen" || o.status==="Warteliste" || (!!sug && o.status==="Zugeteilt");
+// Eine noch nicht gesendete Nachricht (Abholung/Storno/Warteliste) ist eine offene Aufgabe und zählt deshalb auch als aktiv (Tommy, 25.11.).
+const isActive = (o, sug) => o.status==="Offen" || o.status==="Warteliste" || (!!sug && o.status==="Zugeteilt") || msgOpen([o]);
 const MSG_TYPES = [["","alle Nachrichtentypen"],["t-abholbereit","nur Abholung"],["t-storno","nur Storno"],["t-warteliste","nur Warteliste"]];
 const msgOpenType = list => msgOpen(list) && (!S.mtype || autoTplId(list.filter(o=>o&&["Zugeteilt","Auftrag angelegt","Storniert","Warteliste"].includes(o.status)))===S.mtype);
 const typeSel = f => f===MSG_OPEN ? `<select id="ftype" aria-label="Nachrichtentyp">${MSG_TYPES.map(([v,t])=>`<option value="${v}" ${v===(S.mtype||"")?"selected":""}>${t}</option>`).join("")}</select>` : "";
@@ -1088,7 +1089,7 @@ function renderSeries(anyPid){
   const rowsMap = new Map();
   for (const o of all.sort(sortOrders)){ const k = o.pairId || o.id; if(!rowsMap.has(k)) rowsMap.set(k, []); rowsMap.get(k).push(o); }
   let rows = [...rowsMap.values()]; const waAll = waGroups(rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])));
-  rows = rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])).filter(r => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType(r) : r.some(o => fstat==="aktiv" ? isActive(o, sug) : o.status===fstat)));
+  rows = rows.filter(r => nameMatch(S.oq, S.customers[r[0]?.customerId])).filter(r => fstat==="alle" || (fstat===MSG_OPEN ? msgOpenType(r) : (fstat==="aktiv" && msgOpen(r)) || r.some(o => fstat==="aktiv" ? isActive(o, sug) : o.status===fstat)));
   rows = sortView(rows, r=>r[0]?.customerId);
   const wish = r => { const o=r[0]; if(r.length>1||o.pairId) return "beide"; if(!o.productId) return "egal"; if(o.choices) return "egal → "+(S.products[o.productId]?.name||"?"); return "nur "+(S.products[o.productId]?.name||"?"); };
   const st = sib.map(p=>({p, s:stats(p)}));
@@ -1113,7 +1114,7 @@ function renderSeries(anyPid){
     <p class="muted">${st.some(x=>x.s.rec==null)?"Für den Vorschlag bei allen Produkten den Wareneingang eintragen.":"Zuerst bekommen die festen Wünsche (nur A, nur B, beide) ihre Ware, dann gehen die Reste an „egal“-Kunden, jeweils an das Produkt mit mehr übrig. Zuteilungen kannst du auch direkt in der Tabelle ändern."}</p>
     ${sug?`<p class="muted">Danach übrig: ${sib.map(p=>`${esc(p.name)} ${sug.left[p.id]}`).join(" · ")}</p>`:""}</div>
   ${orderForm("se", null, null, ids)}
-  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${waBtn(waAll)}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen + Warteliste)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
+  <div class="row spread"><h2>Bestellungen (${rows.length})</h2><span class="row" style="gap:6px">${waBtn(waAll)}${oqInput()}${sortSel()}<select id="fstat">${["aktiv","alle",...STATUSES,MSG_OPEN].map(x=>`<option value="${x}" ${x===fstat?"selected":""}>${x==="aktiv"?"aktiv (offen, Warteliste, Nachricht offen)":x}</option>`).join("")}</select>${typeSel(fstat)}</span></div>
   <div id="waq-box">${waqHtml()}</div>
   <div class="tablebox"><table><thead><tr><th>Kunde</th><th>Wunsch</th><th class="n">Menge</th><th>Bestellt am</th><th>Status</th>${sib.map(p=>`<th class="n">${esc(p.name)}</th>${sug?'<th class="n">Vorschl.</th>':""}`).join("")}<th>Auftrag</th><th>Nachricht</th><th>Kommentar</th></tr></thead><tbody>
   ${rows.map(r=>{const o=r[0];const c=S.customers[o.customerId];return `<tr data-row="${r.map(x=>x.id).join(",")}" class="${r.every(x=>x.status==="Storniert")?"dim":""}">
