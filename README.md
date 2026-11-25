@@ -13,7 +13,7 @@ Vorbestellungen, Wartelisten und Zuteilungen für One Piece, Pokémon und Riftbo
 - **Bestellungen** mit Status: Offen, Zugeteilt, Auftrag angelegt, Abgeholt, Warteliste, Storniert. Stornierte und Wartelisten-Einträge zählen nicht zur Vorbestellsumme.
 - **Zuteilung** per Vorschlag: proportional (Reststücke nach größtem Rest, bei Gleichstand die frühere Bestellung) oder nach Bestelldatum.
 - **Kunden** mit etron-Kundennummer und Kontakt. Die App warnt bei ähnlichen Namen und zeigt mögliche **Dubletten** zum Zusammenführen.
-- **Nachrichten** an Kunden aus Vorlagen mit Platzhaltern ({Vorname}, {Produkt}, {Mitarbeiter} …): kopieren, WhatsApp oder E-Mail öffnen, als gesendet markieren. Vorlagen unter Einstellungen.
+- **Nachrichten** an Kunden aus Vorlagen mit Platzhaltern ({Vorname}, {Produkt}, {Stück}, {Mitarbeiter} …): kopieren, WhatsApp oder E-Mail öffnen, als gesendet markieren. Vorlagen unter Einstellungen.
 - **etron-Export**: alle zugeteilten Bestellungen als CSV (mit etron-Kundennummer), danach als „Auftrag angelegt“ markieren.
 - Funktioniert **offline** und gleicht später ab. Ändern zwei Geräte gleichzeitig, werden die Änderungen pro Eintrag zusammengeführt statt überschrieben.
 
