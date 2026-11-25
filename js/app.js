@@ -419,7 +419,7 @@ function bindRows(){
 
 // ---------- Nachrichten an Kunden
 const DEFAULT_TEMPLATES = [
-  { id: "t-abholbereit", name: "Abholbereit", text: "Hallo {Vorname},\nDeine Vorbestellung von {Spiel} {Produkt} ist angekommen.\nDu kannst sie ab {Tag} im Shop abholen.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
+  { id: "t-abholbereit", name: "Abholbereit", text: "Hallo {Vorname},\nDeine Vorbestellung von {Stück}x {Spiel} {Produkt} ist angekommen.\nDu kannst sie ab {Tag} im Shop abholen.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
   { id: "t-storno", name: "Storno", text: "Hallo {Vorname},\nleider müssen wir deine Vorbestellung von {Produkt} stornieren, da wir nicht genug Ware bekommen haben. Das tut uns sehr leid.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
   { id: "t-warteliste", name: "Warteliste", text: "Hallo {Vorname},\nvon {Produkt} haben wir leider nicht genug für alle Vorbestellungen bekommen. Du stehst auf der Warteliste und wir melden uns, sobald eine Nachlieferung kommt.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
 ];
@@ -459,8 +459,8 @@ function fillTemplate(text, os, tag){
   const mn=id=>{ const p=S.products[id]; return p?(p.msgName||p.name):"?"; };
   const prod=os.map(x=>x.productId?mn(x.productId):(x.choices||[]).map(mn).join(" oder ")).join(" und ");
   const menge=os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ");
-  const map={ Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
-  return text.replace(/\{(\w+)\}/g, (m,k)=> k in map ? map[k] : m);
+  const map={ Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), "Stück": String(os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ")), Stueck: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
+  return text.replace(/\{([\wÄÖÜäöüß]+)\}/g, (m,k)=> k in map ? map[k] : m);
 }
 // Telefon/E-Mail einzeln bearbeiten; sonstiger Text im Kontaktfeld bleibt erhalten
 function contactFields(c){ const t=c?.contact||""; const mail=(t.match(/[^\s·,;]+@[^\s·,;]+/)||[])[0]||""; const tel=((t.replace(mail,"").match(/\+?[\d][\d\s/()-]{5,}/)||[])[0]||"").trim();
@@ -845,7 +845,7 @@ function bindStaff(){
 }
 function templatesPanel(){
   return `<div class="panel"><h2>Nachrichtenvorlagen</h2>
-    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Menge} {Tag} {Mitarbeiter} {Datum}. {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
+    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Stück} {Tag} {Mitarbeiter} {Datum}. {Stück} ist die zugeteilte Stückzahl (ohne Zuteilung die bestellte Menge; {Menge} geht weiterhin). {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
     ${templates().map(t=>`<div class="panel" style="gap:8px"><div class="row"><input id="tn-${t.id}" value="${esc(t.name)}" style="flex:1 1 200px"><button class="sm" data-tsave="${t.id}">Speichern</button><button class="sm danger" data-tdel="${t.id}">Löschen</button></div>
       <textarea id="tt-${t.id}" rows="7" style="width:100%">${esc(t.text)}</textarea></div>`).join("")}
     <div class="row"><button id="tnew">Neue Vorlage</button></div></div>`;

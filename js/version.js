@@ -1,2 +1,2 @@
 // Muss zur VERSION in sw.js passen
-export const APP_VERSION = 'vb-v71';
+export const APP_VERSION = 'vb-v72';
