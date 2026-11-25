@@ -543,6 +543,18 @@ const waBtn = groups => groups.length?`<button class="sm" id="waq-go" data-wag="
 const waMode = () => { try{ return localStorage.getItem("vb.wamode3")||"app"; }catch(e){ return "app"; } };
 const setWaMode = v => { try{ localStorage.setItem("vb.wamode3", v==="web"?"web":"app"); }catch(e){} dlog("INFO","WhatsApp-Modus: "+v); };
 const waTarget = () => waMode()==="web" ? 'target="_blank" rel="noopener"' : "";
+// Einmalige Bereinigung (Tommy, 25.11.): importierte Bestellungen ohne „Bestellt am“ bekommen 01.11.2026, leeres Kürzel wird „TU“. Nichts Vorhandenes wird überschrieben.
+const FIX_DATE="2026-11-01", FIX_STAFF="TU";
+const fixTargets = () => Object.entries(S.orders).filter(([id,o])=>o&&!o.deleted&&!String(o.date||"").trim());
+function fixPanel(){ const t=fixTargets(); if(!t.length) return "";
+  const ns=t.filter(([,o])=>!String(o.staff||"").trim()).length;
+  return `<div class="panel"><h2>Alte Bestellungen ohne Datum</h2><p>${t.length} Bestellungen haben kein „Bestellt am“${ns?`, davon ${ns} auch ohne Mitarbeiter-Kürzel`:""}.</p>
+  <div class="row"><button id="fixd" ${S.canWrite?"":"disabled"}>Datum ${fmtDate(FIX_DATE)} eintragen${ns?` und Kürzel ${FIX_STAFF}`:""}</button><span id="fixc"></span></div>
+  <p class="muted">Betrifft nur Bestellungen ohne Datum. Ein vorhandenes Kürzel bleibt unverändert.</p></div>`; }
+function bindFix(){ const b=$("#fixd"); if(!b) return; b.onclick=()=>{ const t=fixTargets();
+  $("#fixc").innerHTML=` <button class="sm danger" id="fixok">Ja, ${t.length} Bestellungen ändern</button>`;
+  $("#fixok").onclick=()=>{ const ts=now(); let n=0; S.doc.update(d=>{ for(const [id] of t){ const o=d.orders[id]; if(!o||o.deleted||String(o.date||"").trim()) continue; o.date=FIX_DATE; if(!String(o.staff||"").trim()) o.staff=FIX_STAFF; o.updatedAt=ts; n++; } });
+    dlog("INFO",`Bereinigung: ${n} Bestellungen ohne Datum auf ${FIX_DATE} gesetzt`); toast(`${n} Bestellungen ergänzt`); render(); }; }; }
 function waPanel(){ return `<div class="panel"><h2>WhatsApp</h2><p class="muted">Gilt für den 📱-Knopf und „WhatsApp nacheinander“ auf diesem PC.</p>
   <div class="row"><label class="row" style="gap:6px"><input type="radio" name="wamode" value="app" ${waMode()==="app"?"checked":""}> WhatsApp-App am PC</label><label class="row" style="gap:6px"><input type="radio" name="wamode" value="web" ${waMode()==="web"?"checked":""}> WhatsApp Web (Browser-Tab)</label></div>
   <p class="muted">Bei der App fragt Chrome beim ersten Mal „WhatsApp öffnen?“. Dort „Immer erlauben“ anhaken, dann geht sie künftig direkt auf.</p></div>`; }
@@ -1755,6 +1767,7 @@ function renderSettings(){
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
   ${etronPanel()}
   ${etronApiPanel()}
+  ${fixPanel()}
   ${waPanel()}
   ${gamesPanel()}
   ${staffPanel()}
@@ -1767,7 +1780,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi(); document.querySelectorAll('input[name="wamode"]').forEach(r=>r.onchange=()=>{ setWaMode(r.value); toast(r.value==="web"?"WhatsApp Web wird verwendet":"WhatsApp-App am PC wird verwendet"); });
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi(); bindFix(); document.querySelectorAll('input[name="wamode"]').forEach(r=>r.onchange=()=>{ setWaMode(r.value); toast(r.value==="web"?"WhatsApp Web wird verwendet":"WhatsApp-App am PC wird verwendet"); });
   if (isDisk) { bindMigrate();
     $("#openlog").onclick = () => desk("/api/openlog", { method: "POST" }).then(r => r.json()).then(j => toast("Log: " + j.path, 6000));
     $("#openlogdir").onclick = () => desk("/api/openlog?folder=1", { method: "POST" }).then(r => r.json()).then(j => toast("Ordner: " + j.path, 6000)); $("#quit").onclick = async () => { await S.doc.sync(); try { await desk("/api/quit", { method: "POST" }); } catch (e) {}
