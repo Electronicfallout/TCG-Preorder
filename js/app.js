@@ -265,10 +265,12 @@ function listRows(ps){
     else out.push(p); }
   return out;
 }
+// Abgeschlossen (Feld archived) = Zuteilung erledigt. Wieder geöffnet für Nachlieferung = Feld restock, deutlich markiert (Tommy, 25.11.).
+const RESTOCK_PILL = `<span class="pill s-Warteliste" title="Wieder geöffnet: neue Einträge für eine zukünftige Nachlieferung">Wartend auf Nachlieferung</span>`;
 function seriesRow({sib}){
   const st=sib.map(stats); const sum=k=>st.reduce((a,s)=>a+(s[k]||0),0); const flex=Math.max(...st.map(s=>s.flex||0));
   const rec=st.some(s=>s.rec!=null)?sum("rec"):null; const pre=sum("pre")+flex; const pct=rec&&pre?Math.min(100,Math.round(rec/pre*100)):0; const free=rec==null?null:rec-sum("alloc");
-  return `<tr class="click" data-go="serie-${sib[0].id}"><td><a href="#serie-${sib[0].id}"><b>Serie ${esc(seriesOf(sib[0]))}</b></a> <span class="muted">${sib.map(x=>esc(x.name)).join(" + ")}</span>${S.game==="Alle"?`<span class="gtag">${esc(gameOf(sib[0]))}</span>`:""}</td>
+  return `<tr class="click" data-go="serie-${sib[0].id}"><td><a href="#serie-${sib[0].id}"><b>Serie ${esc(seriesOf(sib[0]))}</b></a> <span class="muted">${sib.map(x=>esc(x.name)).join(" + ")}</span>${sib.some(x=>x.restock)?" "+RESTOCK_PILL:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(sib[0]))}</span>`:""}</td>
     <td>${esc(relTxt(sib[0].release))}</td><td class="n">${pre}</td><td class="n">${sum("n")+(flex?Object.values(S.orders).filter(o=>!o.productId&&COUNTS(o.status)&&(o.choices||[]).some(c=>sib.some(x=>x.id===c))).length:0)}</td>
     <td class="n">${rec??"–"}</td><td class="n">${sum("alloc")||""}</td>
     <td>${rec==null?'<span class="muted">Ware fehlt</span>':`<div class="bar-meter" title="${pct}% gedeckt"><i style="width:${pct}%"></i></div>`}</td><td class="n">${free??""}</td></tr>`;
@@ -285,11 +287,12 @@ function renderProducts(){
     <div class="tile"><b>${tot.open}</b><span>Bestellungen offen</span></div>
     <div class="tile"><b>${tot.wait}</b><span>auf Warteliste</span></div>
     <div class="tile ${tot.over?"bad":""}"><b>${tot.over}</b><span>überzugeteilt</span></div>
+    ${ps.some(p=>p.restock)?`<div class="tile"><b>${ps.filter(p=>p.restock).length}</b><span>wartend auf Nachlieferung</span></div>`:""}
   </div>
-  <div class="row"><input id="pq" class="search" placeholder="Produkt suchen, z. B. OP19" value="${esc(S.pq||"")}"><label class="row muted"><input type="checkbox" id="parch" ${showArch?"checked":""}> Archivierte zeigen</label></div>
+  <div class="row"><input id="pq" class="search" placeholder="Produkt suchen, z. B. OP19" value="${esc(S.pq||"")}"><label class="row muted"><input type="checkbox" id="parch" ${showArch?"checked":""}> Abgeschlossene Zuteilungen zeigen</label></div>
   <div class="tablebox"><table><thead><tr><th>Produkt</th><th>Release</th><th class="n">Vorbestellt</th><th class="n">Bestellungen</th><th class="n">Wareneingang</th><th class="n">Zugeteilt</th><th>Deckung</th><th class="n">Frei</th></tr></thead><tbody>
   ${listRows(ps).map(p=>{ if(p.isSeries) return seriesRow(p); const s=stats(p);const pct=s.rec&&s.pre?Math.min(100,Math.round(s.rec/s.pre*100)):0;return `<tr class="click ${p.archived?"dim":""}" data-go="produkt-${p.id}">
-    <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${seriesOf(p)?` <a class="gtag" href="#serie-${p.id}">Serie ${esc(seriesOf(p))}</a>`:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(archiviert)</span>':""}</td><td>${esc(relTxt(p.release))}</td>
+    <td><a href="#produkt-${p.id}">${esc(p.name)}</a>${seriesOf(p)?` <a class="gtag" href="#serie-${p.id}">Serie ${esc(seriesOf(p))}</a>`:""}${S.game==="Alle"?`<span class="gtag">${esc(gameOf(p))}</span>`:""}${p.archived?' <span class="muted">(Zuteilung abgeschlossen)</span>':""}${p.restock&&!p.archived?" "+RESTOCK_PILL:""}</td><td>${esc(relTxt(p.release))}</td>
     <td class="n">${s.pre}${s.flex?`<span class="gtag" title="Kunden, denen egal ist, welches Produkt der Serie">+${s.flex} egal</span>`:""}</td><td class="n">${s.n}</td><td class="n">${s.rec??"–"}</td><td class="n">${s.alloc||""}</td>
     <td>${s.rec==null?'<span class="muted">Ware fehlt</span>':`<div class="bar-meter ${s.over?"over":""}" title="${pct}% der Vorbestellung gedeckt"><i style="width:${pct}%"></i></div>`}</td>
     <td class="n" style="${s.over?"color:var(--bad);font-weight:700":""}">${s.free??""}</td></tr>`}).join("") || `<tr><td colspan="8" class="empty">Kein Produkt passt zur Suche.</td></tr>`}
@@ -356,10 +359,10 @@ function renderProduct(pid){
   app.innerHTML = `
   <a class="back" href="#produkte">← Produkte</a>
   <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a>${/^https?:\/\//.test(p.etronUrl||"")?` · <a class="back" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">In etron öffnen</a>`:""} · ${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
-   <div class="row">${addVarBtn()}<button class="sm" id="arch">${p.archived?"Wieder aktivieren":"Archivieren"}</button><button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
+   <div class="row">${addVarBtn()}${p.archived?`<button class="sm" id="arch" title="Für neue Einträge wieder öffnen. Das Produkt ist dann als „Wartend auf Nachlieferung“ markiert.">Für Nachlieferung wieder öffnen</button>`:`<button class="sm" id="arch" title="Zuteilung ist erledigt: Produkt aus der Liste nehmen (mit „Abgeschlossene Zuteilungen zeigen“ weiter sichtbar)">Zu „Abgeschlossene Zuteilungen“</button>`}<button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
   <div id="addvbox"></div>
   ${etSearchHtml("pd",(p.group||p.name||"").split("|")[0].trim(),p.etronArtId)}
-  ${p.archived?`<div class="note">Dieses Produkt ist archiviert und erscheint nur mit „Archivierte zeigen“ in der Produktliste.</div>`:""}
+  ${p.archived?`<div class="note">Die Zuteilung für dieses Produkt ist abgeschlossen. Es erscheint nur mit „Abgeschlossene Zuteilungen zeigen“ in der Produktliste. Für neue Einträge oben „Für Nachlieferung wieder öffnen“.</div>`:p.restock?`<div class="note warn">${RESTOCK_PILL} Dieses Produkt wurde für eine zukünftige Nachlieferung wieder geöffnet. Neue Einträge sind möglich. Wenn die Nachlieferung zugeteilt ist, oben „Zu Abgeschlossene Zuteilungen“ klicken.</div>`:""}
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
     ${s.flex?`<div class="tile"><b>+${s.flex}</b><span>egal welches (Serie)</span></div>`:""}
@@ -420,7 +423,7 @@ function renderProduct(pid){
   bindEtSearch("pd", async x=>{ const patch={etronArtId:String(x.id)}; if(x.code) patch.articleNo=x.code; if(await write("products",pid,patch)) toast(`Übernommen: etron-Artikel ${x.id}${x.code?", Art.-Nr. "+x.code:""}`,5000); });
   if(p.packSize) ["supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#ve-"+f); el.onchange=()=>{ const v=num(el.value); write("products",pid,{[f]:v==null?null:v*p.packSize}).then(ok=>ok&&toast(v==null?"Gespeichert":`Gespeichert: ${v*p.packSize} Stück`)); }; });
   bindAddVar(p);
-  $("#arch").onclick=()=>write("products",pid,{archived:!p.archived});
+  $("#arch").onclick=()=>write("products",pid,p.archived?{archived:false,restock:true}:{archived:true,restock:false}).then(ok=>ok&&toast(p.archived?"Wieder geöffnet: wartend auf Nachlieferung":"Zuteilung abgeschlossen"));
   $("#del").onclick=()=>{ const own=ordersOf(pid), fl=flexOf(pid);
     $("#delc").innerHTML=` <button class="sm danger" id="delok">Ja: Produkt und ${own.length} Bestellungen endgültig löschen</button>`;
     $("#delok").onclick=()=>{ const t=now(); S.doc.update(o=>{ o.products[pid]={deleted:true,updatedAt:t};
@@ -1526,7 +1529,7 @@ const LOG_DIR = "protokoll";
 const AREA = { games: "Spielsystem", orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
 const FIELD = { noWhatsapp: "Kein WhatsApp", firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
-  archived: "Archiviert", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronArtId: "etron-Artikel-ID", etronUrl: "etron-Link" };
+  archived: "Zuteilung abgeschlossen", restock: "Wartend auf Nachlieferung", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronArtId: "etron-Artikel-ID", etronUrl: "etron-Link" };
 const LOG_SKIP = new Set(["updatedAt", "_ft", "createdAt", "notDupes", "pairId", "order", "hidden"]);
 function logVal(k, v){
   if (v == null || v === "") return "–";
