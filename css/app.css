@@ -155,3 +155,8 @@ details.fold > summary h2{display:inline;margin:0}
 details.fold > summary::before{content:"▸ ";color:var(--muted)}
 details.fold[open] > summary::before{content:"▾ "}
 details.fold[open] > summary{margin-bottom:10px}
+/* Dialoge: Liste scrollt innen, Knöpfe bleiben immer sichtbar (Tommy, 26.11.) */
+.modal-card{display:flex;flex-direction:column;overflow:hidden}
+.modal-card > *{flex:0 0 auto}
+.modal-card .tablebox{overflow:auto;flex:1 1 auto;min-height:0;max-height:none!important}
+.modal-card th{top:0}
