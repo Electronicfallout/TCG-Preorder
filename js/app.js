@@ -1541,6 +1541,8 @@ async function backup(){
   showText(data); toast("Download nicht verfügbar: Text unten markieren, kopieren und als .json speichern.");
 }
 function renderExport(){
+  // Erweiterung beim Start nicht erkannt (z. B. noch nicht bereit)? Hier erneut prüfen und dann die etron-Knöpfe zeigen.
+  if(!S.desktop && !S.extOk && Date.now()-(S.extT||0)>3000){ S.extT=Date.now(); extCheck().then(v=>{ dlog(v?"INFO":"WARN",`etron-Erweiterung im Export ${v?"erkannt "+v:"nicht erkannt"}`); if(v && h0()==="export") render(); }); }
   const rows=exportRows(); const byC={};
   const shownRows=[...rows, ...[...S.doneNow].map(id=>S.orders[id]).filter(o=>o&&o.status==="Auftrag angelegt"&&inGame(S.products[o.productId]))];
   shownRows.filter(o=>nameMatch(S.oq, S.customers[o.customerId])).forEach(o=>(byC[o.customerId]=byC[o.customerId]||[]).push(o));
@@ -1550,6 +1552,7 @@ function renderExport(){
   ${(()=>{ const pend=Object.values(S.orders).filter(o=>o.status==="Offen"&&(o.alloc||0)>0&&o.productId&&inGame(S.products[o.productId])); if(!pend.length) return "";
     const ps=[...new Set(pend.map(o=>o.productId))]; return `<div class="note">${pend.length} Bestellungen haben schon eine Zuteilung, stehen aber noch auf „Offen“ und erscheinen deshalb hier nicht. Auf der Produktseite „Zuteilung abschließen“ klicken: ${ps.map(id=>`<a href="#produkt-${id}">${esc(S.products[id]?.name||"?")}</a>`).join(", ")}</div>`; })()}
   <div class="row">${oqInput()}</div>
+  ${!etronOn()&&rows.length?`<div class="note bad">Die etron-Erweiterung wird in diesem Fenster nicht erkannt, deshalb fehlt „In etron anlegen“. Bitte unter <a href="#einstellungen">Einstellungen → etron-Schnittstelle</a> prüfen, ob die Erweiterung aktiv ist. In Chrome unter chrome://extensions muss „TCG Vorbestellungen – etron-Verbindung“ eingeschaltet sein. Danach die App einmal neu laden.</div>`:""}
   ${etronOn()&&(rows.length||S.etRes?.length)?`<div class="panel"><h2>Aufträge direkt in etron anlegen</h2><p class="muted">Legt pro Kunde einen Auftrag ${odooCfg().confirm?`an und <b>bestätigt ihn sofort</b>`:`als <b>Angebot (Entwurf)</b> an`} (Artikel über die Artikelnummer, Stichwort aus den Einstellungen unten) und setzt die Positionen auf „Auftrag angelegt“.${odooCfg().confirm?"":" In etron prüfen und bestätigen."}</p>
     <label class="row" style="gap:6px"><input type="checkbox" id="et-conf" ${odooCfg().confirm?"checked":""}> Aufträge direkt bestätigen statt Angebot anlegen</label>
     <p class="muted" style="margin-top:0">${odooCfg().confirm?`<span class="bad">An:</span> `:"Aus (empfohlen, bis alles geprüft ist). "}Bestätigte Aufträge reservieren in etron sofort Ware im Lager und erzeugen Lieferungen. Sie lassen sich nur in etron wieder stornieren.</p>
