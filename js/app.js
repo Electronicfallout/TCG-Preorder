@@ -226,7 +226,25 @@ const newId = p => p + Date.now().toString(36) + Math.random().toString(36).slic
 // ---------- views
 const h0=()=>(location.hash||"#produkte").slice(1);
 function route(){ const h=(location.hash||"#produkte").slice(1); document.querySelectorAll("#nav a").forEach(a=>{const v=a.dataset.v; a.classList.toggle("on", h===v || (v==="produkte"&&(h.startsWith("produkt-")||h.startsWith("serie-"))) || (v==="kunden"&&h.startsWith("kunde-")));}); render(); }
+// Ruhig neu zeichnen (Tommy, 26.11.): Während die Maustaste gedrückt ist, wird nicht neu gezeichnet (sonst geht der Klick verloren).
+// Scrollposition (Seite und Tabellen), Fokus und ein gerade getippter Wert bleiben erhalten.
+S.ptr = 0; S.renderLater = false;
+addEventListener("pointerdown", () => { S.ptr++; }, true);
+const ptrUp = () => { if (S.ptr) S.ptr--; if (!S.ptr && S.renderLater) setTimeout(() => { if (!S.ptr && S.renderLater) { S.renderLater = false; render(); } }, 120); };
+addEventListener("pointerup", ptrUp, true); addEventListener("pointercancel", ptrUp, true);
+addEventListener("blur", () => { S.ptr = 0; });
 function render(){
+  if (S.ptr && S.loaded?.o) { S.renderLater = true; return; }
+  S.renderLater = false;
+  const same = S.rh === h0(); S.rh = h0(); if (!same) return renderNow();
+  const ae = document.activeElement, typing = ae && ae.id && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && !/^(checkbox|radio|file|button|submit)$/.test(ae.type||"") && ae.value !== ae.defaultValue ? ae.value : null;
+  const boxes = [...document.querySelectorAll("#app .tablebox")].map(b => [b.scrollTop, b.scrollLeft]); const sx = scrollX, sy = scrollY;
+  renderNow();
+  document.querySelectorAll("#app .tablebox").forEach((b, i) => { if (boxes[i]) { b.scrollTop = boxes[i][0]; b.scrollLeft = boxes[i][1]; } });
+  if (scrollY !== sy || scrollX !== sx) scrollTo(sx, sy);
+  if (typing != null && ae.id) { const el = document.getElementById(ae.id); if (el && el !== ae && /^(INPUT|TEXTAREA)$/.test(el.tagName) && el.value !== typing) el.value = typing; }
+}
+function renderNow(){
   if (S.err) { app.innerHTML = `<div class="note bad">${esc(S.err)}</div>`; return; }
   if (!(S.loaded.p&&S.loaded.c&&S.loaded.o)) return;
   if (!S.skipImport && !Object.keys(S.products).length && !Object.keys(S.orders).length && h0()!=="einstellungen") return renderImport();
@@ -243,7 +261,7 @@ function render(){
   else if (h==="einstellungen") renderSettings();
   else if (h==="protokoll") renderLog();
   else renderProducts();
-  if (keepFocus){ const el=document.getElementById(keepFocus); if(el){ el.focus(); try{ if(sel!=null) el.setSelectionRange(sel,sel);}catch(e){} } }
+  if (keepFocus){ const el=document.getElementById(keepFocus); if(el){ el.focus({preventScroll:true}); try{ if(sel!=null) el.setSelectionRange(sel,sel);}catch(e){} } }
 }
 
 function renderImport(){
@@ -1947,8 +1965,10 @@ async function boot(){
     drawSync();
     if (S.doc.status !== lastSt && S.doc.status !== "syncing") { if (S.doc.status === "error" || S.doc.status === "offline" || lastSt === "error" || lastSt === "offline") dlog(S.doc.status === "ok" ? "INFO" : "WARN", `Abgleich: ${S.doc.status}${S.doc.error ? " (" + S.doc.error + ")" : ""}`); lastSt = S.doc.status; }
     if (!S.doc.obj) return;
-    const key = (S.doc.rev || "") + ":" + (S.doc.obj.meta?.updatedAt || 0);
-    if (key === seen) return; seen = key; pull(); route();
+    // Nur neu zeichnen, wenn sich die Daten wirklich geändert haben (nicht nach jedem erfolgreichen Speichern in die Dropbox).
+    const key = JSON.stringify(S.doc.obj);
+    // Erst nach dem aktuellen Ereignis zeichnen: sonst verschwindet z. B. bei Tab das nächste Feld, bevor es den Fokus bekommt.
+    if (key === seen) return; seen = key; pull(); clearTimeout(S.rt); S.rt = setTimeout(route, 0);
   });
   if (cached) { pull(); route(); }
   await openLog();
