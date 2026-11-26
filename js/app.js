@@ -228,13 +228,14 @@ const h0=()=>(location.hash||"#produkte").slice(1);
 function route(){ const h=(location.hash||"#produkte").slice(1); document.querySelectorAll("#nav a").forEach(a=>{const v=a.dataset.v; a.classList.toggle("on", h===v || (v==="produkte"&&(h.startsWith("produkt-")||h.startsWith("serie-"))) || (v==="kunden"&&h.startsWith("kunde-")));}); render(); }
 // Ruhig neu zeichnen (Tommy, 26.11.): Während die Maustaste gedrückt ist, wird nicht neu gezeichnet (sonst geht der Klick verloren).
 // Scrollposition (Seite und Tabellen), Fokus und ein gerade getippter Wert bleiben erhalten.
+// Höchstens 700 ms warten (z. B. öffnet eine Auswahlliste und Chrome meldet das Loslassen nicht), danach wird auf jeden Fall gezeichnet.
 S.ptr = 0; S.renderLater = false;
-addEventListener("pointerdown", () => { S.ptr++; }, true);
-const ptrUp = () => { if (S.ptr) S.ptr--; if (!S.ptr && S.renderLater) setTimeout(() => { if (!S.ptr && S.renderLater) { S.renderLater = false; render(); } }, 120); };
-addEventListener("pointerup", ptrUp, true); addEventListener("pointercancel", ptrUp, true);
-addEventListener("blur", () => { S.ptr = 0; });
+const ptrFlush = () => { if (S.renderLater) { S.renderLater = false; render(); } };
+addEventListener("pointerdown", e => { if (e.target?.closest?.("select")) return; S.ptr = Date.now(); clearTimeout(S.ptrT); S.ptrT = setTimeout(() => { S.ptr = 0; ptrFlush(); }, 700); }, true);
+const ptrUp = () => { if (!S.ptr) return; S.ptr = 0; clearTimeout(S.ptrT); setTimeout(ptrFlush, 120); };
+addEventListener("pointerup", ptrUp, true); addEventListener("pointercancel", ptrUp, true); addEventListener("blur", ptrUp);
 function render(){
-  if (S.ptr && S.loaded?.o) { S.renderLater = true; return; }
+  if (S.ptr && Date.now() - S.ptr < 700 && S.loaded?.o && S.rh === h0()) { S.renderLater = true; return; }
   S.renderLater = false;
   const same = S.rh === h0(); S.rh = h0(); if (!same) return renderNow();
   const ae = document.activeElement, typing = ae && ae.id && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && !/^(checkbox|radio|file|button|submit)$/.test(ae.type||"") && ae.value !== ae.defaultValue ? ae.value : null;
