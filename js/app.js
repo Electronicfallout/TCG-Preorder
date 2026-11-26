@@ -337,8 +337,15 @@ function renderProducts(){
 }
 
 // etron-Artikelsuche (Name, Referenz, Barcode): Treffer anklicken -> onPick({id,code,name})
-function etSearchHtml(k, q, linked){ if(!etronOn()) return ""; return `<div class="${k==="np"?"wide":"panel"}" id="${k}-etbox">${k==="np"?"":`<h2>etron-Artikel${linked?` <span class="ok" style="font-size:.8em">✓ verknüpft (ID ${esc(String(linked))})</span>`:""}</h2>`}
-  <div class="row" style="gap:6px"><input id="${k}-etq" value="${esc(q||"")}" placeholder="In etron suchen: Name oder Nummer, z. B. OP-18" style="flex:1"><button type="button" id="${k}-ets" class="sm">Artikel in etron suchen</button></div><div id="${k}-etsr" class="muted"></div></div>`; }
+function etSearchHtml(k, q, linked, fold){ if(!etronOn()) return ""; const h=`etron-Artikel${linked?` <span class="ok" style="font-size:.8em">✓ verknüpft (ID ${esc(String(linked))})</span>`:""}`;
+  const body=`<div class="row" style="gap:6px"><input id="${k}-etq" value="${esc(q||"")}" placeholder="In etron suchen: Name oder Nummer, z. B. OP-18" style="flex:1"><button type="button" id="${k}-ets" class="sm">Artikel in etron suchen</button></div><div id="${k}-etsr" class="muted"></div>`;
+  if(fold) return foldPanel(fold, h, body, `id="${k}-etbox"`);
+  return `<div class="${k==="np"?"wide":"panel"}" id="${k}-etbox">${k==="np"?"":`<h2>${h}</h2>`}
+  ${body}</div>`; }
+// Eingeklappter Bereich (Tommy, 26.11.): bleibt auf/zu, auch wenn die Seite neu gezeichnet wird.
+S.fold = S.fold || {};
+const foldPanel = (key, title, body, attr="") => `<details class="panel fold" data-fold="${esc(key)}" ${attr} ${S.fold[key]?"open":""}><summary><h2>${title}</h2></summary>${body}</details>`;
+const bindFold = () => app.querySelectorAll("details[data-fold]").forEach(d=>d.ontoggle=()=>{ S.fold[d.dataset.fold]=d.open; });
 function bindEtSearch(k, onPick){ const ets=$("#"+k+"-ets"); if(!ets) return; const q0=$("#"+k+"-etq");
   q0.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); ets.click(); } };
   ets.onclick=async()=>{ const out=$("#"+k+"-etsr"), q=q0.value.trim(); if(q.length<2) return toast("Bitte mindestens 2 Zeichen eingeben."); out.innerHTML="… suche"; ets.disabled=true;
@@ -380,7 +387,7 @@ function renderProduct(pid){
   <div class="row spread"><div><h1>${esc(p.name)}</h1><p class="sub"><a class="back" href="#protokoll" data-logq="${esc(p.name)}">Verlauf</a>${/^https?:\/\//.test(p.etronUrl||"")?` · <a class="back" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">In etron öffnen</a>`:""} · ${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}${esc(gameOf(p))} · Release ${esc(relTxt(p.release))}${p.unit?" · Einheit "+esc(p.unit):""}${siblings(p).length>1?` · <a class="back" href="#serie-${p.id}">Ganze Serie „${esc(seriesOf(p))}“ zuteilen →</a>`:""}</p></div>
    <div class="row">${addVarBtn()}${p.archived?`<button class="sm" id="arch" title="Für neue Einträge wieder öffnen. Das Produkt ist dann als „Wartend auf Nachlieferung“ markiert.">Für Nachlieferung wieder öffnen</button>`:`<button class="sm" id="arch" title="Zuteilung ist erledigt: Produkt aus der Liste nehmen (mit „Abgeschlossene Zuteilungen zeigen“ weiter sichtbar)">Zu „Abgeschlossene Zuteilungen“</button>`}<button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
   <div id="addvbox"></div>
-  ${etSearchHtml("pd",(p.group||p.name||"").split("|")[0].trim(),p.etronArtId)}
+  ${etSearchHtml("pd",(p.group||p.name||"").split("|")[0].trim(),p.etronArtId,p.etronArtId?"et-"+pid:null)}
   ${p.archived?`<div class="note">Die Zuteilung für dieses Produkt ist abgeschlossen. Es erscheint nur mit „Abgeschlossene Zuteilungen zeigen“ in der Produktliste. Für neue Einträge oben „Für Nachlieferung wieder öffnen“.</div>`:p.restock?`<div class="note warn">${RESTOCK_PILL} Dieses Produkt wurde für eine zukünftige Nachlieferung wieder geöffnet. Neue Einträge sind möglich. Wenn die Nachlieferung zugeteilt ist, oben „Zu Abgeschlossene Zuteilungen“ klicken.</div>`:""}
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
@@ -391,7 +398,7 @@ function renderProduct(pid){
     <div class="tile ${s.rec!=null&&s.pre>s.rec?"bad":""}"><b>${s.rec==null?"–":Math.max(0,s.pre-s.rec)}</b><span>Fehlmenge</span></div>
   </div>
   ${s.over?`<div class="note bad">Es sind ${s.alloc-s.rec} Stück mehr zugeteilt als geliefert. Bitte Zuteilungen reduzieren.</div>`:""}
-  <div class="panel"><h2>Produktdaten</h2>
+  ${(p.etronArtId?(b=>foldPanel("pd-"+pid,`Produktdaten <span class="muted" style="font-size:.8em;font-weight:500">${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}Wareneingang ${s.rec??"–"}</span>`,b)):(b=>`<div class="panel"><h2>Produktdaten</h2>${b}</div>`))(`
     <div class="form">
       <label class="wide">Produktname<input id="pd-name" value="${esc(p.name||"")}"></label>
       <label>Artikelnummer<input id="pd-articleNo" value="${esc(p.articleNo||"")}" placeholder="etron-Artikelnr."></label>
@@ -406,7 +413,7 @@ function renderProduct(pid){
       ${veField("supplierOrdered","Beim Lieferanten bestellt",p)}
       ${veField("supplierConfirmed","Lieferant zugesagt",p)}
       ${veField("received","Wareneingang (verfügbar)",p)}
-    </div></div>
+    </div>`)}
   <div class="panel"><div class="row spread"><h2>Zuteilung</h2>
     <div class="row">
       <select id="mode"><option value="prop">Proportional (fair verteilt)</option><option value="fifo" ${S.mode==="fifo"?"selected":""}>Nach Bestelldatum (wer zuerst kommt)</option></select><label class="row muted" style="gap:4px" title="Zuerst bekommt jeder Kunde 1 Stück (nach Bestelldatum, falls nicht genug für alle da ist), der Rest wird wie gewählt verteilt."><input type="checkbox" id="min1" ${S.min1?"checked":""}> Jeder mind. 1 Stück</label>
@@ -439,6 +446,7 @@ function renderProduct(pid){
   // product fields
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
   ["name","msgName","articleNo","etronArtId","etronUrl","release","series","unit","packSize","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="packSize"&&v!=null&&!(v>=1&&Number.isInteger(v))){ el.value=p.packSize??""; return toast("Bitte eine ganze Zahl ab 1 eintragen."); } if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronArtId"&&v&&!artIdOf(v)){ el.value=p.etronArtId||""; return toast("Bitte nur die Zahl eintragen, z. B. 47411."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  bindFold();
   bindEtSearch("pd", async x=>{ const patch={etronArtId:String(x.id)}; if(x.code) patch.articleNo=x.code; if(await write("products",pid,patch)) toast(`Übernommen: etron-Artikel ${x.id}${x.code?", Art.-Nr. "+x.code:""}`,5000); });
   if(p.packSize) ["supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#ve-"+f); el.onchange=()=>{ const v=num(el.value); write("products",pid,{[f]:v==null?null:v*p.packSize}).then(ok=>ok&&toast(v==null?"Gespeichert":`Gespeichert: ${v*p.packSize} Stück`)); }; });
   bindAddVar(p);

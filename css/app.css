@@ -148,3 +148,10 @@ thead tr.h2 th:first-child{left:auto;z-index:2;background:var(--surface2)}
 .sertab td.pc div.sq,.sertab td.pc div.sa{width:52px;margin:0 auto 3px;text-align:right;padding:3px 4px}
 .sertab td.pc div.sa{color:var(--accent);font-weight:600}
 .sertab td.pc .sv{font-size:12px;font-weight:700;color:var(--accent)}
+/* Eingeklappte Bereiche auf der Produktseite */
+details.fold > summary{cursor:pointer;list-style:none}
+details.fold > summary::-webkit-details-marker{display:none}
+details.fold > summary h2{display:inline;margin:0}
+details.fold > summary::before{content:"▸ ";color:var(--muted)}
+details.fold[open] > summary::before{content:"▾ "}
+details.fold[open] > summary{margin-bottom:10px}
