@@ -12,6 +12,9 @@ try{ S.min1 = localStorage.getItem("vb.min1")==="1"; }catch(e){}
 const $ = s => document.querySelector(s);
 const app = $("#app");
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// Preis (Tommy, 27.11.): „49,90“ oder „49.90“ → 49.9; Anzeige „49,90 €“
+const priceOf = v => { const t=String(v??"").trim().replace(/[€\s]/g,""); if(!t) return null; const x=+(t.includes(",")?t.replace(/\./g,"").replace(",","."):t); return isNaN(x)||x<0?null:Math.round(x*100)/100; };
+const fmtPrice = x => x==null||x==="" ? "" : Number(x).toLocaleString("de-AT",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
 const num = v => (v === "" || v == null || isNaN(+v)) ? null : +v;
 const today = () => { const d=new Date(); return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,10); };
 const fmtDate = d => d ? d.split("-").reverse().join(".") : "";
@@ -398,13 +401,14 @@ function renderProduct(pid){
     <div class="tile ${s.rec!=null&&s.pre>s.rec?"bad":""}"><b>${s.rec==null?"–":Math.max(0,s.pre-s.rec)}</b><span>Fehlmenge</span></div>
   </div>
   ${s.over?`<div class="note bad">Es sind ${s.alloc-s.rec} Stück mehr zugeteilt als geliefert. Bitte Zuteilungen reduzieren.</div>`:""}
-  ${(p.etronArtId?(b=>foldPanel("pd-"+pid,`Produktdaten <span class="muted" style="font-size:.8em;font-weight:500">${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}Wareneingang ${s.rec??"–"}</span>`,b)):(b=>`<div class="panel"><h2>Produktdaten</h2>${b}</div>`))(`
+  ${(p.etronArtId?(b=>foldPanel("pd-"+pid,`Produktdaten <span class="muted" style="font-size:.8em;font-weight:500">${p.articleNo?"Art.-Nr. "+esc(p.articleNo)+" · ":""}${p.price!=null?fmtPrice(p.price)+" · ":""}Wareneingang ${s.rec??"–"}</span>`,b)):(b=>`<div class="panel"><h2>Produktdaten</h2>${b}</div>`))(`
     <div class="form">
       <label class="wide">Produktname<input id="pd-name" value="${esc(p.name||"")}"></label>
       <label>Artikelnummer<input id="pd-articleNo" value="${esc(p.articleNo||"")}" placeholder="etron-Artikelnr."></label>
       <label>etron-Artikel-ID <span class="muted">(optional, hat Vorrang)</span><input id="pd-etronArtId" value="${esc(p.etronArtId||"")}" placeholder="z. B. 47411"></label>
       <label class="wide">etron-Link zum Artikel<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="pd-etronUrl" type="url" value="${esc(p.etronUrl||"")}" placeholder="https://… (Adresse aus dem Browser kopieren)" style="flex:1">${/^https?:\/\//.test(p.etronUrl||"")?`<a class="btn" href="${esc(p.etronUrl)}" target="_blank" rel="noopener">Öffnen</a>`:""}</span></label>
       <label class="wide">Name in Kundennachrichten<input id="pd-msgName" value="${esc(p.msgName||"")}" placeholder="leer = Produktname (ohne Artikelnummer eintragen)"></label>
+      <label>Preis (€ pro Stück)<input id="pd-price" value="${p.price!=null?esc(String(p.price).replace(".",",")):""}" placeholder="z. B. 49,90" inputmode="decimal">${etronOn()&&p.etronArtId?`<button type="button" class="sm" id="pd-etp" style="align-self:flex-start;margin-top:4px" title="Verkaufspreis aus etron holen">Preis aus etron holen</button>`:""}${p.etronPrice!=null&&p.price!=null&&Math.abs(p.price-p.etronPrice)>0.004?`<span class="bad" style="font-size:12px">etron: ${fmtPrice(p.etronPrice)}</span>`:""}</label>
       <label>Release<input id="pd-release" value="${esc(p.release||"")}" placeholder="JJJJ-MM-TT, Q2 2027"></label>
       <label>Serie<input id="pd-series" value="${esc(p.series||"")}" placeholder="z. B. Mega Evolution"></label>
       <label>Spiel<select id="pd-game">${gameOptions(gameOf(p))}</select></label>
@@ -447,7 +451,10 @@ function renderProduct(pid){
   $("#pd-game").onchange=e=>write("products",pid,{game:e.target.value}).then(ok=>ok&&toast("Gespeichert"));
   ["name","msgName","articleNo","etronArtId","etronUrl","release","series","unit","packSize","supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#pd-"+f); el.onchange=()=>{ const v=el.type==="number"?num(el.value):el.value.trim(); if(f==="packSize"&&v!=null&&!(v>=1&&Number.isInteger(v))){ el.value=p.packSize??""; return toast("Bitte eine ganze Zahl ab 1 eintragen."); } if(f==="name"&&!v){ el.value=p.name; return toast("Produktname darf nicht leer sein."); } if(f==="etronArtId"&&v&&!artIdOf(v)){ el.value=p.etronArtId||""; return toast("Bitte nur die Zahl eintragen, z. B. 47411."); } if(f==="etronUrl"&&v&&!/^https?:\/\//.test(v)) return toast("Bitte die vollständige Adresse mit https:// einfügen."); write("products",pid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
   bindFold();
-  bindEtSearch("pd", async x=>{ const patch={etronArtId:String(x.id)}; if(x.code) patch.articleNo=x.code; if(await write("products",pid,patch)) toast(`Übernommen: etron-Artikel ${x.id}${x.code?", Art.-Nr. "+x.code:""}`,5000); });
+  $("#pd-price").onchange=e=>{ const t=e.target.value.trim(), v=priceOf(t); if(t&&v==null){ e.target.value=p.price!=null?String(p.price).replace(".",","):""; return toast("Bitte einen Preis wie 49,90 eintragen."); } write("products",pid,{price:v}).then(ok=>ok&&toast(v==null?"Preis gelöscht":"Preis gespeichert: "+fmtPrice(v))); };
+  const etp=$("#pd-etp"); if(etp) etp.onclick=async()=>{ etp.disabled=true; try{ const r=await etronCall("product_by_id",{id:artIdOf(p.etronArtId),code:p.articleNo||""}); if(typeof r.price!=="number") throw new Error("etron liefert keinen Preis");
+      await write("products",pid,{price:r.price,etronPrice:r.price}); toast("Preis aus etron: "+fmtPrice(r.price)); }catch(e){ toast("Preis holen fehlgeschlagen: "+(e.message||e),6000); etp.disabled=false; } };
+  bindEtSearch("pd", async x=>{ const patch={etronArtId:String(x.id)}; if(x.code) patch.articleNo=x.code; if(typeof x.price==="number"){ patch.etronPrice=x.price; if(p.price==null) patch.price=x.price; } if(await write("products",pid,patch)) toast(`Übernommen: etron-Artikel ${x.id}${x.code?", Art.-Nr. "+x.code:""}`,5000); });
   if(p.packSize) ["supplierOrdered","supplierConfirmed","received"].forEach(f=>{ const el=$("#ve-"+f); el.onchange=()=>{ const v=num(el.value); write("products",pid,{[f]:v==null?null:v*p.packSize}).then(ok=>ok&&toast(v==null?"Gespeichert":`Gespeichert: ${v*p.packSize} Stück`)); }; });
   bindAddVar(p);
   $("#arch").onclick=()=>write("products",pid,p.archived?{archived:false,restock:true}:{archived:true,restock:false}).then(ok=>ok&&toast(p.archived?"Wieder geöffnet: wartend auf Nachlieferung":"Zuteilung abgeschlossen"));
@@ -554,7 +561,10 @@ function fillTemplate(text, os, tag){
   const teil=part.length?`Leider konnten wir ${part.length===1?`nur ${part[0].alloc} von ${part[0].qty} bestellten Stück`:"nicht alle bestellten Stück"} für dich reservieren.`:"";
   // {Releasetag}: Release-Datum der Produkte (Tommy, 27.11.), z. B. „20.11.2026“ oder „Q2 2027“.
   const rel=[...new Set(os.map(x=>x.productId?S.products[x.productId]?.release:(x.choices||[]).map(id=>S.products[id]?.release).find(Boolean)).filter(Boolean).map(relTxt))].join(" bzw. ");
-  const map={ Releasetag: rel||"Release", Bestellt: String(bestellt), Teillieferung: teil, Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), "Stück": String(os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ")), Stueck: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
+  const pr=os.map(x=>{ const id=x.productId||(x.choices||[])[0]; return S.products[id]?.price; });
+  const preis=[...new Set(pr.filter(v=>v!=null).map(fmtPrice))].join(" bzw. ");
+  const gesamt=pr.every(v=>v!=null)&&pr.length?fmtPrice(os.reduce((t,x,i)=>t+pr[i]*(x.alloc||x.qty||0),0)):"";
+  const map={ Preis: preis, Gesamtpreis: gesamt, Releasetag: rel||"Release", Bestellt: String(bestellt), Teillieferung: teil, Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), "Stück": String(os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ")), Stueck: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
   return text.replace(/\{([\wÄÖÜäöüß]+)\}/g, (m,k)=> k in map ? map[k] : m).replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n");
 }
 // Telefon/E-Mail einzeln bearbeiten; sonstiger Text im Kontaktfeld bleibt erhalten
@@ -800,15 +810,15 @@ const EW_ACTIONS = {
     return {items,near}; },
   // Artikel über die interne ID: zuerst als Artikel (product.product), sonst als Produktvorlage (product.template)
   async product_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
-    const r=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],"|","|",["name","ilike",q],["default_code","ilike",q],["barcode","ilike",q]],fields:["id","default_code","barcode","name","active"],limit:25}));
-    dlog("INFO",`Artikelsuche nach Name/Nummer: ${r.length} Treffer`); return {items:r.map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,120),active:p.active!==false}))}; },
-  async product_by_id(c,b){ const n=parseInt(b.id,10); if(!(n>0)) throw new Error("ungültige etron-Artikel-ID"); const F=["id","default_code","name","active"];
+    const r=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],"|","|",["name","ilike",q],["default_code","ilike",q],["barcode","ilike",q]],fields:["id","default_code","barcode","name","active","list_price"],limit:25}));
+    dlog("INFO",`Artikelsuche nach Name/Nummer: ${r.length} Treffer`); return {items:r.map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,120),active:p.active!==false,price:typeof p.list_price==="number"?p.list_price:null}))}; },
+  async product_by_id(c,b){ const n=parseInt(b.id,10); if(!(n>0)) throw new Error("ungültige etron-Artikel-ID"); const F=["id","default_code","name","active","list_price"];
     const hits=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],["id","=",n]],fields:F,limit:2}));
     const p=hits.find(x=>x.id===n); dlog("INFO",`Artikel-ID ${n}: ${p?(p.default_code||"ohne Nr.")+(p.active===false?" archiviert":""):"nicht gefunden"}`);
     if(!p) throw new Error(`etron-Artikel-ID ${n} gibt es in etron nicht. Bitte oben auf der Produktseite mit „Artikel in etron suchen“ den Artikel neu übernehmen.`);
     const code=String(b.code||"").trim().toUpperCase(), pc=String(p.default_code||"").trim().toUpperCase();
     if(code&&pc&&code!==pc) throw new Error(`etron-Artikel-ID ${n} ist „${ewStr(p.name,60)}“ (Art.-Nr. ${p.default_code}), beim Produkt steht aber Art.-Nr. ${b.code}. Sicherheitshalber kein Auftrag. Bitte oben auf der Produktseite den richtigen Artikel neu übernehmen.`);
-    return {id:p.id,default_code:p.default_code||"",name:ewStr(p.name,80),active:p.active!==false}; },
+    return {id:p.id,default_code:p.default_code||"",name:ewStr(p.name,80),active:p.active!==false,price:typeof p.list_price==="number"?p.list_price:null}; },
   async order_confirm(c,b){ const id=parseInt(b.id,10); if(!id) throw new Error("Auftragsnummer fehlt"); await ewCall(c,"POST","/call/sale.order/action_confirm",null,{ids:[id],args:[],kwargs:{}}); return {ok:true}; },
   async order_lines_find(c,b){ const partner=parseInt(b.partner_id,10), ids=(b.product_ids||[]).map(x=>parseInt(x,10)).filter(Boolean); if(!partner||!ids.length) return {items:[]};
     const r=ewList(await ewCall(c,"GET","/search_read/sale.order.line",{domain:["&","&",["order_partner_id","=",partner],["product_id","in",ids],["state","!=","cancel"]],fields:["order_id","product_id","product_uom_qty","state"],limit:50}));
@@ -838,12 +848,17 @@ const COUNTRIES = [["AT","Österreich"],["DE","Deutschland"],["CH","Schweiz"],["
 const countrySel = (id, v="AT") => `<select id="${id}">${COUNTRIES.map(([c,n])=>`<option value="${c}" ${c===v?"selected":""}>${n}</option>`).join("")}</select>`;
 async function etronCreatePartner(fn, ln, tel, mail, country="AT"){ if(!String(tel||"").trim()&&!String(mail||"").trim()) throw new Error("Für etron bitte Telefon oder E-Mail eintragen (eines ist Pflicht)");
   dlog("INFO",`Kunde in etron anlegen (Land ${country})`); const r=await etronCall("partner_create",{firstname:fn,lastname:ln,phone:tel,email:mail,country}); const id=etronIdOf(r); if(!id){ dlog("ERROR","Kunde in etron anlegen: keine Kundennummer in der Antwort"); throw new Error("etron hat keine Kundennummer zurückgegeben"); } dlog("INFO",`Kunde in etron angelegt: Partner ${id}`); return id; }
+// Preis mit etron abgleichen: leerer Preis in der App wird aus etron übernommen, eine Abweichung wird am Produkt angezeigt.
+async function priceSync(pid, ep){ const p=S.products[pid]; if(!p||typeof ep!=="number") return;
+  const patch={}; if(p.etronPrice!==ep) patch.etronPrice=ep; if(p.price==null||p.price==="") patch.price=ep;
+  else if(Math.abs(p.price-ep)>0.004) dlog("WARN",`Preis weicht ab bei Produkt ${pid}: App ${p.price}, etron ${ep}`);
+  if(Object.keys(patch).length) await write("products",pid,patch); }
 // Auftrag für einen Kunden: zugeteilte Positionen -> etron-Auftrag (Entwurf)
 async function etronOrderFor(cid, list){ const c=S.customers[cid]; if(!c?.etronId) throw new Error("keine etron-Nr.");
   const cfg=odooCfg(); let partner=parseInt(c.etronId,10);
   if(cfg.key==="ref"){ const r=await etronCall("partner_search",{q:String(c.etronId)}); const p=(r.items||[]).find(x=>String(x.ref)===String(c.etronId)); if(!p) throw new Error(`Kunde mit Kundennr. ${c.etronId} in etron nicht gefunden`); partner=p.id; }
   const aidOf=o=>artIdOf(S.products[o.productId]?.etronArtId), artById=new Map();
-  for(const o of list.filter(aidOf)){ const pid=o.productId; if(artById.has(pid)) continue; const r=await etronCall("product_by_id",{id:aidOf(o),code:S.products[pid].articleNo||""}); artById.set(pid,r.id); }
+  for(const o of list.filter(aidOf)){ const pid=o.productId; if(artById.has(pid)) continue; const r=await etronCall("product_by_id",{id:aidOf(o),code:S.products[pid].articleNo||""}); artById.set(pid,r.id); await priceSync(pid, r.price); }
   const byId=list.filter(aidOf); list=list.filter(o=>!aidOf(o)); const allList=[...byId,...list];
   const miss=list.filter(o=>!S.products[o.productId]?.articleNo); if(miss.length){ dlog("WARN",`Auftrag Kunde ${cid}: Artikelnummer fehlt bei Produkt ${miss.map(o=>o.productId).join(", ")}`); } if(miss.length) throw new Error("Artikelnummer fehlt bei: "+[...new Set(miss.map(o=>S.products[o.productId]?.name||"?"))].join(", "));
   const codes=[...new Set(list.map(o=>S.products[o.productId].articleNo.trim()))];
@@ -1040,7 +1055,7 @@ function bindStaff(){
 }
 function templatesPanel(){
   return `<div class="panel"><h2>Nachrichtenvorlagen</h2>
-    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Stück} {Bestellt} {Teillieferung} {Releasetag} {Tag} {Mitarbeiter} {Datum}. {Stück} ist die zugeteilte Stückzahl (ohne Zuteilung die bestellte Menge; {Menge} geht weiterhin), {Bestellt} die bestellte Menge, z. B. „{Stück} von {Bestellt} Stück“. {Releasetag} ist das Release-Datum des Produkts (für die Vorlage „Releaseinfo“). {Teillieferung} ergibt nur bei weniger als bestellt den Satz „Leider konnten wir nur 1 von 2 bestellten Stück für dich reservieren.“, sonst bleibt es leer. {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
+    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Stück} {Bestellt} {Teillieferung} {Releasetag} {Preis} {Gesamtpreis} {Tag} {Mitarbeiter} {Datum}. {Stück} ist die zugeteilte Stückzahl (ohne Zuteilung die bestellte Menge; {Menge} geht weiterhin), {Bestellt} die bestellte Menge, z. B. „{Stück} von {Bestellt} Stück“. {Releasetag} ist das Release-Datum des Produkts (für die Vorlage „Releaseinfo“). {Preis} ist der Stückpreis aus den Produktdaten, {Gesamtpreis} Stückpreis mal {Stück}. {Teillieferung} ergibt nur bei weniger als bestellt den Satz „Leider konnten wir nur 1 von 2 bestellten Stück für dich reservieren.“, sonst bleibt es leer. {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
     ${templates().map(t=>`<div class="panel" style="gap:8px"><div class="row"><input id="tn-${t.id}" value="${esc(t.name)}" style="flex:1 1 200px"><button class="sm" data-tsave="${t.id}">Speichern</button><button class="sm danger" data-tdel="${t.id}">Löschen</button></div>
       <textarea id="tt-${t.id}" rows="7" style="width:100%">${esc(t.text)}</textarea></div>`).join("")}
     <div class="row"><button id="tnew">Neue Vorlage</button></div></div>`;
@@ -1610,7 +1625,7 @@ const LOG_DIR = "protokoll";
 const AREA = { games: "Spielsystem", orders: "Bestellung", products: "Produkt", customers: "Kunde", templates: "Vorlage", staff: "Mitarbeiter" };
 const FIELD = { noWhatsapp: "Kein WhatsApp", firstName: "Vorname", lastName: "Nachname", status: "Status", qty: "Menge", alloc: "Zuteilung", comment: "Kommentar", productId: "Produkt", customerId: "Kunde", date: "Datum", staff: "Kürzel", choices: "Auswahl",
   name: "Name", contact: "Kontakt", note: "Notiz", etronId: "etron-Nr.", received: "Eingang", supplierOrdered: "Beim Lieferanten bestellt", supplierConfirmed: "Bestätigt", release: "Release",
-  archived: "Zuteilung abgeschlossen", restock: "Wartend auf Nachlieferung", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronArtId: "etron-Artikel-ID", etronUrl: "etron-Link" };
+  price: "Preis", etronPrice: "etron-Preis", archived: "Zuteilung abgeschlossen", restock: "Wartend auf Nachlieferung", series: "Serie", game: "Spiel", kuerzel: "Kürzel", unit: "Einheit", variant: "Variante", group: "Gruppe", text: "Text", msgName: "Name in Nachrichten", articleNo: "Artikelnummer", etronArtId: "etron-Artikel-ID", etronUrl: "etron-Link" };
 const LOG_SKIP = new Set(["updatedAt", "_ft", "createdAt", "notDupes", "pairId", "order", "hidden"]);
 function logVal(k, v){
   if (v == null || v === "") return "–";
