@@ -832,6 +832,9 @@ const EW_ACTIONS = {
   async order_lines_check(c,b){ const prod=parseInt(b.product_id,10), ids=(b.partner_ids||[]).map(x=>parseInt(x,10)).filter(Boolean).slice(0,80); if(!prod||!ids.length) return {items:[]};
     const r=ewList(await ewCall(c,"GET","/search_read/sale.order.line",{domain:["&","&",["product_id","=",prod],["order_partner_id","in",ids],["state","!=","cancel"]],fields:["order_id","order_partner_id","product_uom_qty","state"],limit:300}));
     return {items:r.map(l=>({order:Array.isArray(l.order_id)?String(l.order_id[1]||l.order_id[0]):String(l.order_id||""),partner:Array.isArray(l.order_partner_id)?l.order_partner_id[0]:l.order_partner_id,qty:l.product_uom_qty||0,state:l.state||""}))}; },
+  async order_lines_product(c,b){ const prod=parseInt(b.product_id,10); if(!prod) return {items:[]};
+    const r=ewList(await ewCall(c,"GET","/search_read/sale.order.line",{domain:["&",["product_id","=",prod],["state","!=","cancel"]],fields:["order_id","order_partner_id","product_uom_qty","state","create_date"],limit:500,order:"id desc"}));
+    return {items:r.map(l=>({order:Array.isArray(l.order_id)?String(l.order_id[1]||l.order_id[0]):String(l.order_id||""),partner:Array.isArray(l.order_partner_id)?l.order_partner_id[0]:l.order_partner_id,pname:Array.isArray(l.order_partner_id)?ewStr(l.order_partner_id[1],80):"",qty:l.product_uom_qty||0,state:l.state||"",date:String(l.create_date||"").slice(0,10)}))}; },
   async order_lines_find(c,b){ const partner=parseInt(b.partner_id,10), ids=(b.product_ids||[]).map(x=>parseInt(x,10)).filter(Boolean); if(!partner||!ids.length) return {items:[]};
     const r=ewList(await ewCall(c,"GET","/search_read/sale.order.line",{domain:["&","&",["order_partner_id","=",partner],["product_id","in",ids],["state","!=","cancel"]],fields:["order_id","product_id","product_uom_qty","state"],limit:50}));
     const idOf=v=>Array.isArray(v)?v[0]:v, nameOf=v=>Array.isArray(v)?String(v[1]||v[0]):String(v);
@@ -878,18 +881,36 @@ async function etChkRun(pid){ const p=S.products[pid]; if(!p) return;
   const lines=[]; for(let i=0;i<ids.length;i+=80){ const r=await etronCall("order_lines_check",{product_id:prod,partner_ids:ids.slice(i,i+80)}); lines.push(...(r.items||[])); }
   const byP=new Map(); for(const l of lines){ if(!byP.has(l.partner)) byP.set(l.partner,[]); byP.get(l.partner).push(l); }
   const rows=withEt.map(o=>({oid:o.id,lines:byP.get(parseInt(S.customers[o.customerId].etronId,10))||[]})).filter(r=>r.lines.length);
-  S.etChk[pid]={at:Date.now(),rows,checked:withEt.length,noEt:os.length-withEt.length};
+  // etron-Aufträge für diesen Artikel ohne Vorbestellung in der App (Tommy, 27.11.): zum Aufnehmen anbieten
+  const all=(await etronCall("order_lines_product",{product_id:prod})).items||[]; const known=new Set(ordersOf(pid).map(o=>parseInt(S.customers[o.customerId]?.etronId,10)).filter(Boolean));
+  const missMap=new Map(); for(const l of all){ if(!l.partner||known.has(l.partner)) continue; const k=l.partner; if(!missMap.has(k)) missMap.set(k,{partner:k,pname:l.pname,lines:[]}); missMap.get(k).lines.push(l); }
+  const miss=[...missMap.values()].map(m=>({...m,cid:Object.values(S.customers).find(c=>parseInt(c.etronId,10)===m.partner)?.id||null}));
+  S.etChk[pid]={at:Date.now(),rows,miss,prod,checked:withEt.length,noEt:os.length-withEt.length};
   dlog("INFO",`etron-Auftragsprüfung Produkt ${pid}: ${withEt.length} geprüft, ${rows.length} mit Auftrag, ${os.length-withEt.length} ohne etron-Nr.`); }
 function etChkHtml(pid){ const r=S.etChk[pid]; if(!r) return ""; const rows=r.rows.filter(x=>S.orders[x.oid]&&!LOCKED.has(S.orders[x.oid].status));
   return `<div class="note${rows.length?" bad":" ok"}" style="margin-top:8px">${rows.length?`<b>${rows.length} Vorbestellungen haben in etron schon einen Auftrag oder ein Angebot.</b> Als „Auftrag angelegt“ markieren, dann bleiben sie bei der Zuteilung unverändert und werden nicht nochmal angelegt.`:r.rows.length?`✓ Alle ${r.rows.length} Treffer sind als „Auftrag angelegt“ markiert.`:`✓ Keine der ${r.checked} Vorbestellungen mit etron-Nr. hat schon einen etron-Auftrag für diesen Artikel.`}${r.noEt?` <span class="muted">${r.noEt} Vorbestellungen ohne etron-Nr. konnten nicht geprüft werden.</span>`:""}
   ${rows.length?`<div class="tablebox" style="margin-top:6px"><table><thead><tr><th>Kunde</th><th class="n">Vorbestellt</th><th>In etron</th><th></th></tr></thead><tbody>${rows.map(x=>{ const o=S.orders[x.oid], c=S.customers[o.customerId]||{};
     return `<tr><td><a href="#kunde-${o.customerId}">${esc(c.name||"?")}</a> <span class="muted">Nr. ${esc(String(c.etronId||""))}</span></td><td class="n">${o.qty}</td><td>${x.lines.map(l=>`${esc(l.order)}: ${l.qty} Stk. (${esc(ET_STATE[l.state]||l.state)})`).join("<br>")}</td><td><button class="sm" data-etmk="${x.oid}">Als Auftrag angelegt markieren</button></td></tr>`; }).join("")}</tbody></table></div>
-  <div class="row" style="margin-top:6px"><button class="sm" id="etmk-all">Alle ${rows.length} markieren</button></div>`:""}</div>`; }
+  <div class="row" style="margin-top:6px"><button class="sm" id="etmk-all">Alle ${rows.length} markieren</button></div>`:""}</div>
+  ${(r.miss||[]).length?`<div class="note bad" style="margin-top:8px"><b>${r.miss.length} Kunden haben in etron einen Auftrag für diesen Artikel, aber keine Vorbestellung in der App.</b> „Aufnehmen“ legt die Vorbestellung mit Status „Auftrag angelegt“ und dem Datum des etron-Auftrags an.
+  <div class="tablebox" style="margin-top:6px"><table><thead><tr><th>Kunde in etron</th><th>In etron</th><th></th></tr></thead><tbody>${r.miss.map((m,i)=>`<tr><td>${m.cid?`<a href="#kunde-${m.cid}">${esc(S.customers[m.cid]?.name||m.pname)}</a>`:esc(m.pname||"?")} <span class="muted">Nr. ${m.partner}${m.cid?"":" · noch nicht in der App"}</span></td>
+    <td>${m.lines.map(l=>`${esc(l.order)}: ${l.qty} Stk. (${esc(ET_STATE[l.state]||l.state)}${l.date?", "+fmtDate(l.date):""})`).join("<br>")}</td>
+    <td><button class="sm" data-etadd="${i}">${m.cid?"Aufnehmen":"Kunde anlegen und aufnehmen"}</button></td></tr>`).join("")}</tbody></table></div></div>`:""}`; }
 function bindEtChk(pid){ const run=$("#etchk"); if(run) run.onclick=async()=>{ if(needStaff()) return; run.disabled=true; run.textContent="Prüfe etron …";
     try{ await etChkRun(pid); }catch(e){ toast("Prüfung nicht möglich: "+(e.message||e),7000); } render(); };
   const mark=async ids=>{ const r=S.etChk[pid]; await pool(ids,id=>{ const x=r.rows.find(y=>y.oid===id), o=S.orders[id]; const q=x.lines.reduce((t,l)=>t+(l.qty||0),0);
       return S.db.collection("orders").doc(id).update({status:"Auftrag angelegt",etronOrder:[...new Set(x.lines.map(l=>l.order))].join(", "),alloc:q||o.qty}); });
     dlog("INFO",`${ids.length} Vorbestellungen nach etron-Prüfung als Auftrag angelegt markiert`); toast(`${ids.length} als „Auftrag angelegt“ markiert`); };
+  app.querySelectorAll("[data-etadd]").forEach(b=>b.onclick=async()=>{ if(needStaff()) return; const r=S.etChk[pid], m=r.miss[+b.dataset.etadd]; if(!m) return;
+    if(!m.cid && b.dataset.sure!=="1"){ b.dataset.sure="1"; b.textContent=`Ja, Kunde „${m.pname}“ anlegen`; b.classList.add("danger"); return; }
+    b.disabled=true; try{ let cid=m.cid;
+      if(!cid){ let contact=""; try{ const pp=await etronPartner(m.partner); if(pp) contact=joinContact(etronTel(pp).split(" / ")[0]||"",pp.email&&pp.email!==false?pp.email:"",null); }catch(e){}
+        const parts=String(m.pname||"").trim().split(/\s+/); const ln=parts.length>1?parts.pop():""; const fn=parts.join(" ")||ln;
+        cid=newId("c"); if(!await write("customers",cid,{name:m.pname,firstName:fn,lastName:ln,etronId:String(m.partner),contact,note:"aus etron-Auftrag übernommen"},"set")) throw new Error("Kunde nicht gespeichert"); }
+      const q=m.lines.reduce((t,l)=>t+(l.qty||0),0), d=m.lines.map(l=>l.date).filter(Boolean).sort()[0]||today();
+      await write("orders",newId("o"),{productId:pid,customerId:cid,qty:q,alloc:q,status:"Auftrag angelegt",etronOrder:[...new Set(m.lines.map(l=>l.order))].join(", "),date:d,staff:staff(),comment:"aus etron-Auftrag übernommen",createdAt:new Date().toISOString()},"set");
+      r.miss=r.miss.filter(x=>x!==m); dlog("INFO",`Vorbestellung aus etron-Auftrag übernommen (Partner ${m.partner}, ${q} Stk.)`); toast(`Aufgenommen: ${q} Stk., Datum ${fmtDate(d)}`); render();
+    }catch(e){ b.disabled=false; toast("Aufnehmen fehlgeschlagen: "+(e.message||e),6000); } });
   app.querySelectorAll("[data-etmk]").forEach(b=>b.onclick=()=>{ if(needStaff()) return; b.disabled=true; mark([b.dataset.etmk]); });
   const all=$("#etmk-all"); if(all) all.onclick=()=>{ if(needStaff()) return; all.disabled=true; mark(S.etChk[pid].rows.filter(x=>S.orders[x.oid]&&!LOCKED.has(S.orders[x.oid].status)).map(x=>x.oid)); }; }
 // Auftrag für einen Kunden: zugeteilte Positionen -> etron-Auftrag (Entwurf)
