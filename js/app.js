@@ -1312,7 +1312,9 @@ function renderSeries(anyPid){
   app.querySelectorAll("input[data-q]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!(v>0)){ el.value=S.orders[el.dataset.q]?.qty??""; return toast("Menge muss mindestens 1 sein. Zum Entfernen den Status auf Storniert setzen."); } write("orders",el.dataset.q,{qty:v}).then(ok=>ok&&toast("Gespeichert")); });
   app.querySelectorAll("input[data-flex]").forEach(el=>el.onchange=()=>{ const v=num(el.value); if(!v) return; const o=S.orders[el.dataset.flex];
     write("orders",o.id,{productId:el.dataset.pid,alloc:v,comment:[o.comment,`war: ${orderLabel(o)}`].filter(Boolean).join(" · ")}).then(ok=>ok&&toast("Zugeteilt")); });
-  app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const v=el.value; const ids2=el.closest("tr").dataset.row.split(",").filter(id=>v==="Storniert"||S.orders[id]?.status!=="Storniert");
+  app.querySelectorAll("select[data-rs]").forEach(el=>el.onchange=async()=>{ const v=el.value; const all2=el.closest("tr").dataset.row.split(",").filter(id=>S.orders[id]); const act=all2.filter(id=>S.orders[id].status!=="Storniert");
+    // Stornierte bleiben storniert, außer der Kunde hat nur stornierte Bestellungen: dann gilt die Auswahl für alle (z. B. Storno → Warteliste).
+    const ids2=v==="Storniert"||!act.length?all2:act;
     if (v==="Storniert") return cancelOrders(ids2);
     await pool(ids2, id=>S.db.collection("orders").doc(id).update({status:v})); toast("Gespeichert"); });
   $("#fstat").onchange=e=>{S.fstat=e.target.value;render();}; bindTypeSel(); bindOq(); bindSort(); bindWaq();
