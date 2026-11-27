@@ -2034,7 +2034,10 @@ async function boot(){
     else { app.innerHTML = `<div class="note bad">Dropbox nicht erreichbar: ${esc(S.doc.error || "unbekannter Fehler")}. <button id="rt">Erneut versuchen</button> <a class="back" href="#einstellungen">Einstellungen</a></div>`; $("#rt").onclick = () => location.reload(); return; }
   }
   if (cred.kind === "local" && !Object.keys(S.doc.obj.products || {}).length && !LS.get("vb.demo")) { LS.set("vb.demo", "1"); importObj(demoData()); }
-  setInterval(() => { if (document.visibilityState === "visible" && !S.doc.dirty) S.doc.sync(); if (document.visibilityState === "visible") openLog().then(d => d.sync()); }, S.desktop ? 10000 : 30000);
+  // Änderungen von anderen PCs schneller holen (Tommy, 27.11.): alle 15 s und sofort, wenn das Fenster wieder in den Vordergrund kommt.
+  setInterval(() => { if (document.visibilityState === "visible" && !S.doc.dirty) S.doc.sync(); if (document.visibilityState === "visible") openLog().then(d => d.sync()); }, S.desktop ? 10000 : 15000);
+  let lastFocusSync = 0; const focusSync = () => { if (document.visibilityState !== "visible" || S.doc.dirty || Date.now() - lastFocusSync < 3000) return; lastFocusSync = Date.now(); S.doc.sync(); };
+  addEventListener("focus", focusSync); document.addEventListener("visibilitychange", focusSync);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { S.doc.sync(); S.log?.doc.sync(); } });
 }
 window.addEventListener("hashchange", () => { S.oq = ""; S.osort = ""; route(); }); // Standard: chronologisch
