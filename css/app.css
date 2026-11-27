@@ -160,3 +160,6 @@ details.fold[open] > summary{margin-bottom:10px}
 .modal-card > *{flex:0 0 auto}
 .modal-card .tablebox{overflow:auto;flex:1 1 auto;min-height:0;max-height:none!important}
 .modal-card th{top:0}
+/* Anmeldung erzwingen: Hintergrund komplett verdeckt */
+.modal.gate{background:var(--bg);z-index:50}
+.modal.gate .modal-card{box-shadow:0 10px 40px rgba(0,0,0,.18)}

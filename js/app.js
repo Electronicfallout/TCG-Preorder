@@ -35,25 +35,29 @@ setInterval(() => { if (staffEl.value && Date.now()-lastAct > STAFF_IDLE) { staf
 function markStaff(){ const v=staffEl.value.toUpperCase().trim(); const known=Object.values(S.staff||{}); const rec=known.find(m=>m.kuerzel===v);
   const btn=$("#staffbtn"), lab=$("#staffl"); if(btn){ btn.hidden=!known.length; lab.hidden=known.length>0;
     btn.textContent = rec ? `${rec.name} (${rec.kuerzel})` : "Wer bist du?"; btn.classList.toggle("need", !rec); btn.title = rec ? "Klicken, um zu wechseln" : "Bitte deinen Namen auswählen"; }
+  gateStaff();
   staffEl.classList.toggle("need", !v || (known.length>0 && !rec)); staffEl.title = rec ? `Angemeldet als ${rec.name}` : (v && known.length ? "Kürzel nicht angelegt" : ""); }
 staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); sess("vb.staff", staffEl.value); markStaff(); });
 staffEl.addEventListener("input", markStaff); $("#staffbtn").onclick=()=>pickStaff(); markStaff();
 const staff = () => staffEl.value.toUpperCase().trim();
 function setStaff(k){ staffEl.value=k||""; sess("vb.staff", k||null); touch(); markStaff(); }
 // Namensauswahl: auf geteilten PCs klickt jeder vor dem Anlegen seinen Namen an
-function pickStaff(){
+// Ohne Anmeldung nichts sehen und nichts bearbeiten (Tommy, 27.11.): Namensauswahl mittig, nicht wegklickbar.
+const staffGate = () => Object.keys(S.staff||{}).length>0 && !staffRec();
+function gateStaff(){ setTimeout(()=>{ if(staffGate()) pickStaff(true); else document.getElementById("pickstaff")?.classList.contains("gate") && document.getElementById("pickstaff").remove(); }, 0); }
+function pickStaff(force){
   if(document.getElementById("pickstaff")) return;
   const list=Object.values(S.staff||{}).sort((a,b)=>(a.name||"").localeCompare(b.name||"","de"));
-  const box=document.createElement("div"); box.className="modal"; box.id="pickstaff"; document.body.appendChild(box);
+  const box=document.createElement("div"); box.className="modal"+(force?" gate":""); box.id="pickstaff"; document.body.appendChild(box);
   box.innerHTML=`<div class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="psh" style="max-width:520px">
-    <h2 id="psh">Wer bist du?</h2><p class="muted">Bitte deinen Namen anklicken. Er gilt für dieses Fenster und wird nach 30 Minuten ohne Eingabe gelöscht.</p>
+    <h2 id="psh">Wer bist du?</h2><p class="muted">${force?"Bitte zuerst anmelden: deinen Namen anklicken. ":"Bitte deinen Namen anklicken. "}Er gilt für dieses Fenster und wird nach 30 Minuten ohne Eingabe gelöscht.</p>
     <div class="pickgrid">${list.map(m=>`<button type="button" class="pick ${m.kuerzel===staff()?"on":""}" data-k="${esc(m.kuerzel)}"><b>${esc(m.name||m.kuerzel)}</b><span>${esc(m.kuerzel)}</span></button>`).join("")}</div>
-    <div class="row spread"><a class="back" href="#einstellungen" id="ps-set">Mitarbeiter verwalten</a><span class="row">${staff()?`<button type="button" id="ps-out">Abmelden</button>`:""}<button type="button" id="ps-x">Abbrechen</button></span></div></div>`;
+    ${force?"":`<div class="row spread"><a class="back" href="#einstellungen" id="ps-set">Mitarbeiter verwalten</a><span class="row">${staff()?`<button type="button" id="ps-out">Abmelden</button>`:""}<button type="button" id="ps-x">Abbrechen</button></span></div>`}</div>`;
   const close=()=>box.remove();
   box.querySelectorAll("[data-k]").forEach(b=>b.onclick=()=>{ setStaff(b.dataset.k); close(); toast(`Hallo ${staffRec()?.name||b.dataset.k}! Jetzt kannst du weitermachen.`); });
-  box.querySelector("#ps-x").onclick=close; box.querySelector("#ps-set").onclick=close;
-  const o=box.querySelector("#ps-out"); if(o) o.onclick=()=>{ setStaff(""); close(); };
-  box.onclick=e=>{ if(e.target===box) close(); };
+  if(!force){ box.querySelector("#ps-x").onclick=close; box.querySelector("#ps-set").onclick=close;
+    const o=box.querySelector("#ps-out"); if(o) o.onclick=()=>{ setStaff(""); close(); };
+    box.onclick=e=>{ if(e.target===box) close(); }; }
   box.querySelector(".pick")?.focus();
 }
 function staffRec(k){ return Object.values(S.staff||{}).find(m=>m.kuerzel===(k??staff())); }
