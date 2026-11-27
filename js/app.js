@@ -714,7 +714,9 @@ function msgDialog(ids){
     const saveName=(fn,ln)=>{ fn=fn.trim(); ln=ln.trim(); if(!fn) return toast("Vorname darf nicht leer sein."); save({firstName:fn,lastName:ln,name:(fn+" "+ln).trim()},"Name gespeichert"); };
     box.querySelector("#m-fn").onchange=box.querySelector("#m-ln").onchange=()=>saveName(box.querySelector("#m-fn").value,box.querySelector("#m-ln").value);
     box.querySelector("#m-swap").onclick=()=>saveName(box.querySelector("#m-ln").value,box.querySelector("#m-fn").value);
-    box.querySelector("#m-tel").onchange=box.querySelector("#m-mail").onchange=()=>save({contact:joinContact(box.querySelector("#m-tel").value,box.querySelector("#m-mail").value,c)},"Kontakt gespeichert");
+    box.querySelector("#m-tel").onchange=box.querySelector("#m-mail").onchange=async()=>{ await save({contact:joinContact(box.querySelector("#m-tel").value,box.querySelector("#m-mail").value,c)},"Kontakt gespeichert");
+      const cid0=cid, tk=telKey(box.querySelector("#m-tel").value); const same=tk?Object.values(S.customers).filter(x=>x.id!==cid0&&telKey(contactFields(x).tel)===tk):[];
+      if(same.length) toast(`Achtung: diese Nummer hat auch ${same.map(x=>x.name).join(", ")}. Beim Kunden prüfen.`,7000); else if(tk&&cid0) telCheck(cid0); };
     box.querySelector("#m-wa").onchange=e=>save({noWhatsapp:!e.target.checked}, e.target.checked?"Gespeichert: hat WhatsApp":"Gespeichert: kein WhatsApp");
     for(const sel of ["#m-w","#m-e","#m-sms"]){ const a=box.querySelector(sel); if(a) a.addEventListener("click", e=>{ if(needStaff()){ e.preventDefault(); return; } mark(); }); }
     box.querySelector("#m-s").onclick=async()=>{ if(needStaff()) return; await mark(); toast("Als gesendet markiert"); box.remove(); };
@@ -1425,7 +1427,7 @@ function renderCustomer(cid){
     <label>Nachname<input id="cd-ln" value="${esc(nameParts(c).last)}"></label>
     <label><span>&nbsp;</span><span class="row" style="gap:6px"><button type="button" class="sm" id="cd-swap">⇄ Vertauschen</button>${nameChecked(c)?"":`<button type="button" class="sm pri" id="cd-ok">Stimmt so</button>`}</span></label>
     <label>etron-Kundennr.${etronLink(c)?` <span style="float:right">${etronLink(c)}</span>`:""}<input id="cd-etronId" value="${esc(c.etronId||"")}" placeholder="fehlt"></label>
-    <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"></label>
+    <label>Kontakt (Telefon/E-Mail)<input id="cd-contact" value="${esc(c.contact||"")}"><span id="cd-telchk" data-cid="${cid}" style="font-size:12px;font-weight:400">${S.telChk[cid]||""}</span></label>
     <label class="row muted" style="gap:6px;align-self:end"><input type="checkbox" id="cd-wa" ${c.noWhatsapp?"":"checked"}> Hat WhatsApp</label>
     ${etronOn()&&c.etronId?`<div class="wide"><button type="button" class="sm" id="cd-etc">Kontakt mit etron abgleichen</button> <span id="cd-etcr" class="muted"></span></div>`:""}
     ${etronOn()&&!c.etronId?`<div class="wide" id="cd-et"><button type="button" class="sm" id="cd-ets">etron-Kunde suchen oder anlegen</button> <span id="cd-eth" class="muted"></span></div>`:""}
@@ -1441,7 +1443,7 @@ function renderCustomer(cid){
     <p class="muted">Alle Bestellungen von „${esc(c.name)}“ wandern zum gewählten Kunden, danach wird „${esc(c.name)}“ gelöscht.</p>
     <div class="row"><select id="mt"><option value="">Ziel-Kunde wählen</option>${[...d,...others.filter(x=>!d.includes(x))].map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select>
     <button id="mg" class="danger" ${S.canWrite?"":"disabled"}>Zusammenführen</button><span id="mgc"></span></div></div>`;
-  ["contact","note"].forEach(f=>{ const el=$("#cd-"+f); el.onchange=()=>{ const v=el.value.trim(); write("customers",cid,{[f]:v}).then(ok=>ok&&toast("Gespeichert")); }; });
+  ["contact","note"].forEach(f=>{ const el=$("#cd-"+f); el.onchange=()=>{ const v=el.value.trim(); const t0=telKey(contactFields(S.customers[cid]).tel); write("customers",cid,{[f]:v}).then(ok=>{ if(!ok) return; toast("Gespeichert"); if(f==="contact"&&telKey(contactFields(S.customers[cid]).tel)!==t0) telCheck(cid); }); }; });
   const saveName=(fn,ln)=>{ fn=fn.trim(); ln=ln.trim(); if(!fn) return toast("Vorname darf nicht leer sein.");
     const dup=custByParts(fn,ln); if(dup&&dup.id!==cid) toast(`Achtung: „${dup.name}“ gibt es schon. Bitte unten zusammenführen.`);
     write("customers",cid,{firstName:fn,lastName:ln,name:(fn+" "+ln).trim()}).then(ok=>ok&&!(dup&&dup.id!==cid)&&toast("Name gespeichert")); };
@@ -1472,6 +1474,24 @@ function renderCustomer(cid){
 }
 
 // Telefon/E-Mail aus etron: leere Felder in der App füllen, abweichende nur melden (nie still überschreiben)
+// Telefonnummer prüfen (Tommy, 27.11.): hat ein anderer Kunde (App oder etron) dieselbe Nummer? Steht beim etron-Kunden eine andere Nummer?
+S.telChk = S.telChk || {};
+async function telCheck(cid){ const c=S.customers[cid]; if(!c) return; const tel=contactFields(c).tel, tk=telKey(tel); const out=[];
+  if(!tk){ S.telChk[cid]=""; return drawTelChk(cid); }
+  const same=Object.values(S.customers).filter(x=>x.id!==cid&&telKey(contactFields(x).tel)===tk);
+  if(same.length) out.push(`<span class="bad">Gleiche Nummer in der App bei: ${same.map(x=>`<a href="#kunde-${x.id}">${esc(x.name)}</a>`).join(", ")}</span> (Dublette? Dann unten zusammenführen.)`);
+  S.telChk[cid]=out.join("<br>")+(etronOn()?`<br><span class="muted">Prüfe etron …</span>`:""); drawTelChk(cid);
+  if(etronOn()){ try{
+      if(c.etronId){ const p=await etronPartner(c.etronId); const pt=p?[p.phone,p.mobile].filter(x=>x&&x!==false):[];
+        if(p&&!pt.length) out.push(`<span class="muted">In etron (Nr. ${esc(c.etronId)}) ist noch keine Telefonnummer hinterlegt.</span>`);
+        else if(p&&!pt.map(telKey).includes(tk)) out.push(`<span class="bad">In etron (Nr. ${esc(c.etronId)}) steht eine andere Nummer: ${esc(pt.join(" / "))}</span>`);
+        else if(p) out.push(`<span class="ok">✓ Nummer stimmt mit etron überein.</span>`); }
+      const r=await etronCall("partner_search",{q:tk.slice(-7)}); const others=(r.items||[]).filter(p=>String(p.id)!==String(c.etronId||"")&&[p.phone,p.mobile].filter(x=>x&&x!==false).map(telKey).includes(tk));
+      if(others.length) out.push(`<span class="bad">In etron hat diese Nummer auch: ${others.map(p=>`Nr. ${p.id} ${esc(p.name||"")}${p.ref?` (Referenz ${esc(String(p.ref))})`:""}`).join(", ")}</span>`);
+      dlog("INFO",`Telefon-Prüfung: ${same.length} gleich in App, ${others.length} weitere in etron`);
+    }catch(e){ out.push(`<span class="muted">etron-Prüfung nicht möglich: ${esc(e.message||String(e))}</span>`); } }
+  S.telChk[cid]=out.join("<br>"); drawTelChk(cid); }
+function drawTelChk(cid){ const el=$("#cd-telchk"); if(el&&el.dataset.cid===cid) el.innerHTML=S.telChk[cid]||""; }
 async function etronPartner(id){ const r=await etronCall("partner_search",{q:String(id)}); return (r.items||[]).find(p=>String(p.id)===String(id))||null; }
 function etronContactDiff(c, p){ const cf=contactFields(c), ph=String(p.phone&&p.phone!==false?p.phone:"").trim(), mo=String(p.mobile&&p.mobile!==false?p.mobile:"").trim(), et=ph||mo, em=String(p.email&&p.email!==false?p.email:"").trim();
   return {tel:{app:cf.tel||"",etron:et,same:!et||!!cf.tel&&[ph,mo].filter(Boolean).some(x=>telKey(x)===telKey(cf.tel))},mail:{app:cf.mail||"",etron:em,same:!em||em.toLowerCase()===(cf.mail||"").toLowerCase()}}; }
