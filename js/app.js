@@ -505,6 +505,7 @@ function bindRows(){
 // ---------- Nachrichten an Kunden
 const DEFAULT_TEMPLATES = [
   { id: "t-abholbereit", name: "Abholbereit", text: "Hallo {Vorname},\nDeine Vorbestellung von {Stück}x {Spiel} {Produkt} ist angekommen.\nDu kannst sie ab {Tag} im Shop abholen.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
+  { id: "t-release", name: "Releaseinfo", text: "Hallo {Vorname},\ndeine Vorbestellung von {Stück}x {Spiel} {Produkt} ist ab {Releasetag} im Shop zur Abholung bereit. Wir melden uns, sobald die Ware da ist.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
   { id: "t-storno", name: "Storno", text: "Hallo {Vorname},\nleider müssen wir deine Vorbestellung von {Produkt} stornieren, da wir nicht genug Ware bekommen haben. Das tut uns sehr leid.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
   { id: "t-warteliste", name: "Warteliste", text: "Hallo {Vorname},\nvon {Produkt} haben wir leider nicht genug für alle Vorbestellungen bekommen. Du stehst auf der Warteliste und wir melden uns, sobald eine Nachlieferung kommt.\n\nLiebe Grüße\nHive Games\n{Mitarbeiter}" },
 ];
@@ -551,7 +552,9 @@ function fillTemplate(text, os, tag){
   const bestellt=os.map(x=>x.qty||"").filter(Boolean).join(" + ");
   const part=os.filter(x=>(x.alloc||0)>0&&(x.qty||0)>(x.alloc||0));
   const teil=part.length?`Leider konnten wir ${part.length===1?`nur ${part[0].alloc} von ${part[0].qty} bestellten Stück`:"nicht alle bestellten Stück"} für dich reservieren.`:"";
-  const map={ Bestellt: String(bestellt), Teillieferung: teil, Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), "Stück": String(os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ")), Stueck: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
+  // {Releasetag}: Release-Datum der Produkte (Tommy, 27.11.), z. B. „20.11.2026“ oder „Q2 2027“.
+  const rel=[...new Set(os.map(x=>x.productId?S.products[x.productId]?.release:(x.choices||[]).map(id=>S.products[id]?.release).find(Boolean)).filter(Boolean).map(relTxt))].join(" bzw. ");
+  const map={ Releasetag: rel||"Release", Bestellt: String(bestellt), Teillieferung: teil, Vorname: np.first, Nachname: np.last, Name: c.name||"", Produkt: prod, Menge: String(menge), "Stück": String(os.map(x=>x.alloc||x.qty||"").filter(Boolean).join(" + ")), Stueck: String(menge), Mitarbeiter: staffName(), Datum: fmtDate(today()), Spiel: spielOf(os), Tag: fmtTag(tag||today()) };
   return text.replace(/\{([\wÄÖÜäöüß]+)\}/g, (m,k)=> k in map ? map[k] : m).replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n");
 }
 // Telefon/E-Mail einzeln bearbeiten; sonstiger Text im Kontaktfeld bleibt erhalten
@@ -1037,7 +1040,7 @@ function bindStaff(){
 }
 function templatesPanel(){
   return `<div class="panel"><h2>Nachrichtenvorlagen</h2>
-    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Stück} {Bestellt} {Teillieferung} {Tag} {Mitarbeiter} {Datum}. {Stück} ist die zugeteilte Stückzahl (ohne Zuteilung die bestellte Menge; {Menge} geht weiterhin), {Bestellt} die bestellte Menge, z. B. „{Stück} von {Bestellt} Stück“. {Teillieferung} ergibt nur bei weniger als bestellt den Satz „Leider konnten wir nur 1 von 2 bestellten Stück für dich reservieren.“, sonst bleibt es leer. {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
+    <p class="muted">Platzhalter: {Vorname} {Nachname} {Name} {Spiel} {Produkt} {Stück} {Bestellt} {Teillieferung} {Releasetag} {Tag} {Mitarbeiter} {Datum}. {Stück} ist die zugeteilte Stückzahl (ohne Zuteilung die bestellte Menge; {Menge} geht weiterhin), {Bestellt} die bestellte Menge, z. B. „{Stück} von {Bestellt} Stück“. {Releasetag} ist das Release-Datum des Produkts (für die Vorlage „Releaseinfo“). {Teillieferung} ergibt nur bei weniger als bestellt den Satz „Leider konnten wir nur 1 von 2 bestellten Stück für dich reservieren.“, sonst bleibt es leer. {Mitarbeiter} ist der Vorname aus der Mitarbeiterliste. {Spiel} kommt automatisch vom Produkt (z. B. Pokémon), {Tag} ist das Abholdatum (Standard heute, im Nachrichtenfenster änderbar). Die Vorlagen gelten für alle Geräte.</p>
     ${templates().map(t=>`<div class="panel" style="gap:8px"><div class="row"><input id="tn-${t.id}" value="${esc(t.name)}" style="flex:1 1 200px"><button class="sm" data-tsave="${t.id}">Speichern</button><button class="sm danger" data-tdel="${t.id}">Löschen</button></div>
       <textarea id="tt-${t.id}" rows="7" style="width:100%">${esc(t.text)}</textarea></div>`).join("")}
     <div class="row"><button id="tnew">Neue Vorlage</button></div></div>`;

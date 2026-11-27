@@ -104,6 +104,7 @@ export class SyncDoc {
     this.listeners = new Set();
     this._timer = null;
     this._running = null;
+    this.ver = 0; // zählt lokale Änderungen, damit beim Speichern nichts überschrieben wird
   }
 
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
@@ -143,6 +144,7 @@ export class SyncDoc {
     if (!this.obj) throw new Error('Dokument nicht geladen');
     fn(this.obj);
     if (this.obj.meta) this.obj.meta.updatedAt = now();
+    this.ver++;
     this.dirty = true;
     this.saveCache();
     this.emit();
@@ -176,21 +178,23 @@ export class SyncDoc {
           try { for (const n of await this.provider.conflicts(this.path)) { const r = await this.provider.read(n); if (r) extra.push({ name: n, obj: await this.codec.decode(r.data) }); } }
           catch (e) { console.warn('Konfliktkopien', e); }
         }
+        // Stand merken: Änderungen, die während des Ladens/Speichern passieren, dürfen nicht verloren gehen (Tommy, 27.11.).
+        const v0 = this.ver;
         let merged = merge(this.obj, remote ? remote.obj : null);
         for (const x of extra) merged = merge(merged, x.obj);
         merged = compact(merged);
         const needWrite = this.dirty || !remote || extra.length > 0 || stable(merged) !== stable(remote.obj);
         if (!needWrite) {
-          this.obj = merged;
+          this.obj = this.ver === v0 ? merged : merge(this.obj, merged);
           this.rev = remote.rev;
           break;
         }
         try {
           const file = await this.codec.encode(merged);
           const res = await this.provider.write(this.path, file, remote ? remote.rev : null);
-          this.obj = merged;
           this.rev = res.rev;
-          this.dirty = false;
+          if (this.ver === v0) { this.obj = merged; this.dirty = false; }
+          else { this.obj = merge(this.obj, merged); this.dirty = true; this._again = true; } // inzwischen geändert: gleich nochmal speichern
           for (const x of extra) { try { await this.provider.remove(x.name); } catch (e) { console.warn('Konfliktkopie', e); } }
           break;
         } catch (e) {
