@@ -336,18 +336,18 @@ function renderProducts(){
   const sa=$("#showall"); if(sa) sa.onclick=()=>setGame("Alle");
   $("#parch").onchange = e => { S.parch=e.target.checked; renderProducts(); };
   app.querySelectorAll("tr[data-go]").forEach(tr=>tr.onclick=e=>{ if(e.target.tagName!=="A"&&e.target.tagName!=="INPUT") location.hash=tr.dataset.go; });
-  let npEt=null; bindEtSearch("np", x=>{ npEt=x; const n=$("#np-name"); if(!n.value.trim()) n.value=x.name; $("#np-etsel").innerHTML=`<span class="ok">✓ etron-Artikel ${esc(String(x.id))}${x.code?", Art.-Nr. "+esc(x.code):""} wird verknüpft.</span>`; $("#np-etsr").innerHTML=""; });
+  let npEt=null; bindEtSearch("np", x=>{ npEt=x; const n=$("#np-name"); if(!n.value.trim()) n.value=x.name; $("#np-etsel").innerHTML=`<span class="ok">✓ etron-Artikel ${esc(String(x.id))}${x.code?", Art.-Nr. "+esc(x.code):""} wird verknüpft${typeof x.price==="number"?", Preis "+esc(fmtPrice(x.price)):""}.</span>`; $("#np-etsr").innerHTML=""; });
   $("#np").onsubmit = async e => { e.preventDefault(); const name=$("#np-name").value.trim(); if(!name) return;
     if (Object.values(S.products).some(p=>p.name.toLowerCase()===name.toLowerCase())) return toast("Dieses Produkt gibt es schon.");
     const id = "p-"+name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,50)+"-"+Date.now().toString(36).slice(-4);
-    if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),release:$("#np-rel").value.trim(),unit:$("#np-unit").value.trim(),game:$("#np-game").value,...(npEt?{etronArtId:String(npEt.id),...(npEt.code?{articleNo:npEt.code}:{})}:{}),received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="produkt-"+id; } };
+    if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),release:$("#np-rel").value.trim(),unit:$("#np-unit").value.trim(),game:$("#np-game").value,...etNew(npEt),received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="produkt-"+id; } };
 }
 
 // etron-Artikelsuche (Name, Referenz, Barcode): Treffer anklicken -> onPick({id,code,name})
 function etSearchHtml(k, q, linked, fold){ if(!etronOn()) return ""; const h=`etron-Artikel${linked?` <span class="ok" style="font-size:.8em">✓ verknüpft (ID ${esc(String(linked))})</span>`:""}`;
   const body=`<div class="row" style="gap:6px"><input id="${k}-etq" value="${esc(q||"")}" placeholder="In etron suchen: Name oder Nummer, z. B. OP-18" style="flex:1"><button type="button" id="${k}-ets" class="sm">Artikel in etron suchen</button></div><div id="${k}-etsr" class="muted"></div>`;
   if(fold) return foldPanel(fold, h, body, `id="${k}-etbox"`);
-  return `<div class="${k==="np"?"wide":"panel"}" id="${k}-etbox">${k==="np"?"":`<h2>${h}</h2>`}
+  const inForm=k==="np"||k==="av"; return `<div class="${inForm?"wide":"panel"}" id="${k}-etbox">${inForm?(k==="av"?`<span>etron-Artikel (optional)</span>`:""):`<h2>${h}</h2>`}
   ${body}</div>`; }
 // Eingeklappter Bereich (Tommy, 26.11.): bleibt auf/zu, auch wenn die Seite neu gezeichnet wird.
 S.fold = S.fold || {};
@@ -371,14 +371,16 @@ function bindAddVar(p){ const b=$("#addv"); if(!b) return;
   b.onclick=()=>{ const box=$("#addvbox"); box.innerHTML=`<div class="panel"><h2>Weiteres Produkt in diese Liste</h2><form class="form" id="av-f">
       <label class="wide">Produktname<input id="av-name" required placeholder="z. B. IB-10"></label>
       <label>Artikelnummer<input id="av-art" placeholder="optional"></label>
+      ${etSearchHtml("av","")}<div class="wide muted" id="av-etsel"></div>
       <button class="pri" ${S.canWrite?"":"disabled"}>Anlegen</button><button type="button" id="av-x">Abbrechen</button></form>
       <p class="muted">Spiel, Release, Einheit und VE werden von „${esc(p.name)}“ übernommen. Danach stehen beide Produkte gemeinsam in einer Liste, und Bestellungen bekommen ein Mengenfeld je Produkt.</p></div>`;
     $("#av-x").onclick=()=>{ box.innerHTML=""; }; $("#av-name").focus();
+    let avEt=null; bindEtSearch("av", x=>{ avEt=x; const n=$("#av-name"); if(!n.value.trim()) n.value=x.name; if(x.code&&!$("#av-art").value.trim()) $("#av-art").value=x.code; $("#av-etsel").innerHTML=`<span class="ok">✓ etron-Artikel ${esc(String(x.id))}${x.code?", Art.-Nr. "+esc(x.code):""} wird verknüpft${typeof x.price==="number"?", Preis "+esc(fmtPrice(x.price)):""}.</span>`; $("#av-etsr").innerHTML=""; });
     $("#av-f").onsubmit=async e=>{ e.preventDefault(); const name=$("#av-name").value.trim(), art=$("#av-art").value.trim(); if(!name) return;
       if (Object.values(S.products).some(x=>x.name.toLowerCase()===name.toLowerCase())) return toast("Dieses Produkt gibt es schon.");
       let ser=seriesOf(p); if(!ser){ ser=p.name+" / "+name; if(!await write("products",p.id,{series:ser})) return; }
       const id="p-"+name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,50)+"-"+Date.now().toString(36).slice(-4);
-      if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),series:ser,release:p.release||"",unit:p.unit||"",packSize:p.packSize??null,game:gameOf(p),articleNo:art||undefined,received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="serie-"+id; } }; }; }
+      if (await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),series:ser,release:p.release||"",unit:p.unit||"",packSize:p.packSize??null,game:gameOf(p),articleNo:art||undefined,...etNew(avEt),...(art?{articleNo:art}:{}),received:null,supplierOrdered:null,supplierConfirmed:null,archived:false},"set")) { toast("Produkt angelegt"); location.hash="serie-"+id; } }; }; }
 
 function renderProduct(pid){
   const p = S.products[pid]; if(!p){ app.innerHTML=`<a class="back" href="#produkte">← Produkte</a><div class="empty">Dieses Produkt gibt es nicht mehr.</div>`; return; }
@@ -864,6 +866,7 @@ const countrySel = (id, v="AT") => `<select id="${id}">${COUNTRIES.map(([c,n])=>
 async function etronCreatePartner(fn, ln, tel, mail, country="AT"){ if(!String(tel||"").trim()&&!String(mail||"").trim()) throw new Error("Für etron bitte Telefon oder E-Mail eintragen (eines ist Pflicht)");
   dlog("INFO",`Kunde in etron anlegen (Land ${country})`); const r=await etronCall("partner_create",{firstname:fn,lastname:ln,phone:tel,email:mail,country}); const id=etronIdOf(r); if(!id){ dlog("ERROR","Kunde in etron anlegen: keine Kundennummer in der Antwort"); throw new Error("etron hat keine Kundennummer zurückgegeben"); } dlog("INFO",`Kunde in etron angelegt: Partner ${id}`); return id; }
 // Preis mit etron abgleichen: leerer Preis in der App wird aus etron übernommen, eine Abweichung wird am Produkt angezeigt.
+const etNew = x => x ? {etronArtId:String(x.id),...(x.code?{articleNo:x.code}:{}),...(typeof x.price==="number"?{etronPrice:x.price,price:x.price}:{})} : {};
 async function priceSync(pid, ep){ const p=S.products[pid]; if(!p||typeof ep!=="number") return;
   const patch={}; if(p.etronPrice!==ep) patch.etronPrice=ep; if(p.price==null||p.price==="") patch.price=ep;
   else if(Math.abs(p.price-ep)>0.004) dlog("WARN",`Preis weicht ab bei Produkt ${pid}: App ${p.price}, etron ${ep}`);
