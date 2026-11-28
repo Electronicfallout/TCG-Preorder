@@ -2106,6 +2106,7 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
   // Bild: zuerst eines, dessen Adresse die Lieferanten-Nr. enthält, dann eines mit passendem Alt-Text, dann das größte/OG-Bild
   { const code=String(o.supcode||(String(d.url||"").match(/\/product\/([A-Z0-9-]+)/i)||["",""])[1]||"").toLowerCase(), L=(d.imgs||[]).filter(x=>x&&x.u);
     const byCode=code.length>=4?L.find(x=>x.u.toLowerCase().includes(code)):null, nm=String(o.name||h1).toLowerCase().slice(0,25), byAlt=nm.length>5?L.find(x=>String(x.alt).toLowerCase().includes(nm.slice(0,20))):null;
+    ART.lastImgs=L.slice(0,15).map(x=>x.u); ART.lastPick={code:byCode?.u||"",alt:byAlt?.u||"",og:m["og:image"]||"",big:d.img||""};
     o.img=o.img||(byCode&&byCode.u)||(byAlt&&byAlt.u)||m["og:image"]||d.img||""; o.imgCount=L.length; } if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
   o.desc=String(d.desc||o.desc||m["og:description"]||"").trim().slice(0,4000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
   o.textHead=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]).slice(0,12).join("\n");
@@ -2156,7 +2157,8 @@ function renderArtikel(pid){ pid=pid||null;
     </form>
     <div id="art-dup">${artDupHtml()}</div>
     <div class="row"><button class="pri" id="art-go" ${ART.busy?"disabled":""}>${ART.force?"Trotzdem in etron anlegen":"In etron anlegen"}</button><button type="button" id="art-clr">Formular leeren</button></div>
-    <div id="art-res">${ART.res}</div></div>
+    <div id="art-res">${ART.res}</div>
+    <p><button type="button" class="sm" id="art-diag">Diagnose kopieren</button> <span class="muted">Kopiert Version, Erweiterung, erkannte Felder und Bildadressen (nur Artikeldaten), zum Einfügen in den Chat.</span></p></div>
   ${p?"":`<div class="panel"><h2>Viele Artikel: Liste oder Bestellung</h2>
     <p class="muted">Excel/CSV-Datei oder eine heo-Rechnung als PDF wählen, oder eine Bestellung (z. B. aus der heo-Bestellbestätigung) unten hineinkopieren. Nichts wird angelegt, bevor du die Prüfliste kontrolliert und auf „Ausgewählte anlegen“ geklickt hast.</p>
     <div class="row"><input type="file" id="art-file" accept=".xlsx,.xls,.csv,.txt,.pdf"></div>
@@ -2244,6 +2246,12 @@ function bindArtikel(){ const f=ART.f;
       ART.dup=null; ART.force=false; }
     catch(e){ ART.scrSt=`<span class="bad">✗ ${esc(e.message||e)}</span>`; }
     render(); };
+  $("#art-diag").onclick=async()=>{ const M=artMap(), A=ART.lists?.auto||{};
+    const t=[`App ${APP_VERSION}, Erweiterung ${S.extOk}`, `Felder: ${["herst","pub","desc","resp"].map(k=>k+"="+(M[k]||"-")+(A.labels?.[k]?" („"+A.labels[k]+"“)":"")).join(", ")}, Rabatt=${M.disc}`,
+      `Auswahl: Onlineshop-Kategorie=${ART.f.pub||"-"} (${(ART.lists?.pub||[]).length} in etron), Kategorie=${ART.f.categ||"-"}, Bild-Haken=${ART.f.imgOn}`,
+      `Bild gewählt: ${ART.f.img||"-"}`, `Bild-Fehler: ${ART.imgErr||"-"}`, `Bildkandidaten: ${JSON.stringify(ART.lastPick||{})} / ${(ART.lastImgs||[]).join(" | ")||"keine"}`,
+      `Letztes Ergänzen: ${ART.upd?JSON.stringify({c:ART.upd.changes||ART.upd.done,s:ART.upd.skip,e:ART.upd.err}):"-"}`, `Listen-Fehler: ${ART.lists?.err||"-"}`].join("\n");
+    try{ await navigator.clipboard.writeText(t); toast("Diagnose kopiert. Bitte im Chat einfügen."); }catch(e){ ART.res=`<pre style="white-space:pre-wrap">${esc(t)}</pre>`; render(); } };
   app.querySelectorAll("[data-artupd]").forEach(b=>b.onclick=async()=>{ const id=+b.dataset.artupd; ART.upd={id,busy:"prüfe, was fehlt"}; render();
     try{ const r=await etronCall("art_update",{...artVals(f),id,dry:true,hasImg:!!(f.img&&f.imgOn)}); ART.upd={id,changes:r.changes,skip:r.skip}; }catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); });
   const ug=$("#art-updgo"); if(ug) ug.onclick=async()=>{ const id=ART.upd.id; ART.upd={id,busy:"ergänze in etron"}; render();
