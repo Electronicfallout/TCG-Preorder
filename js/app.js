@@ -2112,8 +2112,14 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
   o.textHead=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]).slice(0,12).join("\n");
   o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
   return o; }
+// etron nimmt kein WebP/AVIF (Tommy, 28.11.): im Browser in PNG (mit Transparenz) bzw. JPG umwandeln, höchstens 1920 px
+async function artImgConvert(b64, type){ type=String(type||""); ART.imgType=type; if(/^image\/(jpeg|png)$/.test(type)) return b64;
+  try{ const bin=Uint8Array.from(atob(b64),ch=>ch.charCodeAt(0)); const bmp=await createImageBitmap(new Blob([bin],{type:type||"image/webp"}));
+    const k=Math.min(1,1920/Math.max(bmp.width,bmp.height)), cv=document.createElement("canvas"); cv.width=Math.round(bmp.width*k); cv.height=Math.round(bmp.height*k); cv.getContext("2d").drawImage(bmp,0,0,cv.width,cv.height);
+    const out=cv.toDataURL("image/png").split(",")[1]; ART.imgType=type+" → png"; return out; }
+  catch(e){ ART.imgErr=`Bild (${type||"?"}) nicht umwandelbar`; return null; } }
 async function artImage(url){ ART.imgErr=""; if(!url) return null; let host=""; try{ host=new URL(url).host; }catch(e){}
-  try{ const r=await extSend({type:"img",url}); if(r?.b64) return r.b64; ART.imgErr=`Bild von ${host} nicht ladbar: ${r?.error||"?"}`; }catch(e){ ART.imgErr=`Bild von ${host} nicht ladbar`; } dlog("WARN",ART.imgErr); return null; }
+  try{ const r=await extSend({type:"img",url}); if(r?.b64) return await artImgConvert(r.b64, r.type); ART.imgErr=`Bild von ${host} nicht ladbar: ${r?.error||"?"}`; }catch(e){ ART.imgErr=`Bild von ${host} nicht ladbar`; } dlog("WARN",ART.imgErr); return null; }
 
 function renderArtikel(pid){ pid=pid||null;
   if(!betaOn()){ app.innerHTML=`<div class="panel"><h1>Artikel anlegen</h1><p class="muted">Diese Beta-Funktion ist nur für TU freigeschaltet (Einstellungen → Beta-Funktionen, als TU angemeldet).</p></div>`; return; }
@@ -2249,7 +2255,7 @@ function bindArtikel(){ const f=ART.f;
   $("#art-diag").onclick=async()=>{ const M=artMap(), A=ART.lists?.auto||{};
     const t=[`App ${APP_VERSION}, Erweiterung ${S.extOk}`, `Felder: ${["herst","pub","desc","resp"].map(k=>k+"="+(M[k]||"-")+(A.labels?.[k]?" („"+A.labels[k]+"“)":"")).join(", ")}, Rabatt=${M.disc}`,
       `Auswahl: Onlineshop-Kategorie=${ART.f.pub||"-"} (${(ART.lists?.pub||[]).length} in etron), Kategorie=${ART.f.categ||"-"}, Bild-Haken=${ART.f.imgOn}`,
-      `Bild gewählt: ${ART.f.img||"-"}`, `Bild-Fehler: ${ART.imgErr||"-"}`, `Bildkandidaten: ${JSON.stringify(ART.lastPick||{})} / ${(ART.lastImgs||[]).join(" | ")||"keine"}`,
+      `Bild gewählt: ${ART.f.img||"-"}`, `Bild-Fehler: ${ART.imgErr||"-"}, Format: ${ART.imgType||"-"}`, `Bildkandidaten: ${JSON.stringify(ART.lastPick||{})} / ${(ART.lastImgs||[]).join(" | ")||"keine"}`,
       `Letztes Ergänzen: ${ART.upd?JSON.stringify({c:ART.upd.changes||ART.upd.done,s:ART.upd.skip,e:ART.upd.err}):"-"}`, `Listen-Fehler: ${ART.lists?.err||"-"}`].join("\n");
     try{ await navigator.clipboard.writeText(t); toast("Diagnose kopiert. Bitte im Chat einfügen."); }catch(e){ ART.res=`<pre style="white-space:pre-wrap">${esc(t)}</pre>`; render(); } };
   app.querySelectorAll("[data-artupd]").forEach(b=>b.onclick=async()=>{ const id=+b.dataset.artupd; ART.upd={id,busy:"prüfe, was fehlt"}; render();
