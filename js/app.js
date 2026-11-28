@@ -2083,7 +2083,7 @@ function renderArtikel(pid){ pid=pid||null;
     </div>
     ${artMapHtml()}</div>
   <div class="panel"><h2>Ein Artikel</h2>
-    <div class="row" style="gap:6px"><input id="art-url" data-af="url" value="${v("url")}" placeholder="heo-Link einfügen, z. B. https://www.heo.com/de/de/product/UGD011897" style="flex:1"><button type="button" class="sm" id="art-scr">Daten von heo holen</button></div>
+    <div class="row" style="gap:6px"><input id="art-url" data-af="url" value="${v("url")}" placeholder="heo-Nummer oder heo-Link, z. B. UGD011897" style="flex:1"><button type="button" class="sm" id="art-scr">Daten von heo holen</button></div>
     <p class="muted" id="art-scrst">${ART.scrSt}</p>
     <form class="form" id="art-f" autocomplete="off">
       <label class="wide">Name in etron<input data-af="name" value="${v("name")}" required></label>
@@ -2162,7 +2162,7 @@ function bindArtikel(){ const f=ART.f;
     catch(e){ out.innerHTML=`<span class="bad">${esc(e.message||e)}</span>`; } };
   $("#art-clr").onclick=()=>{ const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; ART.res=""; ART.scrSt=""; const p=S.products[ART.pid]; if(p) Object.assign(ART.f,{name:p.name,code:p.articleNo||""}); render(); };
   $("#art-url").onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#art-scr").click(); } };
-  $("#art-scr").onclick=async()=>{ const url=String(f.url||"").trim(); if(!isHeo(url)) return toast("Bitte einen Link von heo.com einfügen.");
+  $("#art-scr").onclick=async()=>{ let url=String(f.url||"").trim(); if(/^[A-Z0-9][A-Z0-9-]{3,}$/i.test(url)){ url=HEO_URL(url.toUpperCase()); } if(!isHeo(url)) return toast("Bitte eine heo-Nummer (z. B. UGD011897) oder einen Link von heo.com einfügen.");
     const b=$("#art-scr"); b.disabled=true; ART.scrSt="… heo-Seite wird im Hintergrund geöffnet und gelesen (bis zu 30 Sekunden)"; $("#art-scrst").textContent=ART.scrSt;
     try{ const o=await artScrape(url); const got=[];
       for(const k of ["name","ean","supcode","desc","img","release"]) if(o[k]){ f[k]=o[k]; got.push(k); }
@@ -2227,7 +2227,9 @@ async function pdfLines(buf){ await loadPdfjs(); const doc=await window.pdfjsLib
     for(const it of tc.items){ if(!it.str||!it.str.trim()) continue; const x=it.transform[4], y=it.transform[5]; let row=rows.find(q=>Math.abs(q.y-y)<2.5); if(!row){ row={y,items:[]}; rows.push(row); } row.items.push({x,s:it.str.trim()}); }
     rows.sort((a,b)=>b.y-a.y); for(const row of rows){ row.items.sort((a,b)=>a.x-b.x); out.push(row.items.map(q=>q.s).join("   ")); } }
   return out; }
-function artTextRows(t){ const lines=String(t).split(/\r?\n/); let rows=artHeoParse(t); if(rows.length) return {rows,kind:"heo-Bestellung"}; rows=artInvParse(lines); if(rows.length) return {rows,kind:"heo-Rechnung"}; return null; }
+function artTextRows(t){ const lines=String(t).split(/\r?\n/);
+  // nur heo-Nummern (eine oder mehrere, durch Zeilen, Leerzeichen oder Kommas getrennt)
+  const toks=String(t).split(/[\s,;]+/).filter(Boolean); if(toks.length&&toks.length<=300&&toks.every(x=>/^[A-Z]{2,6}[A-Z0-9-]*\d{3,}[A-Z0-9-]*$/i.test(x))) return {rows:[...new Set(toks.map(x=>x.toUpperCase()))].map(c=>({supcode:c,name:"",short:true,url:HEO_URL(c)})),kind:"heo-Nummern"}; let rows=artHeoParse(t); if(rows.length) return {rows,kind:"heo-Bestellung"}; rows=artInvParse(lines); if(rows.length) return {rows,kind:"heo-Rechnung"}; return null; }
 function artListLoad(rows, src){ rows=(rows||[]).map(r=>r.map(x=>x instanceof Date?x.toISOString().slice(0,10):String(x??"").trim())).filter(r=>r.some(Boolean)); if(!rows.length) return toast("Keine Zeilen gefunden.");
   const head=rows[0], hits=ART_COLS.filter(([k])=>head.some(h=>ART_GUESS[k].test(h))).length, hasHead=hits>=2;
   const map={}; const used=new Set(); if(hasHead) for(const [k] of ART_COLS){ const i=head.findIndex((h,j)=>!used.has(j)&&ART_GUESS[k].test(h)); if(i>=0){ map[k]=i; used.add(i); } }
