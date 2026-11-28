@@ -2207,6 +2207,9 @@ function artAutoCateg(name){ const n=" "+String(name).toLowerCase()+" "; let bes
   for(const x of ART.lists?.cat||[]){ const seg=String(x.name).split("/").pop().trim().toLowerCase(); if(seg.length<4||!n.includes(seg)) continue;
     const sc=seg.length*10+(/zubeh/i.test(x.name)?5:0); if(sc>bl){ bl=sc; best=x; } }
   return best?String(best.id):""; }
+// Was beim Anlegen fehlen würde (Tommy, 28.11.: bei allen fehlenden Daten warnen)
+function artMissing(v, hasImg){ return [!v.name&&"Name",!v.categ&&"Produktkategorie",artMap().pub&&!v.pub&&"Onlineshop-Kategorie",!v.ean&&"EAN",!v.supplier&&"Lieferant",!v.supcode&&"Lieferanten-Nr.",
+  v.vk==null&&"Verkaufspreis",v.ek==null&&v.ekList==null&&"Einkaufspreis",!v.tax&&"Steuer",!hasImg&&"Bild",!v.desc&&"Langtext"].filter(Boolean); }
 function artVals(f){ const vk=priceOf(f.vk), ekList=priceOf(f.ekList), disc=priceOf(f.disc); let ek=priceOf(f.ek); if(ek==null&&ekList!=null) ek=r2(ekList*(1-(disc||0)/100));
   return { name:String(f.name||"").trim(), code:String(f.code||"").trim(), ean:String(f.ean||"").replace(/\D/g,""), supcode:String(f.supcode||"").trim(), vk, ek, ekList, disc, desc:String(f.desc||"").trim(),
   supplier:ART.f.supplier||"", categ:ART.f.categ==="auto"?artAutoCateg(f.name||""):(ART.f.categ||""), tax:ART.f.tax||"", pos:ART.f.pos||"", pub:ART.f.pub||"", type:ART.f.type||"product", map:artMap() }; }
@@ -2273,8 +2276,8 @@ function bindArtikel(){ const f=ART.f;
     if(vals.ean&&!/^\d{8,14}$/.test(vals.ean)) return toast("Die EAN muss 8 bis 14 Ziffern haben.");
     if(String(f.vk||"").trim()&&vals.vk==null) return toast("Verkaufspreis bitte als Zahl, z. B. 14,99."); if(String(f.ek||"").trim()&&vals.ek==null) return toast("Einkaufspreis bitte als Zahl, z. B. 9,59.");
     // Warnung ohne Produkt- bzw. Onlineshop-Kategorie (Tommy, 28.11.)
-    const miss=[!vals.categ&&"Produktkategorie",artMap().pub&&!vals.pub&&"Onlineshop-Kategorie"].filter(Boolean);
-    if(miss.length&&ART.catWarn!==miss.join()){ ART.catWarn=miss.join(); return toast(`Achtung: ${miss.join(" und ")} fehlt${miss.length>1?"en":""}${ART.f.categ==="auto"?" (keine Kategorie zur Marke gefunden)":""}. Bitte wählen oder noch einmal klicken, um trotzdem anzulegen.`,7000); }
+    const miss=artMissing(vals, !!(f.img&&f.imgOn));
+    if(miss.length&&ART.catWarn!==miss.join()){ ART.catWarn=miss.join(); ART.res=`<div class="note bad"><b>Achtung, es fehlt:</b> ${esc(miss.join(", "))}${!vals.categ&&ART.f.categ==="auto"?" (zur Marke wurde keine Kategorie gefunden)":""}.<br>Bitte ergänzen oder noch einmal auf „In etron anlegen“ klicken, um trotzdem anzulegen.</div>`; return render(); }
     ART.busy=true; const go=$("#art-go"); go.disabled=true; const out=$("#art-res"); out.textContent="… prüfe, ob es den Artikel in etron schon gibt";
     try{
       if(!ART.force){ const [d]=await artDupes([vals]); ART.dup=d; ART.upd=null; if(artHard(d).length){ ART.force=true; ART.res=""; ART.busy=false; return render(); } }
@@ -2348,7 +2351,7 @@ function artListHtml(){ const L=ART.L; if(!L||!L.rows) return ""; const rows=L.r
       <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>${artMap().pub?`<td><select data-artpub="${i}"><option value="">– bitte wählen –</option>${(ART.lists?.pub||[]).map(x=>`<option value="${x.id}" ${String(x.id)===String(r.pub||"")?"selected":""}>${esc(x.name)}</option>`).join("")}</select></td>`:""}
       <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px" placeholder="${L.heo?"kommt von heo":""}"></td>
       <td>${r.ekList!=null?esc(fmtPrice(r.ekList))+(r.disc?` <span class="muted">− ${esc(String(r.disc).replace(".",","))} %</span><br><span class="muted">= ${esc(fmtPrice(r.ek))}</span>`:""):r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
-      <td>${r.st||""}${r.pairs?`<details><summary class="muted">Gelesene Angaben</summary><table>${r.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(String(x).slice(0,80))}</td></tr>`).join("")}</table>${r.textHead?`<p class="muted" style="white-space:pre-wrap;max-width:420px">${esc(r.textHead)}</p>`:""}</details>`:""}${artHard(r.dup).length?`<span class="bad">gibt es schon:</span> ${artHard(r.dup).map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>${artLink(x.id)}`).join("; ")}${r.upMsg?`<br>${r.upMsg}`:""}`:L.checked&&!r.done?'<span class="ok">neu</span> '+artHintHtml(r.dup):""}</td></tr>`).join("")}</tbody></table></div>`; }
+      <td>${r.miss?.length&&!r.done?`<span class="bad">fehlt: ${esc(r.miss.join(", "))}</span><br>`:""}${r.st||""}${r.pairs?`<details><summary class="muted">Gelesene Angaben</summary><table>${r.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(String(x).slice(0,80))}</td></tr>`).join("")}</table>${r.textHead?`<p class="muted" style="white-space:pre-wrap;max-width:420px">${esc(r.textHead)}</p>`:""}</details>`:""}${artHard(r.dup).length?`<span class="bad">gibt es schon:</span> ${artHard(r.dup).map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>${artLink(x.id)}`).join("; ")}${r.upMsg?`<br>${r.upMsg}`:""}`:L.checked&&!r.done?'<span class="ok">neu</span> '+artHintHtml(r.dup):""}</td></tr>`).join("")}</tbody></table></div>`; }
 function drawArtList(){ const el=$("#art-list"); if(!el) return; el.innerHTML=artListHtml(); bindArtList(); }
 function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
   const hd=$("#artl-head"); if(hd) hd.onchange=()=>{ L.hasHead=hd.checked; artListApply(); drawArtList(); };
@@ -2386,9 +2389,9 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
     catch(e){ toast("Abgleich fehlgeschlagen: "+(e.message||e),6000); }
     L.busy=false; drawArtList(); };
   const go=$("#artl-go"); if(go) go.onclick=async()=>{ const todo=L.rows.filter(r=>r.on&&!r.done); if(!todo.length) return;
-    const noCat=todo.filter(r=>!(ART.f.categ==="auto"?artAutoCateg(r.name):ART.f.categ)).length, noPub=artMap().pub?todo.filter(r=>!r.pub).length:0;
-    if((noCat||noPub)&&!L.catOk){ L.catOk=true; return toast(`Achtung: ${[noCat&&`${noCat} Zeilen ohne Produktkategorie`,noPub&&`${noPub} ohne Onlineshop-Kategorie`].filter(Boolean).join(", ")}. Bitte wählen oder noch einmal klicken, um trotzdem anzulegen.`,8000); }
-    const noVk=todo.filter(r=>r.vk==null).length; if(noVk&&!L.vkOk){ L.vkOk=true; return toast(`${noVk} Zeilen haben keinen Verkaufspreis. Noch einmal klicken, um sie trotzdem (ohne Preis) anzulegen.`,6000); }
+    const cnt={}; for(const r of todo){ const v={...artVals({}),pub:r.pub||"",name:r.name,ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,desc:r.desc||""}; v.categ=ART.f.categ==="auto"?artAutoCateg(r.name):(ART.f.categ||"");
+      r.miss=artMissing(v,!!r.img); for(const m of r.miss) cnt[m]=(cnt[m]||0)+1; }
+    if(Object.keys(cnt).length&&!L.catOk){ L.catOk=true; drawArtList(); return toast(`Achtung, es fehlt: ${Object.entries(cnt).map(([k,n])=>`${k} (${n}×)`).join(", ")}. Details in der Spalte Status. Bitte ergänzen oder noch einmal klicken, um trotzdem anzulegen.`,9000); }
     L.busy=true; L.stop=false; drawArtList(); let ok=0, bad=0;
     for(const r of todo){ if(L.stop) break; r.st="… lege an"; drawArtList();
       try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),pub:r.pub||"",name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,disc:r.disc??null,desc:r.desc||""};
