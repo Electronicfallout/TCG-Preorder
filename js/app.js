@@ -919,7 +919,7 @@ const EW_ACTIONS = {
     if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)) v.image_1920=b.image;
     const tid=etronIdOf(await ewCall(c,"POST","/create/product.template",null,{values:v})); if(!tid) throw new Error("etron hat keine Nummer für den neuen Artikel zurückgegeben");
     const pp=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],["product_tmpl_id","=",tid]],fields:["id","default_code"],limit:2}));
-    return {tmpl:tid,id:pp[0]?.id||null,code:pp[0]?.default_code||v.default_code||""}; },
+    return {tmpl:tid,id:pp[0]?.id||null,code:pp[0]?.default_code||v.default_code||"",link:ewBase(c).replace(/\/api\/v2$/,"")+`/web#id=${tid}&model=product.template&view_type=form`}; },
 };
 async function etronWeb(action, data){ const c=await ewCfg(); if(!c||!c.key||!c.secret||!c.url) throw new Error("etron-Zugang ist nicht eingerichtet (Einstellungen → etron-Schnittstelle).");
   const f=EW_ACTIONS[action]; if(!f) throw new Error("unbekannte Aktion");
@@ -2198,7 +2198,7 @@ function bindArtikel(){ const f=ART.f;
       let note=""; const p=S.products[ART.pid];
       if(p){ await write("products",p.id,{etronArtId:String(r.id),...(r.code?{articleNo:r.code}:{}),...(vals.vk!=null?{etronPrice:vals.vk,...(p.price==null?{price:vals.vk}:{})}:{})}); note=` Das Produkt „${esc(p.name)}“ ist jetzt damit verknüpft.`; }
       else if(f.app){ const a=await artAppProduct(vals.name,r,vals.vk,{release:String(f.release||"").trim()}); note=` <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>.`; }
-      ART.res=`<p class="ok">✓ In etron angelegt: „${esc(vals.name)}“ (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", Bild konnte nicht geladen werden":""}).${note}</p>`;
+      ART.res=`<p class="ok">✓ In etron angelegt: <a href="${esc(r.link||"")}" target="_blank" rel="noopener">„${esc(vals.name)}“ in etron öffnen</a> (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", Bild konnte nicht geladen werden":""}).${note}</p>`;
       dlog("INFO",`Artikel in etron angelegt: ID ${r.id}, Vorlage ${r.tmpl}`);
       const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; }
     catch(e){ ART.res=`<p class="bad">✗ ${esc(e.message||e)}</p>`; }
@@ -2294,7 +2294,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
       try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,disc:r.disc??null,desc:r.desc||""};
         const img=r.img&&ART.f.imgOn!==false?await artImage(r.img):null; const res=await artCreate(vals,img); if(!res.id) throw new Error("keine Artikel-ID zurück (Vorlage "+res.tmpl+")");
         let note=""; if(ART.f.app){ const a=await artAppProduct(r.name,res,r.vk,{release:r.release||"",supplierOrdered:r.qty}); note=`, <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>`; }
-        r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt${res.code?" als "+esc(res.code):""} (ID ${res.id})</span>${note} `; ok++; }
+        r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt${res.code?" als "+esc(res.code):""}</span> <a href="${esc(res.link||"")}" target="_blank" rel="noopener">in etron öffnen</a>${note} `; ok++; }
       catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; bad++; }
       drawArtList(); }
     dlog("INFO",`Artikel-Liste: ${ok} in etron angelegt, ${bad} Fehler`); L.busy=false; L.vkOk=false; drawArtList(); toast(`${ok} Artikel angelegt${bad?`, ${bad} mit Fehler (siehe Status)`:""}.`,6000); };
