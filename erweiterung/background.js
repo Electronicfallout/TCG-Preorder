@@ -5,7 +5,7 @@
 const ALLOWED_URL = /^https:\/\/[a-z0-9-]+\.wawi\.onretail\.eu\/api\//i;
 const ALLOWED_ORIGINS = ['https://electronicfallout.github.io'];
 const SCRAPE_URL = /^https:\/\/(www\.)?heo\.com\/[a-z]{2}\/[a-z]{2}\/product\/[A-Za-z0-9-]+([?#].*)?$/i;
-const IMG_URL = /^https:\/\/([a-z0-9-]+\.)*heo\.com\//i;
+const IMG_URL = /^https:\/\/([a-z0-9-]+\.)*(heo|heomedia)\.com\//i;
 
 chrome.runtime.onMessageExternal.addListener((msg, sender, reply) => {
   const origin = sender.origin || (sender.url ? new URL(sender.url).origin : '');

@@ -934,7 +934,7 @@ const EW_ACTIONS = {
     if(fn(M.resp)&&id(b.supplier)) set(fn(M.resp),id(b.supplier),"Verantwortliche Person");
     const skip=[];
     if(!fn(M.pub)) skip.push("Onlineshop-Kategorie: Feld in etron nicht erkannt"); else if(!id(b.pub)) skip.push("Onlineshop-Kategorie: oben keine gewählt"); else if(!empty(t[fn(M.pub)])) skip.push("Onlineshop-Kategorie: schon eingetragen"); else { v[fn(M.pub)]=[[6,0,[id(b.pub)]]]; ch.push("Onlineshop-Kategorie"); }
-    if(!empty(t.image_128)) skip.push("Bild: schon vorhanden"); else if(!b.hasImg&&!b.image) skip.push("Bild: auf der Lieferantenseite keins gefunden");
+    if(!empty(t.image_128)) skip.push("Bild: schon vorhanden"); else if(!b.hasImg&&!b.image) skip.push("Bild: auf der Lieferantenseite keins gefunden"); else if(!b.dry&&!b.image) skip.push("Bild: nicht ladbar");
     const d=ewStr(b.desc,4000); if(d){ if(fn(M.desc)) set(fn(M.desc),/<[a-z]/i.test(d)?d:"<p>"+d.replace(/[&<>]/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[x])).replace(/\n/g,"<br>")+"</p>","Langtext"); else set("description_sale",d.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,2000),"Verkaufsbeschreibung"); }
     if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)&&empty(t.image_128)){ v.image_1920=b.image; ch.push("Bild"); }
     else if(b.dry&&b.hasImg&&empty(t.image_128)) ch.push("Bild");
@@ -2083,7 +2083,7 @@ const artSel = (key, list, empty) => { const v=ART.f[key]; if(!list) return `<se
 
 // Daten einer heo-Seite über die Erweiterung holen (die Seite wird kurz im Hintergrund in Chrome geöffnet, mit deinem heo-Login)
 async function artScrape(url){ let r; try{ r=await extSend({type:"scrape",url}); }catch(e){ throw new Error("Chrome-Erweiterung nicht gefunden."); }
-  if(r?.error) throw new Error(/Adresse nicht erlaubt$/.test(r.error)?"Die Chrome-Erweiterung ist noch Version 1.0. Bitte auf Version 1.2 aktualisieren (Anleitung oben auf dieser Seite).":r.error); return artParse(r); }
+  if(r?.error) throw new Error(/Adresse nicht erlaubt$/.test(r.error)?"Die Chrome-Erweiterung ist noch Version 1.0. Bitte auf Version 1.3 aktualisieren (Anleitung oben auf dieser Seite).":r.error); return artParse(r); }
 function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatMap(flat):x&&x["@graph"]?flat(x["@graph"]):x?[x]:[];
   const prod=flat(d.ld||[]).find(x=>x&&/Product/i.test([].concat(x["@type"]||"").join(" ")));
   if(prod){ o.name=prod.name; o.ean=prod.gtin13||prod.gtin||prod.gtin14||prod.gtin12||prod.gtin8||""; o.supcode=prod.sku||prod.mpn||""; o.desc=prod.description||"";
@@ -2130,10 +2130,10 @@ function renderArtikel(pid){ pid=pid||null;
   if(!ART.lists&&!ART.loading) artLoadLists();
   const Ls=ART.lists||{}, sup=Ls.sup?[...Ls.sup,...ART.supX.filter(x=>!Ls.sup.some(y=>y.id===x.id))]:null;
   const v=k=>esc(f[k]??""), p=pid&&S.products[pid];
-  const ext=String(S.extOk||""), extOld=ext&&ext!=="true"&&!/^1\.([2-9]|1\d)/.test(ext);
+  const ext=String(S.extOk||""), extOld=ext&&ext!=="true"&&!/^1\.([3-9]|1\d)/.test(ext);
   app.innerHTML=`<div><a class="back" href="#${p?"produkt-"+pid:"produkte"}">← ${p?esc(p.name):"Produkte"}</a><h1>etron-Artikel anlegen <span class="pill s-Warteliste">Beta</span></h1>
     <p class="sub">${p?`Für das Produkt „${esc(p.name)}“. Nach dem Anlegen wird es automatisch mit dem neuen etron-Artikel verknüpft.`:"Neue Artikel in etron anlegen: einzeln, über einen heo-Link oder für viele Artikel auf einmal aus einer Liste oder Bestellung."} Vor dem Anlegen prüft die App, ob es den Artikel in etron schon gibt.</p></div>
-  ${extOld?`<div class="note bad">Für das Auslesen von heo-Seiten (mit Bild) braucht die Chrome-Erweiterung Version 1.2 (jetzt: ${esc(ext)}). <a href="download/erweiterung-1.2.zip">ZIP herunterladen</a>, den Inhalt in den Dropbox-Ordner <span class="mono">erweiterung</span> kopieren (alte Dateien ersetzen), dann in <span class="mono">chrome://extensions</span> bei der Erweiterung auf ↻ klicken und die App neu laden.</div>`:""}
+  ${extOld?`<div class="note bad">Für das Auslesen von heo-Seiten (mit Bild) braucht die Chrome-Erweiterung Version 1.3 (jetzt: ${esc(ext)}). <a href="download/erweiterung-1.3.zip">ZIP herunterladen</a>, den Inhalt in den Dropbox-Ordner <span class="mono">erweiterung</span> kopieren (alte Dateien ersetzen), dann in <span class="mono">chrome://extensions</span> bei der Erweiterung auf ↻ klicken und die App neu laden.</div>`:""}
   ${Ls.err?`<div class="note bad">Nicht alle Auswahllisten aus etron ladbar: ${esc(Ls.err)}</div>`:""}
   <div class="panel"><h2>Gemeinsame Einstellungen</h2><p class="muted">Gelten für den einzelnen Artikel und für alle Zeilen einer Liste. Die Auswahl merkt sich die App auf diesem PC.</p>
     <div class="form">
@@ -2141,7 +2141,7 @@ function renderArtikel(pid){ pid=pid||null;
       <label>Kategorie${artSel("categ",Ls.cat?[{id:"auto",name:"automatisch nach Marke (z. B. Zubehör / Ultimate Guard)"},...Ls.cat]:null,"– Standard von etron –")}</label>
       <label>Steuer (Verkauf)${artSel("tax",Ls.tax,"– Standard von etron –")}</label>
       <label>Kassenkategorie${artSel("pos",Ls.pos,"– keine –")}</label>
-      ${artMap().pub?`<label>Onlineshop-Kategorie${artSel("pub",Ls.pub,"– keine –")}</label>`:""}
+      ${artMap().pub?`<label${ART.f.pub?"":' class="need"'}>Onlineshop-Kategorie${artSel("pub",Ls.pub,"– bitte wählen –")}${ART.f.pub?"":'<span class="bad">noch keine gewählt</span>'}</label>`:""}
       <label>Artikeltyp<select data-af="type">${[["product","Lagerartikel"],["consu","Verbrauchsartikel"],["service","Dienstleistung"]].map(([k,n])=>`<option value="${k}" ${f.type===k?"selected":""}>${n}</option>`).join("")}</select></label>
       ${p?"":`<label class="row" style="gap:8px"><input type="checkbox" data-af="app" ${f.app?"checked":""}> Auch als Produkt in der App anlegen</label><label>Spiel für die App<select data-af="game">${gameOptions(f.game)}</select></label>`}
     </div>
@@ -2261,7 +2261,7 @@ function bindArtikel(){ const f=ART.f;
   app.querySelectorAll("[data-artupd]").forEach(b=>b.onclick=async()=>{ const id=+b.dataset.artupd; ART.upd={id,busy:"prüfe, was fehlt"}; render();
     try{ const r=await etronCall("art_update",{...artVals(f),id,dry:true,hasImg:!!(f.img&&f.imgOn)}); ART.upd={id,changes:r.changes,skip:r.skip}; }catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); });
   const ug=$("#art-updgo"); if(ug) ug.onclick=async()=>{ const id=ART.upd.id; ART.upd={id,busy:"ergänze in etron"}; render();
-    try{ const img=f.img&&f.imgOn?await artImage(f.img):null; const r=await etronCall("art_update",{...artVals(f),id,...(img?{image:img}:{})}); ART.upd={id,done:r.changes,skip:(r.skip||[]).concat(f.img&&f.imgOn&&!img&&ART.imgErr?["Bild: "+ART.imgErr]:[]),link:r.link}; }
+    try{ const img=f.img&&f.imgOn?await artImage(f.img):null; const r=await etronCall("art_update",{...artVals(f),id,hasImg:!!(f.img&&f.imgOn),...(img?{image:img}:{})}); ART.upd={id,done:r.changes,skip:(r.skip||[]).concat(f.img&&f.imgOn&&!img&&ART.imgErr?["Bild: "+ART.imgErr]:[]),link:r.link}; }
     catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); };
   app.querySelectorAll("[data-artlink]").forEach(b=>b.onclick=async()=>{ const p=S.products[ART.pid]; if(!p) return; const id=b.dataset.artlink;
     if(await write("products",p.id,{etronArtId:String(id),...(b.dataset.code?{articleNo:b.dataset.code}:{})})){ toast("Mit dem vorhandenen etron-Artikel verknüpft"); ART.pid=undefined; location.hash="produkt-"+p.id; } });
