@@ -932,7 +932,9 @@ const EW_ACTIONS = {
     if(id(b.categ)&&(empty(t.categ_id)||/^(all|alle)$/i.test(String(Array.isArray(t.categ_id)?t.categ_id[1]:"").trim()))){ v.categ_id=id(b.categ); ch.push("Produktkategorie"); }
     if(fn(M.herst)&&ewStr(b.supcode)) set(fn(M.herst),ewStr(b.supcode,60),"Herstellercode");
     if(fn(M.resp)&&id(b.supplier)) set(fn(M.resp),id(b.supplier),"Verantwortliche Person");
-    if(fn(M.pub)&&id(b.pub)&&empty(t[fn(M.pub)])){ v[fn(M.pub)]=[[6,0,[id(b.pub)]]]; ch.push("Onlineshop-Kategorie"); }
+    const skip=[];
+    if(!fn(M.pub)) skip.push("Onlineshop-Kategorie: Feld in etron nicht erkannt"); else if(!id(b.pub)) skip.push("Onlineshop-Kategorie: oben keine gewählt"); else if(!empty(t[fn(M.pub)])) skip.push("Onlineshop-Kategorie: schon eingetragen"); else { v[fn(M.pub)]=[[6,0,[id(b.pub)]]]; ch.push("Onlineshop-Kategorie"); }
+    if(!empty(t.image_128)) skip.push("Bild: schon vorhanden"); else if(!b.hasImg&&!b.image) skip.push("Bild: auf der Lieferantenseite keins gefunden");
     const d=ewStr(b.desc,4000); if(d){ if(fn(M.desc)) set(fn(M.desc),/<[a-z]/i.test(d)?d:"<p>"+d.replace(/[&<>]/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[x])).replace(/\n/g,"<br>")+"</p>","Langtext"); else set("description_sale",d.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,2000),"Verkaufsbeschreibung"); }
     if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)&&empty(t.image_128)){ v.image_1920=b.image; ch.push("Bild"); }
     else if(b.dry&&b.hasImg&&empty(t.image_128)) ch.push("Bild");
@@ -941,11 +943,11 @@ const EW_ACTIONS = {
       const line={...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})}; if(M.disc&&num(b.ekList)!=null){ line.price=num(b.ekList); line.discount=num(b.disc)||0; } else if(net!=null) line.price=net;
       if(!si){ v.seller_ids=[[0,0,{partner_id:sup,min_qty:1,...line}]]; ch.push("Einkauf: Lieferantenzeile"); }
       else { const w={}; for(const [k,x] of Object.entries(line)) if(String(si[k]??"")!==String(x)) w[k]=x; if(Object.keys(w).length){ sel={id:si.id,w}; ch.push("Einkauf: "+Object.keys(w).map(k=>({price:"Preis",discount:"Rabatt",product_code:"Produktcode"}[k]||k)).join(", ")); } } }
-    if(b.dry) return {changes:ch,name:ewStr(t.name,120)};
+    if(b.dry) return {changes:ch,skip,name:ewStr(t.name,120)};
     if(Object.keys(v).length) await ewCall(c,"POST","/call/product.template/write",null,{ids:[tid],args:[v],kwargs:{}});
     if(sel) await ewCall(c,"POST","/call/product.supplierinfo/write",null,{ids:[sel.id],args:[sel.w],kwargs:{}});
     dlog("INFO",`Artikel ${pid} ergänzt: ${ch.join(", ")||"nichts"}`);
-    return {changes:ch,link:ewBase(c).replace(/\/api\/v2$/,"")+`/web#id=${tid}&model=product.template&view_type=form`}; },
+    return {changes:ch,skip,link:ewBase(c).replace(/\/api\/v2$/,"")+`/web#id=${tid}&model=product.template&view_type=form`}; },
   async art_create(c,b){ const name=ewStr(b.name,200); if(!name) throw new Error("Name fehlt"); const id=x=>parseInt(x,10)>0?parseInt(x,10):null, num=x=>typeof x==="number"&&isFinite(x)&&x>=0?x:null;
     const v={name,sale_ok:true,purchase_ok:true,detailed_type:["product","consu","service"].includes(b.type)?b.type:"product"};
     if(ewStr(b.code)) v.default_code=ewStr(b.code,60); if(/^\d{8,14}$/.test(ewStr(b.ean))) v.barcode=ewStr(b.ean);
@@ -2081,7 +2083,7 @@ const artSel = (key, list, empty) => { const v=ART.f[key]; if(!list) return `<se
 
 // Daten einer heo-Seite über die Erweiterung holen (die Seite wird kurz im Hintergrund in Chrome geöffnet, mit deinem heo-Login)
 async function artScrape(url){ let r; try{ r=await extSend({type:"scrape",url}); }catch(e){ throw new Error("Chrome-Erweiterung nicht gefunden."); }
-  if(r?.error) throw new Error(/Adresse nicht erlaubt$/.test(r.error)?"Die Chrome-Erweiterung ist noch Version 1.0. Bitte auf Version 1.1 aktualisieren (Anleitung oben auf dieser Seite).":r.error); return artParse(r); }
+  if(r?.error) throw new Error(/Adresse nicht erlaubt$/.test(r.error)?"Die Chrome-Erweiterung ist noch Version 1.0. Bitte auf Version 1.2 aktualisieren (Anleitung oben auf dieser Seite).":r.error); return artParse(r); }
 function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatMap(flat):x&&x["@graph"]?flat(x["@graph"]):x?[x]:[];
   const prod=flat(d.ld||[]).find(x=>x&&/Product/i.test([].concat(x["@type"]||"").join(" ")));
   if(prod){ o.name=prod.name; o.ean=prod.gtin13||prod.gtin||prod.gtin14||prod.gtin12||prod.gtin8||""; o.supcode=prod.sku||prod.mpn||""; o.desc=prod.description||"";
@@ -2101,7 +2103,10 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
       if(!uvp){ const nx=pl.slice(bi+1).map(l=>priceOf((l.match(PR)||[])[1])).find(x=>x!=null&&x>b); if(nx!=null) o.vk=nx; } } }
   const rel=pv(/(erstverkauf|erschein|release|liefertermin|verfügbar ab|vö\b)/)||tx(/(?:Erstverkaufstag|Erscheinungs(?:datum|termin)|Release|Liefertermin)[^\d\n]{0,20}(\d{1,2}\.\d{1,2}\.\d{4})/i);
   if(rel){ const dm=rel.match(/\d{1,2}\.\d{1,2}\.\d{4}/); o.release=dm?isoFix(dm[0]):rel.slice(0,30); }
-  o.img=o.img||m["og:image"]||d.img||""; if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
+  // Bild: zuerst eines, dessen Adresse die Lieferanten-Nr. enthält, dann eines mit passendem Alt-Text, dann das größte/OG-Bild
+  { const code=String(o.supcode||(String(d.url||"").match(/\/product\/([A-Z0-9-]+)/i)||["",""])[1]||"").toLowerCase(), L=(d.imgs||[]).filter(x=>x&&x.u);
+    const byCode=code.length>=4?L.find(x=>x.u.toLowerCase().includes(code)):null, nm=String(o.name||h1).toLowerCase().slice(0,25), byAlt=nm.length>5?L.find(x=>String(x.alt).toLowerCase().includes(nm.slice(0,20))):null;
+    o.img=o.img||(byCode&&byCode.u)||(byAlt&&byAlt.u)||m["og:image"]||d.img||""; o.imgCount=L.length; } if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
   o.desc=String(d.desc||o.desc||m["og:description"]||"").trim().slice(0,4000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
   o.textHead=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]).slice(0,12).join("\n");
   o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
@@ -2118,10 +2123,10 @@ function renderArtikel(pid){ pid=pid||null;
   if(!ART.lists&&!ART.loading) artLoadLists();
   const Ls=ART.lists||{}, sup=Ls.sup?[...Ls.sup,...ART.supX.filter(x=>!Ls.sup.some(y=>y.id===x.id))]:null;
   const v=k=>esc(f[k]??""), p=pid&&S.products[pid];
-  const ext=String(S.extOk||""), extOld=ext&&ext!=="true"&&!/^1\.[1-9]/.test(ext);
+  const ext=String(S.extOk||""), extOld=ext&&ext!=="true"&&!/^1\.([2-9]|1\d)/.test(ext);
   app.innerHTML=`<div><a class="back" href="#${p?"produkt-"+pid:"produkte"}">← ${p?esc(p.name):"Produkte"}</a><h1>etron-Artikel anlegen <span class="pill s-Warteliste">Beta</span></h1>
     <p class="sub">${p?`Für das Produkt „${esc(p.name)}“. Nach dem Anlegen wird es automatisch mit dem neuen etron-Artikel verknüpft.`:"Neue Artikel in etron anlegen: einzeln, über einen heo-Link oder für viele Artikel auf einmal aus einer Liste oder Bestellung."} Vor dem Anlegen prüft die App, ob es den Artikel in etron schon gibt.</p></div>
-  ${extOld?`<div class="note bad">Für das Auslesen von heo-Seiten braucht die Chrome-Erweiterung Version 1.1 (jetzt: ${esc(ext)}). <a href="download/erweiterung-1.1.zip">ZIP herunterladen</a>, den Inhalt in den Dropbox-Ordner <span class="mono">erweiterung</span> kopieren (alte Dateien ersetzen), dann in <span class="mono">chrome://extensions</span> bei der Erweiterung auf ↻ klicken und die App neu laden.</div>`:""}
+  ${extOld?`<div class="note bad">Für das Auslesen von heo-Seiten (mit Bild) braucht die Chrome-Erweiterung Version 1.2 (jetzt: ${esc(ext)}). <a href="download/erweiterung-1.2.zip">ZIP herunterladen</a>, den Inhalt in den Dropbox-Ordner <span class="mono">erweiterung</span> kopieren (alte Dateien ersetzen), dann in <span class="mono">chrome://extensions</span> bei der Erweiterung auf ↻ klicken und die App neu laden.</div>`:""}
   ${Ls.err?`<div class="note bad">Nicht alle Auswahllisten aus etron ladbar: ${esc(Ls.err)}</div>`:""}
   <div class="panel"><h2>Gemeinsame Einstellungen</h2><p class="muted">Gelten für den einzelnen Artikel und für alle Zeilen einer Liste. Die Auswahl merkt sich die App auf diesem PC.</p>
     <div class="form">
@@ -2166,9 +2171,9 @@ const artHintHtml = d => artHint(d).length?`<span class="muted">ähnlicher Name,
 function artDupHtml(){ const all=ART.dup; if(!all) return ""; const d=artHard(all);
   if(!d.length) return `<p class="ok">✓ In etron gibt es keinen Artikel mit dieser Lieferanten-Nr., diesem Herstellercode oder dieser EAN.</p>${artHint(all).length?`<p>${artHintHtml(all)}</p>`:""}`;
   return `<div class="note bad"><b>Diesen Artikel gibt es in etron schon:</b><ul>${d.map(x=>`<li>${esc(x.name)} <span class="muted">(ID ${x.id}${x.code?", Art.-Nr. "+esc(x.code):""}${x.barcode?", EAN "+esc(x.barcode):""}${x.why?", gleich: "+esc(x.why):""}${x.active===false?", archiviert":""})</span>${ART.pid?` <button type="button" class="sm" data-artlink="${x.id}" data-code="${esc(x.code||"")}">Stattdessen diesen verknüpfen</button>`:""} <button type="button" class="sm" data-artupd="${x.id}">Mit diesen Daten ergänzen</button>${ART.upd?.id===x.id?artUpdHtml():""}</li>`).join("")}</ul>Fehlt beim vorhandenen Artikel etwas, „Mit diesen Daten ergänzen“: es werden nur leere Felder gefüllt, nichts gelöscht. Nur wenn es wirklich ein anderer Artikel ist, noch einmal auf „Trotzdem in etron anlegen“ klicken.</div>`; }
-function artUpdHtml(){ const u=ART.upd; if(!u) return ""; if(u.err) return `<p class="bad">✗ ${esc(u.err)}</p>`; if(u.busy) return `<p class="muted">… ${esc(u.busy)}</p>`;
-  if(u.done) return `<p class="ok">✓ Ergänzt: ${esc(u.done.join(", ")||"nichts")}. <a href="${esc(u.link||"")}" target="_blank" rel="noopener">In etron öffnen</a></p>`;
-  if(u.changes) return u.changes.length?`<p>Würde ergänzen: <b>${esc(u.changes.join(", "))}</b> <button type="button" class="sm pri" id="art-updgo">Jetzt ergänzen</button></p>`:`<p class="ok">Nichts zu ergänzen, alles schon ausgefüllt.</p>`; return ""; }
+function artUpdHtml(){ const u=ART.upd; if(!u) return ""; const sk=u.skip?.length?`<br><span class="muted">Nicht ergänzt: ${esc(u.skip.join(" · "))}</span>`:""; if(u.err) return `<p class="bad">✗ ${esc(u.err)}</p>`; if(u.busy) return `<p class="muted">… ${esc(u.busy)}</p>`;
+  if(u.done) return `<p class="ok">✓ Ergänzt: ${esc(u.done.join(", ")||"nichts")}. <a href="${esc(u.link||"")}" target="_blank" rel="noopener">In etron öffnen</a>${sk}</p>`;
+  if(u.changes) return u.changes.length?`<p>Würde ergänzen: <b>${esc(u.changes.join(", "))}</b> <button type="button" class="sm pri" id="art-updgo">Jetzt ergänzen</button>${sk}</p>`:`<p class="ok">Nichts zu ergänzen, alles schon ausgefüllt.${sk}</p>`; return ""; }
 
 // Abgleich: interne Referenz, EAN und Lieferanten-Art.-Nr. (Lieferanten-Preisliste in etron)
 async function artDupes(rows){ const up=x=>String(x||"").trim().toUpperCase(); const codes=new Set(), eans=new Set();
@@ -2240,9 +2245,9 @@ function bindArtikel(){ const f=ART.f;
     catch(e){ ART.scrSt=`<span class="bad">✗ ${esc(e.message||e)}</span>`; }
     render(); };
   app.querySelectorAll("[data-artupd]").forEach(b=>b.onclick=async()=>{ const id=+b.dataset.artupd; ART.upd={id,busy:"prüfe, was fehlt"}; render();
-    try{ const r=await etronCall("art_update",{...artVals(f),id,dry:true,hasImg:!!(f.img&&f.imgOn)}); ART.upd={id,changes:r.changes}; }catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); });
+    try{ const r=await etronCall("art_update",{...artVals(f),id,dry:true,hasImg:!!(f.img&&f.imgOn)}); ART.upd={id,changes:r.changes,skip:r.skip}; }catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); });
   const ug=$("#art-updgo"); if(ug) ug.onclick=async()=>{ const id=ART.upd.id; ART.upd={id,busy:"ergänze in etron"}; render();
-    try{ const img=f.img&&f.imgOn?await artImage(f.img):null; const r=await etronCall("art_update",{...artVals(f),id,...(img?{image:img}:{})}); ART.upd={id,done:r.changes.concat(f.img&&f.imgOn&&!img&&ART.imgErr?["(Bild: "+ART.imgErr+")"]:[]),link:r.link}; }
+    try{ const img=f.img&&f.imgOn?await artImage(f.img):null; const r=await etronCall("art_update",{...artVals(f),id,...(img?{image:img}:{})}); ART.upd={id,done:r.changes,skip:(r.skip||[]).concat(f.img&&f.imgOn&&!img&&ART.imgErr?["Bild: "+ART.imgErr]:[]),link:r.link}; }
     catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); };
   app.querySelectorAll("[data-artlink]").forEach(b=>b.onclick=async()=>{ const p=S.products[ART.pid]; if(!p) return; const id=b.dataset.artlink;
     if(await write("products",p.id,{etronArtId:String(id),...(b.dataset.code?{articleNo:b.dataset.code}:{})})){ toast("Mit dem vorhandenen etron-Artikel verknüpft"); ART.pid=undefined; location.hash="produkt-"+p.id; } });

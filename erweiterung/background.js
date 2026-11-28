@@ -62,6 +62,10 @@ function extract() {
   out.pairs = out.pairs.slice(0, 200);
   const im = [...document.images].filter((i) => i.naturalWidth >= 200 && /^https:/.test(i.currentSrc || i.src)).sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight)[0];
   out.img = im ? (im.currentSrc || im.src) : '';
+  // 1.2: alle Bildadressen (auch noch nicht geladene, lazy loading in Hintergrund-Tabs) für die App
+  const abs = (u) => { try { return new URL(u, location.href).href; } catch (e) { return ''; } };
+  out.imgs = [...document.querySelectorAll('img,source,[data-src],[data-zoom-image],a[href$=".jpg"],a[href$=".png"],a[href$=".webp"]')].flatMap((e) => [e.currentSrc, e.getAttribute('src'), e.getAttribute('data-src'), e.getAttribute('data-zoom-image'), e.getAttribute('data-lazy'), (e.getAttribute('srcset') || '').split(',').pop().trim().split(' ')[0], e.tagName === 'A' ? e.getAttribute('href') : '']
+    .filter(Boolean).map((u) => ({ u: abs(u), alt: (e.getAttribute('alt') || '').slice(0, 120), w: e.naturalWidth || 0 }))).filter((x) => /^https:/.test(x.u) && !/\.svg(\?|$)|logo|icon|sprite|flag|payment/i.test(x.u)).slice(0, 40);
   // Langtext: längster Textblock in einem Beschreibungs-Bereich
   const ds = [...document.querySelectorAll('[class*="descr" i],[id*="descr" i],[class*="beschreib" i],[id*="beschreib" i],[class*="longtext" i],[class*="product-text" i]')].map((e) => (e.innerText || '').trim()).filter((t) => t.length > 60).sort((a, b) => b.length - a.length);
   out.desc = (ds[0] || '').slice(0, 4000);
