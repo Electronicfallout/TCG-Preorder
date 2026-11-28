@@ -2128,7 +2128,7 @@ function renderArtikel(pid){ pid=pid||null;
   if(!etronOn()){ app.innerHTML=`<div class="panel"><h1>Artikel anlegen</h1><p class="bad">Die Chrome-Erweiterung für etron wurde nicht gefunden.</p><p class="muted">Einstellungen → etron-Schnittstelle zeigt, was fehlt.</p></div>`; extCheck().then(v=>v&&render()); return; }
   if(pid!==ART.pid){ ART.pid=pid; ART.f={}; ART.dup=null; ART.force=false; ART.res=""; ART.scrSt=""; const p=S.products[pid];
     if(p) Object.assign(ART.f,{name:p.name,code:p.articleNo||"",vk:p.price!=null?String(p.price).replace(".",","):"",release:p.release||"",game:gameOf(p)}); }
-  const f=ART.f, d=artDef(); for(const k of ART_COMMON) if(f[k]==null&&d[k]!=null) f[k]=d[k]; if(f.type==null) f.type="product"; if(f.app==null) f.app=!pid; if(f.game==null) f.game=S.game==="Alle"?"One Piece":S.game; if(f.imgOn==null) f.imgOn=true;
+  const f=ART.f, d=artDef(); for(const k of ART_COMMON) if(f[k]==null&&d[k]!=null) f[k]=d[k]; if(f.type==null) f.type="product"; f.app=false; /* etron-Artikel und Vorbestellungs-Produkte sind getrennt (Tommy, 28.11.) */ if(f.game==null) f.game=S.game==="Alle"?"One Piece":S.game; if(f.imgOn==null) f.imgOn=true;
   if(!ART.lists&&!ART.loading) artLoadLists();
   const Ls=ART.lists||{}, sup=Ls.sup?[...Ls.sup,...ART.supX.filter(x=>!Ls.sup.some(y=>y.id===x.id))]:null;
   const v=k=>esc(f[k]??""), p=pid&&S.products[pid];
@@ -2144,7 +2144,6 @@ function renderArtikel(pid){ pid=pid||null;
       <label>Steuer (Verkauf)${artSel("tax",Ls.tax,"– Standard von etron –")}</label>
       <label>Kassenkategorie${artSel("pos",Ls.pos,"– keine –")}</label>
       <label>Artikeltyp<select data-af="type">${[["product","Lagerartikel"],["consu","Verbrauchsartikel"],["service","Dienstleistung"]].map(([k,n])=>`<option value="${k}" ${f.type===k?"selected":""}>${n}</option>`).join("")}</select></label>
-      ${p?"":`<label class="row" style="gap:8px"><input type="checkbox" data-af="app" ${f.app?"checked":""}> Auch als Produkt in der App anlegen</label><label>Spiel für die App<select data-af="game">${gameOptions(f.game)}</select></label>`}
     </div>
     ${artMapHtml()}</div>
   <div class="panel"><h2>Ein Artikel</h2>
@@ -2159,7 +2158,6 @@ function renderArtikel(pid){ pid=pid||null;
       <label>Einkaufspreis (Liste)<input data-af="ekList" value="${v("ekList")}" placeholder="z. B. 10,66"></label>
       <label>Rabatt %<input data-af="disc" value="${v("disc")}" placeholder="z. B. 10"></label>
       <label>Einkaufspreis netto<input data-af="ek" value="${v("ek")}" placeholder="wird berechnet"></label>
-      ${p?"":`<label>Release (für die App)<input data-af="release" value="${v("release")}" placeholder="2027-05-15 oder leer"></label>`}
       <label class="wide">Beschreibung<textarea data-af="desc" rows="2">${v("desc")}</textarea></label>
       ${f.img?`<label class="row wide" style="gap:8px"><input type="checkbox" data-af="imgOn" ${f.imgOn?"checked":""}><img src="${esc(f.img)}" alt="" style="height:64px;border-radius:6px"> Bild übernehmen</label>`:""}
     </form>
@@ -2167,6 +2165,7 @@ function renderArtikel(pid){ pid=pid||null;
     <div class="row"><button class="pri" id="art-go" ${ART.busy?"disabled":""}>${ART.force?"Trotzdem in etron anlegen":"In etron anlegen"}</button><button type="button" id="art-clr">Formular leeren</button></div>
     <div id="art-res">${ART.res}</div>
     <p><button type="button" class="sm" id="art-diag">Diagnose kopieren</button> <span class="muted">Kopiert Version, Erweiterung, erkannte Felder und Bildadressen (nur Artikeldaten), zum Einfügen in den Chat.</span></p></div>
+  ${p?"":artCleanHtml()}
   ${p?"":`<div class="panel"><h2>Viele Artikel: Liste oder Bestellung</h2>
     <p class="muted">Excel/CSV-Datei oder eine heo-Rechnung als PDF wählen, oder eine Bestellung (z. B. aus der heo-Bestellbestätigung) unten hineinkopieren. Nichts wird angelegt, bevor du die Prüfliste kontrolliert und auf „Ausgewählte anlegen“ geklickt hast.</p>
     <div class="row"><input type="file" id="art-file" accept=".xlsx,.xls,.csv,.txt,.pdf"></div>
@@ -2179,6 +2178,13 @@ const artLink = id => ART.ebase&&id?` <a href="${esc(ART.ebase)}/web#id=${+id}&m
 const artHard = d => (d||[]).filter(x=>!x.hint), artHint = d => (d||[]).filter(x=>x.hint);
 // Nur Name ähnlich (Tommy, 28.11.: „Sidewinder … Gondor“ ≠ „Art Sleeves … Gondor“): bloß Hinweis, sperrt nichts
 const artHintHtml = d => artHint(d).length?`<span class="muted">ähnlicher Name, bitte selbst prüfen: ${artHint(d).map(x=>`${esc(x.name)} (ID ${x.id})`).join("; ")}</span>`:"";
+// Aufräumen (Tommy, 28.11.): Produkte, die die Artikelanlage in der Vorbestellungs-App mit angelegt hat (etron verknüpft, ohne eine einzige Bestellung, heute angelegt)
+function artCleanList(){ const since=Date.now()-3*864e5; const used=new Set(Object.values(S.orders).map(o=>o.productId));
+  return Object.values(S.products).filter(p=>p.etronArtId&&!used.has(p.id)&&(p.updatedAt||0)>=since&&!/^p\d/.test(p.id)).sort((a,b)=>a.name.localeCompare(b.name,"de")); }
+function artCleanHtml(){ const L=artCleanList(); if(!L.length) return "";
+  return `<div class="panel"><h2>Aufräumen: mitangelegte Produkte in der Vorbestellungs-App</h2><p class="muted">Diese ${L.length} Produkte sind in den letzten Tagen in der Vorbestellungs-App entstanden, sind mit etron verknüpft und haben keine einzige Vorbestellung. Vermutlich hat die Artikelanlage sie mit angelegt (das passiert nicht mehr). Bitte nur die anhaken, die weg sollen; neue Vorbestellungs-Produkte ohne Bestellungen können auch dabei sein. Entfernen löscht sie nur aus der Vorbestellungs-App, in etron bleibt alles.</p>
+    <div class="tablebox"><table><thead><tr><th><input type="checkbox" id="artc-all"></th><th>Produkt in der App</th><th>etron-ID</th></tr></thead><tbody>${L.map(p=>`<tr><td><input type="checkbox" data-artc2="${esc(p.id)}"></td><td><a href="#produkt-${esc(p.id)}">${esc(p.name)}</a></td><td class="mono">${esc(p.etronArtId)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="row"><button type="button" class="danger" id="artc-go">${ART.cleanSure?"Wirklich aus der App entfernen?":"Ausgewählte aus der App entfernen"}</button></div></div>`; }
 function artDupHtml(){ const all=ART.dup; if(!all) return ""; const d=artHard(all);
   if(!d.length) return `<p class="ok">✓ In etron gibt es keinen Artikel mit dieser Lieferanten-Nr., diesem Herstellercode oder dieser EAN.</p>${artHint(all).length?`<p>${artHintHtml(all)}</p>`:""}`;
   return `<div class="note bad"><b>Diesen Artikel gibt es in etron schon:</b><ul>${d.map(x=>`<li>${esc(x.name)} <span class="muted">(ID ${x.id}${x.code?", Art.-Nr. "+esc(x.code):""}${x.barcode?", EAN "+esc(x.barcode):""}${x.why?", gleich: "+esc(x.why):""}${x.active===false?", archiviert":""})</span>${artLink(x.id)}${ART.pid?` <button type="button" class="sm" data-artlink="${x.id}" data-code="${esc(x.code||"")}">Stattdessen diesen verknüpfen</button>`:""} <button type="button" class="sm" data-artupd="${x.id}">Mit diesen Daten ergänzen</button>${ART.upd?.id===x.id?artUpdHtml():""}</li>`).join("")}</ul>Fehlt beim vorhandenen Artikel etwas, „Mit diesen Daten ergänzen“: es werden nur leere Felder gefüllt, nichts gelöscht. Nur wenn es wirklich ein anderer Artikel ist, noch einmal auf „Trotzdem in etron anlegen“ klicken.</div>`; }
@@ -2259,6 +2265,11 @@ function bindArtikel(){ const f=ART.f;
       ART.dup=null; ART.force=false; }
     catch(e){ ART.scrSt=`<span class="bad">✗ ${esc(e.message||e)}</span>`; }
     render(); };
+  const ca=$("#artc-all"); if(ca) ca.onchange=()=>app.querySelectorAll("[data-artc2]").forEach(c=>c.checked=ca.checked);
+  const cg=$("#artc-go"); if(cg) cg.onclick=async()=>{ const ids=[...app.querySelectorAll("[data-artc2]:checked")].map(c=>c.dataset.artc2); if(!ids.length) return toast("Nichts ausgewählt.");
+    if(!ART.cleanSure){ ART.cleanSure=true; cg.textContent="Wirklich aus der App entfernen?"; return; } ART.cleanSure=false; let n=0;
+    for(const id of ids){ if(Object.values(S.orders).some(o=>o.productId===id)) continue; if(await write("products",id,null,"delete")) n++; }
+    toast(`${n} Produkte aus der Vorbestellungs-App entfernt (in etron unverändert).`,5000); render(); };
   $("#art-diag").onclick=async()=>{ const M=artMap(), A=ART.lists?.auto||{};
     const t=[`App ${APP_VERSION}, Erweiterung ${S.extOk}`, `Felder: ${["herst","pub","desc","resp"].map(k=>k+"="+(M[k]||"-")+(A.labels?.[k]?" („"+A.labels[k]+"“)":"")).join(", ")}, Rabatt=${M.disc}`,
       `Auswahl: Onlineshop-Kategorie=${ART.f.pub||"-"} (${(ART.lists?.pub||[]).length} in etron), Kategorie=${ART.f.categ||"-"}, Bild-Haken=${ART.f.imgOn}`,
