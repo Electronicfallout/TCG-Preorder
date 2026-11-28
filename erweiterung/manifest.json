@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "TCG Vorbestellungen – etron-Verbindung",
   "short_name": "Vorbestellungen etron",
-  "version": "1.3",
-  "description": "Erlaubt der App „TCG Vorbestellungen“, mit eurer etron-onRetail-Instanz zu sprechen und heo-Artikelseiten auszulesen. Sonst nichts.",
+  "version": "1.4",
+  "description": "Erlaubt der App „TCG Vorbestellungen“, mit eurer etron-onRetail-Instanz zu sprechen und Artikelseiten von heo, Cubegolem und WPN auszulesen. Sonst nichts.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAj0GFYu7h6vY6i2NIJ1Xu/WXgnXaI1TveMmd7gv4K9uVmnzbNZVWfXanVLYOkRpSl5dOGrf8KJzpBYUY6W4idvR8wfwpOeYVkD/KGldQ9AUTKU3YUPhQ1JI+JML3Q8lf3iNy7pIfi+CPK6Midr04Vqvg98qe61rWpzGY90wTWa/X5218Q04jneWRyZukSk3MHiiTmHwxv6O7sS+5NpFdM++5HmOJfWY1fXWo0RXPmNEbOlb7KDlA/DuFPZyQVEA2eG7k18k2r4jmpTkwh4YB4Q8gW7gkHh20tg+5KfX83rv9yHNWZsFQGWMfU3vp7AQIvlqiBchNeruGn37OZKO4QrwIDAQAB",
   "background": {
     "service_worker": "background.js"
@@ -13,7 +13,12 @@
     "https://heo.com/*",
     "https://*.heo.com/*",
     "https://heomedia.com/*",
-    "https://*.heomedia.com/*"
+    "https://*.heomedia.com/*",
+    "https://cubegolem.si/*",
+    "https://*.cubegolem.si/*",
+    "https://wpn.wizards.com/*",
+    "https://*.wizards.com/*",
+    "https://images.ctfassets.net/*"
   ],
   "externally_connectable": {
     "matches": [

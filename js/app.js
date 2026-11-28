@@ -966,6 +966,24 @@ const EW_ACTIONS = {
     const tid=etronIdOf(await ewCall(c,"POST","/create/product.template",null,{values:v})); if(!tid) throw new Error("etron hat keine Nummer für den neuen Artikel zurückgegeben");
     const pp=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],["product_tmpl_id","=",tid]],fields:["id","default_code"],limit:2}));
     return {tmpl:tid,id:pp[0]?.id||null,code:pp[0]?.default_code||v.default_code||"",link:ewBase(c).replace(/\/api\/v2$/,"")+`/web#id=${tid}&model=product.template&view_type=form`}; },
+  // Display = Set-Artikel aus N Boostern (Tommy, 28.11.): Aufbau eines vorhandenen Displays nur lesen
+  async art_bom_ref(c,b){ const q=ewStr(b.q,60); if(!q) throw new Error("Bitte die Artikelnummer eines vorhandenen Displays eintragen."); const A=["active","in",[true,false]];
+    const t=ewList(await ewCall(c,"GET","/search_read/product.template",{domain:["&",A,"|",["default_code","=",q],["barcode","=",q]],fields:["id","name","default_code","list_price"],limit:2}))[0];
+    if(!t) throw new Error(`In etron gibt es keinen Artikel mit der Nummer ${q}.`);
+    let boms; try{ boms=ewList(await ewCall(c,"GET","/search_read/mrp.bom",{domain:[["product_tmpl_id","=",t.id]],fields:["id","type","product_qty","code"],limit:3})); }
+    catch(e){ let set=[]; try{ const fg=await ewCall(c,"POST","/call/product.template/fields_get",null,{args:[],kwargs:{attributes:["string","type","relation"]}}); const F=fg?.result??fg;
+        set=Object.entries(F||{}).filter(([k,x])=>/set|pack|kit|bundle|stückliste|bom|komponent/i.test(k+" "+(x.string||""))).map(([k,x])=>`${k} („${x.string}“, ${x.type}${x.relation?" → "+x.relation:""})`).slice(0,15); }catch(x){}
+      return {tmpl:t.id,name:t.name,err:String(e.message||e).slice(0,300),set}; }
+    const bom=boms[0]; if(!bom) return {tmpl:t.id,name:t.name,none:true};
+    const lines=ewList(await ewCall(c,"GET","/search_read/mrp.bom.line",{domain:[["bom_id","=",bom.id]],fields:["id","product_id","product_qty"],limit:10}));
+    return {tmpl:t.id,name:t.name,bom:bom.id,type:bom.type,qty:bom.product_qty,lines:lines.map(l=>({name:Array.isArray(l.product_id)?l.product_id[1]:String(l.product_id),qty:l.product_qty}))}; },
+  // Set anlegen: Display (Vorlage tmpl) besteht aus qty × Booster (Variante comp). Nur wenn das Display noch keine Stückliste hat.
+  async art_bom(c,b){ const tmpl=parseInt(b.tmpl,10), comp=parseInt(b.comp,10), qty=parseInt(b.qty,10); if(!(tmpl>0&&comp>0&&qty>0&&qty<1000)) throw new Error("Set: Angaben unvollständig");
+    const type=["phantom","normal"].includes(b.type)?b.type:"phantom";
+    const ex=ewList(await ewCall(c,"GET","/search_read/mrp.bom",{domain:[["product_tmpl_id","=",tmpl]],fields:["id"],limit:1}))[0]; if(ex) return {bom:ex.id,existed:true};
+    const bom=etronIdOf(await ewCall(c,"POST","/create/mrp.bom",null,{values:{product_tmpl_id:tmpl,product_qty:1,type}})); if(!bom) throw new Error("etron hat keine Nummer für die Stückliste zurückgegeben");
+    await ewCall(c,"POST","/create/mrp.bom.line",null,{values:{bom_id:bom,product_id:comp,product_qty:qty}});
+    return {bom}; },
 };
 async function etronWeb(action, data){ const c=await ewCfg(); if(!c||!c.key||!c.secret||!c.url) throw new Error("etron-Zugang ist nicht eingerichtet (Einstellungen → etron-Schnittstelle).");
   const f=EW_ACTIONS[action]; if(!f) throw new Error("unbekannte Aktion");
@@ -2075,6 +2093,21 @@ const HEO_BASE = location.hostname==="localhost" ? "http://127.0.0.1:8792" : "ht
 const HEO_URL = code => `${HEO_BASE}/de/de/product/${encodeURIComponent(code)}`;
 const isHeo = u => /^https:\/\/(www\.)?heo\.com\//i.test(String(u||"")) || (location.hostname==="localhost" && String(u||"").startsWith(HEO_BASE));
 const r2 = x => x==null?null:Math.round(x*100)/100;
+// 1.4: Cubegolem-Artikelseiten und WPN-Produktseiten (Booster-EAN) über die Erweiterung lesen
+const isCube = u => /^https:\/\/(www\.)?cubegolem\.si\/([a-z]{2}\/)?product\//i.test(String(u||"")) || (location.hostname==="localhost" && /^http:\/\/127\.0\.0\.1:8792\/cube\//.test(String(u||"")));
+const isWpn = u => /^https:\/\/wpn\.wizards\.com\/[a-z]{2}(-[a-z]{2})?\/products\//i.test(String(u||"")) || (location.hostname==="localhost" && /^http:\/\/127\.0\.0\.1:8792\/wpn\//.test(String(u||"")));
+function artPickSup(re){ const h=(ART.lists?.sup||[]).concat(ART.supX||[]).find(x=>re.test(x.name)); if(h){ ART.f.supplier=String(h.id); artDefSave({supplier:ART.f.supplier}); return true; } return false; }
+// Display erkennen: „… Booster Display (30 Boosters)“ → 30
+function artDispN(o){ const nm=String(o.name||""), all=[nm,String(o.url||""),...(o.pairs||[]).map(p=>p.join(" "))].join(" \n ");
+  if(!/display/i.test(nm+" "+(o.url||""))) return 0; const m=all.match(/(\d{1,3})\s*(?:x\s*)?(?:-\s*)?(?:booster|packs?\b|päckchen)/i); const n=m?+m[1]:0; return n>=2&&n<=200?n:0; }
+const artBoosterName = n => String(n||"").replace(/\s*[-–(,]?\s*\d{1,3}\s*(?:x\s*)?(?:-\s*)?(?:boosters?|packs?|päckchen)\)?/ig,"").replace(/\bbooster[\s-]*display\b/ig,"Booster").replace(/\bdisplay\b/ig,"Booster").replace(/\s{2,}/g," ").trim();
+// EAN-Kandidaten auf der WPN-Seite: 12/13-stellige Nummern mit dem Text davor
+function artWpnEans(o){ const T=String(o.text||""), out=[]; const re=/\b(\d{12,13})\b/g; let m;
+  while((m=re.exec(T))&&out.length<40){ const ctx=T.slice(Math.max(0,m.index-120),m.index).split(/\n/).filter(x=>x.trim()).slice(-3).join(" · ").trim(); if(!out.some(x=>x.ean===m[1])) out.push({ean:m[1],ctx:ctx.slice(-140)}); }
+  for(const [k,v] of o.pairs||[]) for(const e of String(v).match(/\b\d{12,13}\b/g)||[]) if(!out.some(x=>x.ean===e)) out.push({ean:e,ctx:k});
+  return out; }
+function artWpnBest(list, bname){ const w=norm(bname||"").split(/\s+/).filter(x=>x.length>2&&!/^(mtg|magic|the|gathering)$/.test(x)); const de=/\b(de|deutsch|german)\b/i.test(bname||""), en=/\b(en|englisch|english)\b/i.test(bname||"");
+  let best=null, bs=-1; for(const x of list){ const c=norm(x.ctx); let s=w.filter(t=>c.includes(t)).length+(/booster/.test(c)?2:0)-(/display|box|case|bundle/.test(c)?2:0)+(de&&/german|deutsch|\bde\b/.test(c)?2:0)+(en&&/english|\ben\b/.test(c)?2:0); if(s>bs){ bs=s; best=x; } } return best?.ean||""; }
 
 async function artLoadLists(){ ART.loading=true; try{ ART.lists=await etronCall("art_lists",{}); }catch(e){ ART.lists={err:String(e.message||e)}; } ART.loading=false;
   const f=ART.f; if(!f.supplier&&ART.L?.heo) artPickHeo(); render(); }
@@ -2084,7 +2117,7 @@ const artSel = (key, list, empty) => { const v=ART.f[key]; if(!list) return `<se
 
 // Daten einer heo-Seite über die Erweiterung holen (die Seite wird kurz im Hintergrund in Chrome geöffnet, mit deinem heo-Login)
 async function artScrape(url){ let r; try{ r=await extSend({type:"scrape",url}); }catch(e){ throw new Error("Chrome-Erweiterung nicht gefunden."); }
-  if(r?.error) throw new Error(/Adresse nicht erlaubt$/.test(r.error)?"Die Chrome-Erweiterung ist noch Version 1.0. Bitte auf Version 1.3 aktualisieren (Anleitung oben auf dieser Seite).":r.error); return artParse(r); }
+  if(r?.error) throw new Error(/Adresse nicht erlaubt$|^Nur Artikelseiten von heo\.com können/.test(r.error)?"Die Chrome-Erweiterung ist zu alt. Bitte auf Version 1.4 aktualisieren (Anleitung oben auf dieser Seite).":r.error); return artParse(r); }
 function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatMap(flat):x&&x["@graph"]?flat(x["@graph"]):x?[x]:[];
   const prod=flat(d.ld||[]).find(x=>x&&/Product/i.test([].concat(x["@type"]||"").join(" ")));
   if(prod){ o.name=prod.name; o.ean=prod.gtin13||prod.gtin||prod.gtin14||prod.gtin12||prod.gtin8||""; o.supcode=prod.sku||prod.mpn||""; o.desc=prod.description||"";
@@ -2135,10 +2168,10 @@ function renderArtikel(pid){ pid=pid||null;
   if(!ART.lists&&!ART.loading) artLoadLists();
   const Ls=ART.lists||{}, sup=Ls.sup?[...Ls.sup,...ART.supX.filter(x=>!Ls.sup.some(y=>y.id===x.id))]:null;
   const v=k=>esc(f[k]??""), p=pid&&S.products[pid];
-  const ext=String(S.extOk||""), extOld=ext&&ext!=="true"&&!/^1\.([3-9]|1\d)/.test(ext);
+  const ext=String(S.extOk||""), extOld=ext&&ext!=="true"&&!/^1\.([4-9]|1\d)/.test(ext);
   app.innerHTML=`<div><a class="back" href="#${p?"produkt-"+pid:"produkte"}">← ${p?esc(p.name):"Produkte"}</a><h1>etron-Artikel anlegen <span class="pill s-Warteliste">Beta</span></h1>
     <p class="sub">${p?`Für das Produkt „${esc(p.name)}“. Nach dem Anlegen wird es automatisch mit dem neuen etron-Artikel verknüpft.`:"Neue Artikel in etron anlegen: einzeln, über einen heo-Link oder für viele Artikel auf einmal aus einer Liste oder Bestellung."} Vor dem Anlegen prüft die App, ob es den Artikel in etron schon gibt.</p></div>
-  ${extOld?`<div class="note bad">Für das Auslesen von heo-Seiten (mit Bild) braucht die Chrome-Erweiterung Version 1.3 (jetzt: ${esc(ext)}). <a href="download/erweiterung-1.3.zip">ZIP herunterladen</a>, den Inhalt in den Dropbox-Ordner <span class="mono">erweiterung</span> kopieren (alte Dateien ersetzen), dann in <span class="mono">chrome://extensions</span> bei der Erweiterung auf ↻ klicken und die App neu laden.</div>`:""}
+  ${extOld?`<div class="note bad">Für das Auslesen von heo- und Cubegolem-Seiten (mit Bild) braucht die Chrome-Erweiterung Version 1.4 (jetzt: ${esc(ext)}). <a href="download/erweiterung-1.4.zip">ZIP herunterladen</a>, den Inhalt in den Dropbox-Ordner <span class="mono">erweiterung</span> kopieren (alte Dateien ersetzen), dann in <span class="mono">chrome://extensions</span> bei der Erweiterung auf ↻ klicken und die App neu laden.</div>`:""}
   ${Ls.err?`<div class="note bad">Nicht alle Auswahllisten aus etron ladbar: ${esc(Ls.err)}</div>`:""}
   <div class="panel"><h2>Gemeinsame Einstellungen</h2><p class="muted">Gelten für den einzelnen Artikel und für alle Zeilen einer Liste. Die Auswahl merkt sich die App auf diesem PC.</p>
     <div class="form">
@@ -2151,7 +2184,7 @@ function renderArtikel(pid){ pid=pid||null;
     </div>
     ${artMapHtml()}</div>
   <div class="panel"><h2>Ein Artikel</h2>
-    <div class="row" style="gap:6px"><input id="art-url" data-af="url" value="${v("url")}" placeholder="heo-Nummer oder heo-Link, z. B. UGD011897" style="flex:1"><button type="button" class="sm" id="art-scr">Daten von heo holen</button></div>
+    <div class="row" style="gap:6px"><input id="art-url" data-af="url" value="${v("url")}" placeholder="heo-Nummer, heo- oder Cubegolem-Link" style="flex:1"><button type="button" class="sm" id="art-scr">Daten holen</button></div>
     <p class="muted" id="art-scrst">${ART.scrSt}</p>
     <form class="form" id="art-f" autocomplete="off">
       <label class="wide">Name in etron<input data-af="name" value="${v("name")}" required></label>
@@ -2165,6 +2198,7 @@ function renderArtikel(pid){ pid=pid||null;
       <label class="wide">Beschreibung<textarea data-af="desc" rows="2">${v("desc")}</textarea></label>
       ${f.img?`<label class="row wide" style="gap:8px"><input type="checkbox" data-af="imgOn" ${f.imgOn?"checked":""}><img src="${esc(f.img)}" alt="" style="height:64px;border-radius:6px"> Bild übernehmen</label>`:""}
     </form>
+    ${artDispHtml()}
     <div id="art-dup">${artDupHtml()}</div>
     <div class="row"><button class="pri" id="art-go" ${ART.busy?"disabled":""}>${ART.force?"Trotzdem in etron anlegen":"In etron anlegen"}</button><button type="button" id="art-clr">Formular leeren</button></div>
     <div id="art-res">${ART.res}</div>
@@ -2178,6 +2212,20 @@ function renderArtikel(pid){ pid=pid||null;
     <div id="art-list">${artListHtml()}</div></div>`}`;
   bindArtikel(); }
 
+// Display als Set aus N Boostern (Tommy, 28.11.): Booster mit anlegen, EK/VK aus dem Display ÷ N, Booster-EAN von WPN
+const artSetRef = () => { try{ return JSON.parse(store("vb.artset")||"null"); }catch(e){ return null; } };
+function artDispHtml(){ const f=ART.f; if(!f.dispN) return ""; const v=k=>esc(f[k]??""), n=parseInt(f.dispN,10)||0, vals=artVals(f), R=artSetRef(), W=ART.wpn;
+  const bek=vals.ek!=null&&n?r2(vals.ek/n):null;
+  return `<div class="note" style="margin:10px 0"><b>Display erkannt</b> <label class="row" style="gap:8px;display:inline-flex"><input type="checkbox" data-af="bOn" ${f.bOn?"checked":""}> Booster als eigenen Artikel mit anlegen und das Display als Set aus</label> <input data-af="dispN" value="${v("dispN")}" inputmode="numeric" style="width:4em"> Boostern
+    ${f.bOn?`<div class="form" style="margin-top:8px">
+      <label class="wide">Name Booster<input data-af="bName" value="${v("bName")}"></label>
+      <label>EAN Booster<input data-af="bEan" value="${v("bEan")}" inputmode="numeric" placeholder="von WPN, falls vorhanden"></label>
+      <label>Verkaufspreis Booster<input data-af="bVk" value="${v("bVk")}" placeholder="${vals.vk!=null&&n?esc(String(vkRound(r2(vals.vk/n))).replace(".",",")):"Display-VK ÷ "+n}"></label>
+      <label>Einkaufspreis Booster<input value="${bek!=null?esc(String(bek).replace(".",",")):""}" disabled placeholder="Display-EK ÷ ${n}"></label>
+      <label class="wide">WPN-Seite für die Booster-EAN<span class="row" style="gap:6px;flex-wrap:nowrap"><input data-af="wpn" value="${v("wpn")}" placeholder="https://wpn.wizards.com/en/products/…" style="flex:1"><button type="button" class="sm" id="art-wpn">EAN suchen</button></span></label>
+      </div>${W?`<div class="muted" id="art-wpnr">${W.err?`<span class="bad">${esc(W.err)}</span>`:W.list.length?`Gefundene Nummern (bitte die richtige anklicken): ${W.list.map(x=>`<button type="button" class="sm${x.ean===W.best?" pri":""}" data-wean="${x.ean}" title="${esc(x.ctx)}">${x.ean}</button> <span>${esc(x.ctx.slice(-60))}</span>`).join("<br>")}`:"Auf der WPN-Seite wurde keine EAN gefunden."}</div>`:""}
+      <p class="muted">Set-Aufbau wie bei: ${R?.type?`${esc(R.name)} (Stückliste Typ „${R.type==="phantom"?"Set":esc(R.type)}“)`:`<span class="bad">noch nicht gelesen</span>`} <input id="art-setq" value="${esc(R?.q||"2113000084647")}" style="width:12em" placeholder="Art.-Nr. eines Displays"> <button type="button" class="sm" id="art-setr">Aufbau aus etron lesen</button></p>
+      ${ART.setRef?`<div class="muted">${ART.setRef}</div>`:""}`:""}</div>`; }
 const artLink = id => ART.ebase&&id?` <a href="${esc(ART.ebase)}/web#id=${+id}&model=product.product&view_type=form" target="_blank" rel="noopener">in etron öffnen</a>`:"";
 const artHard = d => (d||[]).filter(x=>!x.hint), artHint = d => (d||[]).filter(x=>x.hint);
 // Nur Name ähnlich (Tommy, 28.11.: „Sidewinder … Gondor“ ≠ „Art Sleeves … Gondor“): bloß Hinweis, sperrt nichts
@@ -2250,10 +2298,27 @@ async function artAppProduct(name, r, vk, extra={}){ const ex=Object.values(S.pr
   const id="p-"+name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,50)+"-"+Date.now().toString(36).slice(-4);
   await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),release:extra.release||"",unit:"",game:extra.game||ART.f.game||NO_GAME,...link,...(vk!=null?{price:vk}:{}),received:null,supplierOrdered:extra.supplierOrdered??null,supplierConfirmed:null,archived:false},"set");
   return {id,note:"App-Produkt angelegt"}; }
+async function artSetRead(q){ try{ const r=await etronCall("art_bom_ref",{q}); const base=ART.ebase||"";
+    if(r.bom){ store("vb.artset",JSON.stringify({q,type:r.type,name:r.name,qty:r.qty,lines:r.lines})); return `<span class="ok">✓ ${esc(r.name)}: Stückliste Typ „${r.type==="phantom"?"Set":esc(r.type)}“, ${r.lines.map(l=>`${l.qty} × ${esc(l.name)}`).join(", ")||"ohne Bestandteile"}.</span> So werden neue Displays angelegt.`; }
+    if(r.none) return `<span class="bad">${esc(r.name)} hat in etron keine Stückliste.</span> Dann ist das Set dort anders aufgebaut. Bitte „Diagnose kopieren“ und mir schicken.`;
+    return `<span class="bad">Stücklisten nicht lesbar: ${esc(r.err)}</span>${r.set?.length?` Mögliche Set-Felder: ${esc(r.set.join("; "))}`:""} Bitte „Diagnose kopieren“ und mir schicken.`; }
+  catch(e){ return `<span class="bad">✗ ${esc(e.message||e)}</span>`; } }
+// Booster zum Display anlegen (oder vorhandenen per EAN nehmen) und das Display als Set daraus aufbauen
+async function artBoosterSet(vals, disp, img){ const f=ART.f, n=parseInt(f.dispN,10); if(!(n>1)) return " Booster nicht angelegt: Anzahl Booster fehlt.";
+  const bv={...vals, name:String(f.bName||"").trim()||artBoosterName(vals.name), ean:String(f.bEan||"").replace(/\D/g,""), supcode:"", code:"", ekList:null, disc:null,
+    ek:vals.ek!=null?r2(vals.ek/n):null, vk:priceOf(f.bVk)??(vals.vk!=null?vkRound(r2(vals.vk/n)):null), supplier:"" };
+  let bid=null, msg="";
+  try{ if(bv.ean){ const [d]=await artDupes([bv]); const h=artHard(d)[0]; if(h){ bid=h.id; msg=` Booster gab es schon (${esc(h.name)}, ID ${h.id}${artLink(h.id)}).`; } }
+    if(!bid){ const b=await artCreate(bv,null); bid=b.id; msg=` Booster angelegt: <a href="${esc(b.link||"")}" target="_blank" rel="noopener">„${esc(bv.name)}“</a> (ID ${b.id}, EK ${bv.ek??"-"}, VK ${bv.vk??"-"}${bv.ean?", EAN "+bv.ean:", ohne EAN"}).`; } }
+  catch(e){ return ` <span class="bad">Booster nicht angelegt: ${esc(e.message||e)}</span>`; }
+  let R=artSetRef(); if(!R?.type){ await artSetRead(String(R?.q||"2113000084647")); R=artSetRef(); }
+  if(!R?.type) return msg+` <span class="bad">Set nicht angelegt: Der Set-Aufbau konnte nicht aus etron gelesen werden. Bitte das Display in etron von Hand als Set aus ${n} Boostern einrichten und mir „Diagnose kopieren“ schicken.</span>`;
+  try{ const s=await etronCall("art_bom",{tmpl:disp.tmpl,comp:bid,qty:n,type:R.type}); return msg+(s.existed?` Das Display hatte schon eine Stückliste, nichts geändert.`:` ✓ Display ist jetzt ein Set aus ${n} × Booster.`); }
+  catch(e){ return msg+` <span class="bad">Set nicht angelegt: ${esc(e.message||e)}</span>`; } }
 async function artCreate(vals, img){ if(!vals.name) throw new Error("Name fehlt"); return await etronCall("art_create",{...vals,...(img?{image:img}:{})}); }
 
 function bindArtikel(){ const f=ART.f;
-  app.querySelectorAll("[data-af]").forEach(el=>{ const k=el.dataset.af; const set=()=>{ f[k]=el.type==="checkbox"?el.checked:el.value; if(ART_COMMON.includes(k)) artDefSave({[k]:f[k]}); if(["code","ean","supcode"].includes(k)){ ART.dup=null; ART.force=false; const d=$("#art-dup"); if(d) d.innerHTML=""; const g=$("#art-go"); if(g) g.textContent="In etron anlegen"; } };
+  app.querySelectorAll("[data-af]").forEach(el=>{ const k=el.dataset.af; const set=()=>{ f[k]=el.type==="checkbox"?el.checked:el.value; if(ART_COMMON.includes(k)) artDefSave({[k]:f[k]}); if(k==="bOn") return render(); if(["code","ean","supcode"].includes(k)){ ART.dup=null; ART.force=false; const d=$("#art-dup"); if(d) d.innerHTML=""; const g=$("#art-go"); if(g) g.textContent="In etron anlegen"; } };
     el.addEventListener(el.tagName==="SELECT"||el.type==="checkbox"?"change":"input", set); });
   app.querySelectorAll("[data-amap]").forEach(el=>el.onchange=()=>{ const M=artMap(); M[el.dataset.amap]=el.type==="checkbox"?el.checked:el.value.trim(); const MS=artMapStored(); MS[el.dataset.amap]=M[el.dataset.amap]; store("vb.artmap",JSON.stringify(MS)); if(el.dataset.amap==="pub") render(); });
   $("#art-ref").onclick=async()=>{ const q=$("#art-refq").value.trim(); if(!q) return toast("Bitte eine Artikel-ID oder Lieferanten-Nr. eintragen."); const b=$("#art-ref"); b.disabled=true; b.textContent="… lese";
@@ -2265,21 +2330,26 @@ function bindArtikel(){ const f=ART.f;
     try{ const r=await etronCall("art_sup_search",{q}); out.innerHTML=(r.items||[]).length?r.items.map(x=>`<button type="button" class="sm" data-sup="${x.id}" data-n="${esc(x.name)}">${esc(x.name)}</button>`).join(" "):"Keine Firma mit diesem Namen gefunden.";
       out.querySelectorAll("[data-sup]").forEach(b=>b.onclick=()=>{ const x={id:+b.dataset.sup,name:b.dataset.n}; if(!ART.supX.some(y=>y.id===x.id)) ART.supX.push(x); f.supplier=String(x.id); artDefSave({supplier:f.supplier}); render(); }); }
     catch(e){ out.innerHTML=`<span class="bad">${esc(e.message||e)}</span>`; } };
-  $("#art-clr").onclick=()=>{ const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; ART.res=""; ART.scrSt=""; const p=S.products[ART.pid]; if(p) Object.assign(ART.f,{name:p.name,code:p.articleNo||""}); render(); };
+  $("#art-clr").onclick=()=>{ const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; ART.res=""; ART.scrSt=""; ART.wpn=null; ART.setRef=""; const p=S.products[ART.pid]; if(p) Object.assign(ART.f,{name:p.name,code:p.articleNo||""}); render(); };
   $("#art-url").onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#art-scr").click(); } };
-  $("#art-scr").onclick=async()=>{ let url=String(f.url||"").trim(); if(/^[A-Z0-9][A-Z0-9-]{3,}$/i.test(url)){ url=HEO_URL(url.toUpperCase()); } if(!isHeo(url)) return toast("Bitte eine heo-Nummer (z. B. UGD011897) oder einen Link von heo.com einfügen.");
-    const b=$("#art-scr"); b.disabled=true; ART.scrSt="… heo-Seite wird im Hintergrund geöffnet und gelesen (bis zu 30 Sekunden)"; $("#art-scrst").textContent=ART.scrSt;
+  $("#art-scr").onclick=async()=>{ let url=String(f.url||"").trim(); if(/^[A-Z0-9][A-Z0-9-]{3,}$/i.test(url)){ url=HEO_URL(url.toUpperCase()); } const cube=isCube(url); if(!isHeo(url)&&!cube) return toast("Bitte eine heo-Nummer (z. B. UGD011897) oder einen Link von heo.com bzw. cubegolem.si einfügen.");
+    const b=$("#art-scr"); b.disabled=true; ART.scrSt=`… ${cube?"Cubegolem":"heo"}-Seite wird im Hintergrund geöffnet und gelesen (bis zu 30 Sekunden)`; $("#art-scrst").textContent=ART.scrSt;
     try{ const o=await artScrape(url); const got=[];
       for(const k of ["name","ean","supcode","desc","img","release"]) if(o[k]){ f[k]=o[k]; got.push(k); }
       if(o.vk!=null){ f.vk=String(vkRound(o.vk)).replace(".",","); got.push("vk"); } if(o.ekList!=null){ f.ekList=String(o.ekList).replace(".",","); f.disc=o.disc!=null?String(o.disc).replace(".",","):""; f.ek=""; got.push("ek"); } else if(o.ek!=null){ f.ekList=String(o.ek).replace(".",","); f.ek=""; got.push("ek"); }
-      if(!ART.f.supplier){ artPickHeo(); if(ART.f.supplier) artDefSave({supplier:ART.f.supplier}); }
-      const nm={name:"Name",ean:"EAN",supcode:"heo-Nr.",desc:"Langtext",img:"Bild",release:"Release",vk:"Verkaufspreis (UVP, aufgerundet)",ek:"Einkaufspreis"};
-      ART.scrSt = got.length ? `<span class="ok">✓ Übernommen: ${got.map(k=>nm[k]).join(", ")}.</span> Bitte alles prüfen.${o.ek==null?" Kein Einkaufspreis gefunden (bei heo angemeldet?).":""}${o.vk==null?" Keine UVP gefunden, Verkaufspreis bitte selbst eintragen.":""}`
-        : `<span class="bad">Auf der Seite wurden keine Artikeldaten gefunden.</span>${o.login?" Bitte in Chrome bei heo anmelden und noch einmal versuchen.":""}`;
+      if(cube) artPickSup(/cube\s*golem/i); else if(!artPickSup(/\bheo\b/i)&&!ART.f.supplier){ artPickHeo(); if(ART.f.supplier) artDefSave({supplier:ART.f.supplier}); }
+      const dn=artDispN({...o,url}); f.dispN=dn?String(dn):""; f.bOn=!!dn; f.bName=dn?artBoosterName(f.name):""; f.bEan=""; f.bVk=""; ART.wpn=null; ART.setRef="";
+      const nm={name:"Name",ean:"EAN",supcode:cube?"Cubegolem-Nr.":"heo-Nr.",desc:"Langtext",img:"Bild",release:"Release",vk:"Verkaufspreis (UVP, aufgerundet)",ek:"Einkaufspreis"};
+      ART.scrSt = got.length ? `<span class="ok">✓ Übernommen: ${got.map(k=>nm[k]).join(", ")}.</span> Bitte alles prüfen.${dn?` Display mit ${dn} Boostern erkannt (siehe unten).`:""}${o.ek==null&&o.ekList==null?` Kein Einkaufspreis gefunden (bei ${cube?"Cubegolem":"heo"} angemeldet?).`:""}${o.vk==null?" Keine UVP gefunden, Verkaufspreis bitte selbst eintragen.":""}`
+        : `<span class="bad">Auf der Seite wurden keine Artikeldaten gefunden.</span>${o.login?` Bitte in Chrome bei ${cube?"Cubegolem":"heo"} anmelden und noch einmal versuchen.`:""}`;
       if(o.pairs.length) ART.scrSt+=` <details><summary>Gelesene Angaben anzeigen</summary><table>${o.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(x.slice(0,120))}</td></tr>`).join("")}</table></details>`;
       ART.dup=null; ART.force=false; }
     catch(e){ ART.scrSt=`<span class="bad">✗ ${esc(e.message||e)}</span>`; }
     render(); };
+  const wb=$("#art-wpn"); if(wb) wb.onclick=async()=>{ const url=String(f.wpn||"").trim(); if(!isWpn(url)) return toast("Bitte einen Link von wpn.wizards.com/…/products/… einfügen.");
+    wb.disabled=true; wb.textContent="… lese WPN"; try{ const o=await extSend({type:"scrape",url}); if(o?.error) throw new Error(o.error); const list=artWpnEans(o); ART.wpn={list,best:artWpnBest(list,f.bName),url}; if(ART.wpn.best&&!f.bEan) f.bEan=ART.wpn.best; }catch(e){ ART.wpn={err:String(e.message||e),list:[]}; } render(); };
+  app.querySelectorAll("[data-wean]").forEach(b=>b.onclick=()=>{ f.bEan=b.dataset.wean; render(); });
+  const sr=$("#art-setr"); if(sr) sr.onclick=async()=>{ const q=$("#art-setq").value.trim(); sr.disabled=true; sr.textContent="… lese"; ART.setRef=await artSetRead(q); render(); };
   const ca=$("#artc-all"); if(ca) ca.onchange=()=>app.querySelectorAll("[data-artc2]").forEach(c=>c.checked=ca.checked);
   const cg=$("#artc-go"); if(cg) cg.onclick=async()=>{ const ids=[...app.querySelectorAll("[data-artc2]:checked")].map(c=>c.dataset.artc2); if(!ids.length) return toast("Nichts ausgewählt.");
     if(!ART.cleanSure){ ART.cleanSure=true; cg.textContent="Wirklich aus der App entfernen?"; return; } ART.cleanSure=false; let n=0;
@@ -2289,6 +2359,7 @@ function bindArtikel(){ const f=ART.f;
     const t=[`App ${APP_VERSION}, Erweiterung ${S.extOk}`, `Felder: ${["herst","pub","desc","resp"].map(k=>k+"="+(M[k]||"-")+(A.labels?.[k]?" („"+A.labels[k]+"“)":"")).join(", ")}, Rabatt=${M.disc}`,
       `Auswahl: Onlineshop-Kategorie=${ART.f.pub||"-"} (${(ART.lists?.pub||[]).length} in etron), Kategorie=${ART.f.categ||"-"}, Bild-Haken=${ART.f.imgOn}`,
       `Bild gewählt: ${ART.f.img||"-"}`, `Bild-Fehler: ${ART.imgErr||"-"}, Format: ${ART.imgType||"-"}`, `Bildkandidaten: ${JSON.stringify(ART.lastPick||{})} / ${(ART.lastImgs||[]).join(" | ")||"keine"}`,
+      `Display: ${f.dispN||"-"}, Set-Vorlage: ${JSON.stringify(artSetRef())}, Set-Lesen: ${String(ART.setRef||"-").replace(/<[^>]+>/g,"")}, WPN: ${ART.wpn?JSON.stringify({u:ART.wpn.url,e:ART.wpn.err,n:ART.wpn.list.length,c:ART.wpn.list.slice(0,8)}):"-"}`,
       `Letztes Ergänzen: ${ART.upd?JSON.stringify({c:ART.upd.changes||ART.upd.done,s:ART.upd.skip,e:ART.upd.err}):"-"}`, `Listen-Fehler: ${ART.lists?.err||"-"}`].join("\n");
     try{ await navigator.clipboard.writeText(t); toast("Diagnose kopiert. Bitte im Chat einfügen."); }catch(e){ ART.res=`<pre style="white-space:pre-wrap">${esc(t)}</pre>`; render(); } };
   app.querySelectorAll("[data-artupd]").forEach(b=>b.onclick=async()=>{ const id=+b.dataset.artupd; ART.upd={id,busy:"prüfe, was fehlt"}; render();
@@ -2312,7 +2383,8 @@ function bindArtikel(){ const f=ART.f;
       let note=""; const p=S.products[ART.pid];
       if(p){ await write("products",p.id,{etronArtId:String(r.id),...(r.code?{articleNo:r.code}:{}),...(vals.vk!=null?{etronPrice:vals.vk,...(p.price==null?{price:vals.vk}:{})}:{})}); note=` Das Produkt „${esc(p.name)}“ ist jetzt damit verknüpft.`; }
       else if(f.app){ const a=await artAppProduct(vals.name,r,vals.vk,{release:String(f.release||"").trim()}); note=` <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>.`; }
-      ART.res=`<p class="ok">✓ In etron angelegt: <a href="${esc(r.link||"")}" target="_blank" rel="noopener">„${esc(vals.name)}“ in etron öffnen</a> (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", "+esc(ART.imgErr||"Bild nicht ladbar"):", kein Bild auf der heo-Seite gefunden"}).${note}${artPreBtn(r.id,r.code,vals.name,vals.vk,f.release)}</p>`;
+      if(f.dispN&&f.bOn){ out.textContent="… lege Booster und Set an"; note+=await artBoosterSet(vals,r,img); }
+      ART.res=`<p class="ok">✓ In etron angelegt: <a href="${esc(r.link||"")}" target="_blank" rel="noopener">„${esc(vals.name)}“ in etron öffnen</a> (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", "+esc(ART.imgErr||"Bild nicht ladbar"):", kein Bild auf der Lieferanten-Seite gefunden"}).${note}${artPreBtn(r.id,r.code,vals.name,vals.vk,f.release)}</p>`;
       dlog("INFO",`Artikel in etron angelegt: ID ${r.id}, Vorlage ${r.tmpl}`);
       const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; ART.catWarn=null; }
     catch(e){ ART.res=`<p class="bad">✗ ${esc(e.message||e)}</p>`; }

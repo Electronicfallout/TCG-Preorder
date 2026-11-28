@@ -4,15 +4,16 @@
 // Ab 1.1: heo-Artikelseiten lesen (Seite kurz im Hintergrund öffnen, angezeigte Artikeldaten auslesen, Tab wieder schließen) und heo-Produktbilder laden.
 const ALLOWED_URL = /^https:\/\/[a-z0-9-]+\.wawi\.onretail\.eu\/api\//i;
 const ALLOWED_ORIGINS = ['https://electronicfallout.github.io'];
-const SCRAPE_URL = /^https:\/\/(www\.)?heo\.com\/[a-z]{2}\/[a-z]{2}\/product\/[A-Za-z0-9-]+([?#].*)?$/i;
-const IMG_URL = /^https:\/\/([a-z0-9-]+\.)*(heo|heomedia)\.com\//i;
+// 1.4: zusätzlich Artikelseiten von cubegolem.si und Produktseiten von wpn.wizards.com (Booster-EAN)
+const SCRAPE_URL = /^https:\/\/((www\.)?heo\.com\/[a-z]{2}\/[a-z]{2}\/product\/[A-Za-z0-9-]+|(www\.)?cubegolem\.si\/(([a-z]{2})\/)?product\/[A-Za-z0-9%_.-]+\/?|wpn\.wizards\.com\/[a-z]{2}(-[a-z]{2})?\/products\/[A-Za-z0-9-]+)([?#].*)?$/i;
+const IMG_URL = /^https:\/\/(([a-z0-9-]+\.)*(heo|heomedia|wizards)\.com|(www\.)?cubegolem\.si|images\.ctfassets\.net)\//i;
 
 chrome.runtime.onMessageExternal.addListener((msg, sender, reply) => {
   const origin = sender.origin || (sender.url ? new URL(sender.url).origin : '');
   if (!ALLOWED_ORIGINS.includes(origin)) { reply({ error: 'Herkunft nicht erlaubt' }); return; }
   if (msg && msg.type === 'hello') { reply({ ok: true, version: chrome.runtime.getManifest().version }); return; }
   if (msg && msg.type === 'scrape') {
-    if (typeof msg.url !== 'string' || !SCRAPE_URL.test(msg.url)) { reply({ error: 'Nur Artikelseiten von heo.com können gelesen werden.' }); return; }
+    if (typeof msg.url !== 'string' || !SCRAPE_URL.test(msg.url)) { reply({ error: 'Nur Artikelseiten von heo.com, cubegolem.si und wpn.wizards.com können gelesen werden.' }); return; }
     scrape(msg.url).then(reply, (e) => reply({ error: String(e && e.message || e) })); return true;
   }
   if (msg && msg.type === 'img') {
