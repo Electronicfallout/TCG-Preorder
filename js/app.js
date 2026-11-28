@@ -868,6 +868,12 @@ const EW_ACTIONS = {
         const pp=tids.length?ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["product_tmpl_id","in",tids]],fields:[...F,"product_tmpl_id"],limit:400})):[];
         for(const s of si){ const t=Array.isArray(s.product_tmpl_id)?s.product_tmpl_id[0]:s.product_tmpl_id; for(const p of pp.filter(p=>(Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id)===t)) sup.push({supcode:s.product_code,id:p.id,name:ewStr(p.name,120),code:p.default_code||"",barcode:p.barcode||""}); } }
       catch(e){ dlog("WARN","Lieferanten-Nummern in etron nicht lesbar: "+String(e.message||e).slice(0,160)); } }
+    const hf=/^[a-z_][a-z0-9_]{1,60}$/.test(String(b.herst||""))?b.herst:"";
+    if(hf) for(let i=0;i<codes.length;i+=80){ const cc=codes.slice(i,i+80); try{
+        const tt=ewList(await ewCall(c,"GET","/search_read/product.template",{domain:["&",A,[hf,"in",cc]],fields:["id",hf],limit:400}));
+        const pp=tt.length?ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["product_tmpl_id","in",tt.map(t=>t.id)]],fields:[...F,"product_tmpl_id"],limit:400})):[];
+        for(const t of tt) for(const p of pp.filter(p=>(Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id)===t.id)) sup.push({supcode:String(t[hf]||""),herst:true,id:p.id,name:ewStr(p.name,120),code:p.default_code||"",barcode:p.barcode||""}); }
+      catch(e){ dlog("WARN","Herstellercode in etron nicht lesbar: "+String(e.message||e).slice(0,160)); } }
     for(let i=0;i<eans.length;i+=80) items.push(...ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["barcode","in",eans.slice(i,i+80)]],fields:F,limit:400})));
     dlog("INFO",`Artikel-Abgleich: ${codes.length} Nummern, ${eans.length} EAN → ${items.length} Treffer, ${sup.length} über Lieferanten-Nr.`);
     return {items:items.map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,120),active:p.active!==false})),sup}; },
@@ -2108,20 +2114,24 @@ function renderArtikel(pid){ pid=pid||null;
     <div id="art-list">${artListHtml()}</div></div>`}`;
   bindArtikel(); }
 
-function artDupHtml(){ const d=ART.dup; if(!d) return ""; if(!d.length) return `<p class="ok">✓ In etron gibt es noch keinen Artikel mit dieser Art.-Nr., Lieferanten-Nr. oder EAN.</p>`;
-  return `<div class="note bad"><b>Diesen Artikel gibt es in etron vielleicht schon:</b><ul>${d.map(x=>`<li>${esc(x.name)} <span class="muted">(ID ${x.id}${x.code?", Art.-Nr. "+esc(x.code):""}${x.barcode?", EAN "+esc(x.barcode):""}${x.why?", gleich: "+esc(x.why):""}${x.active===false?", archiviert":""})</span>${ART.pid?` <button type="button" class="sm" data-artlink="${x.id}" data-code="${esc(x.code||"")}">Stattdessen diesen verknüpfen</button>`:""}</li>`).join("")}</ul>Wenn es wirklich ein anderer Artikel ist, noch einmal auf „Trotzdem in etron anlegen“ klicken.</div>`; }
+const artHard = d => (d||[]).filter(x=>!x.hint), artHint = d => (d||[]).filter(x=>x.hint);
+// Nur Name ähnlich (Tommy, 28.11.: „Sidewinder … Gondor“ ≠ „Art Sleeves … Gondor“): bloß Hinweis, sperrt nichts
+const artHintHtml = d => artHint(d).length?`<span class="muted">ähnlicher Name, bitte selbst prüfen: ${artHint(d).map(x=>`${esc(x.name)} (ID ${x.id})`).join("; ")}</span>`:"";
+function artDupHtml(){ const all=ART.dup; if(!all) return ""; const d=artHard(all);
+  if(!d.length) return `<p class="ok">✓ In etron gibt es keinen Artikel mit dieser Lieferanten-Nr., diesem Herstellercode oder dieser EAN.</p>${artHint(all).length?`<p>${artHintHtml(all)}</p>`:""}`;
+  return `<div class="note bad"><b>Diesen Artikel gibt es in etron schon:</b><ul>${d.map(x=>`<li>${esc(x.name)} <span class="muted">(ID ${x.id}${x.code?", Art.-Nr. "+esc(x.code):""}${x.barcode?", EAN "+esc(x.barcode):""}${x.why?", gleich: "+esc(x.why):""}${x.active===false?", archiviert":""})</span>${ART.pid?` <button type="button" class="sm" data-artlink="${x.id}" data-code="${esc(x.code||"")}">Stattdessen diesen verknüpfen</button>`:""}</li>`).join("")}</ul>Wenn es wirklich ein anderer Artikel ist, noch einmal auf „Trotzdem in etron anlegen“ klicken.</div>`; }
 
 // Abgleich: interne Referenz, EAN und Lieferanten-Art.-Nr. (Lieferanten-Preisliste in etron)
 async function artDupes(rows){ const up=x=>String(x||"").trim().toUpperCase(); const codes=new Set(), eans=new Set();
   for(const r of rows){ if(r.code) codes.add(up(r.code)); if(r.supcode) codes.add(up(r.supcode)); if(r.ean) eans.add(String(r.ean)); }
-  const res=codes.size||eans.size?await etronCall("art_dupes",{codes:[...codes],eans:[...eans]}):{}; const items=res.items||[], sup=res.sup||[];
+  const res=codes.size||eans.size?await etronCall("art_dupes",{codes:[...codes],eans:[...eans],herst:artMap().herst||""}):{}; const items=res.items||[], sup=res.sup||[];
   const out=rows.map(r=>{ const hit=new Map(); const add=(x,why)=>{ const h=hit.get(x.id)||{...x,why:""}; h.why=h.why?h.why+", "+why:why; hit.set(x.id,h); };
     for(const x of items){ if(r.code&&up(x.code)===up(r.code)) add(x,"Art.-Nr."); else if(r.supcode&&up(x.code)===up(r.supcode)) add(x,"Art.-Nr. = Lief.-Nr."); if(r.ean&&String(x.barcode)===String(r.ean)) add(x,"EAN"); }
-    for(const s of sup) if(r.supcode&&up(s.supcode)===up(r.supcode)) add({id:s.id,name:s.name,code:s.code||"",barcode:s.barcode||""},"Lieferanten-Nr.");
+    for(const s of sup) if(r.supcode&&up(s.supcode)===up(r.supcode)) add({id:s.id,name:s.name,code:s.code||"",barcode:s.barcode||""},s.herst?"Herstellercode":"Lieferanten-Nr.");
     return [...hit.values()]; });
   // Keine Nummer gefunden: nach ähnlichem Namen suchen (die wichtigsten Wörter müssen alle im etron-Namen vorkommen)
   const idx=rows.map((r,i)=>i).filter(i=>!out[i].length&&rows[i].name).slice(0,150);
-  if(idx.length){ const nr=await etronCall("art_names",{names:idx.map(i=>artWords(rows[i].name))}); (nr.items||[]).forEach((list,j)=>{ for(const x of list||[]) out[idx[j]].push({...x,why:"ähnlicher Name"}); }); }
+  if(idx.length){ const nr=await etronCall("art_names",{names:idx.map(i=>artWords(rows[i].name))}); (nr.items||[]).forEach((list,j)=>{ for(const x of list||[]) out[idx[j]].push({...x,why:"ähnlicher Name",hint:true}); }); }
   return out; }
 const ART_STOP = new Set("ultimate guard pokemon pokémon magic gathering the of and und der die das mit for von deutsche deutsch version englisch english german edition standard size sleeves tcg".split(" "));
 function artWords(name){ const w=[...new Set(String(name).toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").split(/[^a-z0-9+]+/).filter(x=>x.length>=3&&!ART_STOP.has(x)))];
@@ -2182,7 +2192,7 @@ function bindArtikel(){ const f=ART.f;
     if(String(f.vk||"").trim()&&vals.vk==null) return toast("Verkaufspreis bitte als Zahl, z. B. 14,99."); if(String(f.ek||"").trim()&&vals.ek==null) return toast("Einkaufspreis bitte als Zahl, z. B. 9,59.");
     ART.busy=true; const go=$("#art-go"); go.disabled=true; const out=$("#art-res"); out.textContent="… prüfe, ob es den Artikel in etron schon gibt";
     try{
-      if(!ART.force){ const [d]=await artDupes([vals]); ART.dup=d; if(d.length){ ART.force=true; ART.res=""; ART.busy=false; return render(); } }
+      if(!ART.force){ const [d]=await artDupes([vals]); ART.dup=d; if(artHard(d).length){ ART.force=true; ART.res=""; ART.busy=false; return render(); } }
       out.textContent="… lege in etron an"; const img=f.img&&f.imgOn?await artImage(f.img):null;
       const r=await artCreate(vals,img); if(!r.id) throw new Error("etron hat den Artikel angelegt (Vorlage "+r.tmpl+"), aber keine Artikel-ID zurückgegeben. Bitte in etron prüfen.");
       let note=""; const p=S.products[ART.pid];
@@ -2248,11 +2258,11 @@ function artListHtml(){ const L=ART.L; if(!L||!L.rows) return ""; const rows=L.r
       <button type="button" class="pri" id="artl-go" ${!L.checked||!n||busy?"disabled":""} title="${L.checked?"":"Bitte zuerst mit etron abgleichen"}">Ausgewählte anlegen (${n})</button>${busy?`<button type="button" id="artl-stop">Anhalten</button>`:""}<button type="button" id="artl-x" ${busy?"disabled":""}>Liste verwerfen</button></div>
     <p class="muted">${L.checked?"Abgeglichen. Zeilen, die es in etron schon gibt, sind abgewählt.":"Noch nicht abgeglichen."} Neue Verkaufspreise ohne UVP bitte in der Tabelle eintragen. Lieferant, Kategorie, Steuer und Typ kommen aus „Gemeinsame Einstellungen“ oben.</p>
     <div class="tablebox"><table><thead><tr><th><input type="checkbox" id="artl-all" ${rows.every(r=>r.on)?"checked":""}></th><th>Name</th><th>Lief.-Nr.</th><th>EAN</th><th>EK</th><th>VK</th><th>Menge</th><th>Status</th></tr></thead><tbody>
-    ${rows.map((r,i)=>`<tr${r.dup?.length?' class="dim"':""}><td><input type="checkbox" data-artr="${i}" ${r.on?"checked":""} ${r.done?"disabled":""}></td>
+    ${rows.map((r,i)=>`<tr${artHard(r.dup).length?' class="dim"':""}><td><input type="checkbox" data-artr="${i}" ${r.on?"checked":""} ${r.done?"disabled":""}></td>
       <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>
       <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px" placeholder="${L.heo?"kommt von heo":""}"></td>
       <td>${r.ekList!=null?esc(fmtPrice(r.ekList))+(r.disc?` <span class="muted">− ${esc(String(r.disc).replace(".",","))} %</span><br><span class="muted">= ${esc(fmtPrice(r.ek))}</span>`:""):r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
-      <td>${r.st||""}${r.pairs?`<details><summary class="muted">Gelesene Angaben</summary><table>${r.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(String(x).slice(0,80))}</td></tr>`).join("")}</table>${r.textHead?`<p class="muted" style="white-space:pre-wrap;max-width:420px">${esc(r.textHead)}</p>`:""}</details>`:""}${r.dup?.length?`<span class="bad">gibt es schon:</span> ${r.dup.map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span>':""}</td></tr>`).join("")}</tbody></table></div>`; }
+      <td>${r.st||""}${r.pairs?`<details><summary class="muted">Gelesene Angaben</summary><table>${r.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(String(x).slice(0,80))}</td></tr>`).join("")}</table>${r.textHead?`<p class="muted" style="white-space:pre-wrap;max-width:420px">${esc(r.textHead)}</p>`:""}</details>`:""}${artHard(r.dup).length?`<span class="bad">gibt es schon:</span> ${artHard(r.dup).map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span> '+artHintHtml(r.dup):""}</td></tr>`).join("")}</tbody></table></div>`; }
 function drawArtList(){ const el=$("#art-list"); if(!el) return; el.innerHTML=artListHtml(); bindArtList(); }
 function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
   const hd=$("#artl-head"); if(hd) hd.onchange=()=>{ L.hasHead=hd.checked; artListApply(); drawArtList(); };
@@ -2271,10 +2281,10 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
       L.checked=false; r.dup=null; drawArtList(); }
     L.busy=false; drawArtList(); toast(`Details für ${ok} Zeilen geholt. Bitte jetzt „Mit etron abgleichen“.`); };
   const chk=$("#artl-chk"); if(chk) chk.onclick=async()=>{ L.busy=true; drawArtList();
-    try{ const d=await artDupes(L.rows); L.rows.forEach((r,i)=>{ if(r.done) return; r.dup=d[i]; if(d[i].length) r.on=false; if(/lese|Details|bad/.test(r.st||"")&&!/✓ angelegt/.test(r.st)) r.st=r.st.includes("✓ Details")?r.st:""; }); L.checked=true;
+    try{ const d=await artDupes(L.rows); L.rows.forEach((r,i)=>{ if(r.done) return; r.dup=d[i]; if(artHard(d[i]).length) r.on=false; if(/lese|Details|bad/.test(r.st||"")&&!/✓ angelegt/.test(r.st)) r.st=r.st.includes("✓ Details")?r.st:""; }); L.checked=true;
       // gleiche Lief.-Nr./EAN doppelt in der Liste
       const seen=new Map(); L.rows.forEach((r,i)=>{ const k=r.supcode||r.ean||r.code; if(!k) return; if(seen.has(k)){ r.on=false; r.st='<span class="bad">doppelt in der Liste</span> '; } else seen.set(k,i); });
-      toast(`Abgleich fertig: ${L.rows.filter(r=>r.dup?.length).length} gibt es schon, ${L.rows.filter(r=>!r.dup?.length&&!r.done).length} neu.`); }
+      toast(`Abgleich fertig: ${L.rows.filter(r=>artHard(r.dup).length).length} gibt es schon, ${L.rows.filter(r=>!artHard(r.dup).length&&!r.done).length} neu${L.rows.some(r=>artHint(r.dup).length)?" (bei manchen ein ähnlicher Name als Hinweis)":""}.`); }
     catch(e){ toast("Abgleich fehlgeschlagen: "+(e.message||e),6000); }
     L.busy=false; drawArtList(); };
   const go=$("#artl-go"); if(go) go.onclick=async()=>{ const todo=L.rows.filter(r=>r.on&&!r.done); if(!todo.length) return;
