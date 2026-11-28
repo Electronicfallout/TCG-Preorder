@@ -2107,7 +2107,9 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
   { const code=String(o.supcode||(String(d.url||"").match(/\/product\/([A-Z0-9-]+)/i)||["",""])[1]||"").toLowerCase(), L=(d.imgs||[]).filter(x=>x&&x.u);
     const byCode=code.length>=4?L.find(x=>x.u.toLowerCase().includes(code)):null, nm=String(o.name||h1).toLowerCase().slice(0,25), byAlt=nm.length>5?L.find(x=>String(x.alt).toLowerCase().includes(nm.slice(0,20))):null;
     ART.lastImgs=L.slice(0,15).map(x=>x.u); ART.lastPick={code:byCode?.u||"",alt:byAlt?.u||"",og:m["og:image"]||"",big:d.img||""};
-    o.img=o.img||(byCode&&byCode.u)||(byAlt&&byAlt.u)||m["og:image"]||d.img||""; o.imgCount=L.length; } if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
+    o.img=o.img||(byCode&&byCode.u)||(byAlt&&byAlt.u)||m["og:image"]||d.img||""; o.imgCount=L.length;
+    // heo-Bilder liegen unter heomedia.com/img/nrm/d_<nr>.jpg (Tommy, 28.11.)
+    if(!o.img&&code.length>=4&&isHeo(d.url)) o.img=`https://www.heomedia.com/img/nrm/d_${code}.jpg`; } if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
   o.desc=String(d.desc||o.desc||m["og:description"]||"").trim().slice(0,4000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
   o.textHead=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]).slice(0,12).join("\n");
   o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
@@ -2141,7 +2143,6 @@ function renderArtikel(pid){ pid=pid||null;
       <label>Kategorie${artSel("categ",Ls.cat?[{id:"auto",name:"automatisch nach Marke (z. B. Zubehör / Ultimate Guard)"},...Ls.cat]:null,"– Standard von etron –")}</label>
       <label>Steuer (Verkauf)${artSel("tax",Ls.tax,"– Standard von etron –")}</label>
       <label>Kassenkategorie${artSel("pos",Ls.pos,"– keine –")}</label>
-      ${artMap().pub?`<label${ART.f.pub?"":' class="need"'}>Onlineshop-Kategorie${artSel("pub",Ls.pub,"– bitte wählen –")}${ART.f.pub?"":'<span class="bad">noch keine gewählt</span>'}</label>`:""}
       <label>Artikeltyp<select data-af="type">${[["product","Lagerartikel"],["consu","Verbrauchsartikel"],["service","Dienstleistung"]].map(([k,n])=>`<option value="${k}" ${f.type===k?"selected":""}>${n}</option>`).join("")}</select></label>
       ${p?"":`<label class="row" style="gap:8px"><input type="checkbox" data-af="app" ${f.app?"checked":""}> Auch als Produkt in der App anlegen</label><label>Spiel für die App<select data-af="game">${gameOptions(f.game)}</select></label>`}
     </div>
@@ -2151,6 +2152,7 @@ function renderArtikel(pid){ pid=pid||null;
     <p class="muted" id="art-scrst">${ART.scrSt}</p>
     <form class="form" id="art-f" autocomplete="off">
       <label class="wide">Name in etron<input data-af="name" value="${v("name")}" required></label>
+      ${artMap().pub?`<label>Onlineshop-Kategorie${artSel("pub",Ls.pub,"– bitte wählen –")}${ART.f.pub?"":'<span class="bad">noch keine gewählt</span>'}</label>`:""}
       <label>EAN / Barcode<input data-af="ean" value="${v("ean")}" inputmode="numeric"></label>
       <label>Lieferanten-Art.-Nr.<input data-af="supcode" value="${v("supcode")}"></label>
       <label>Verkaufspreis (brutto)<input data-af="vk" value="${v("vk")}" placeholder="z. B. 14,99"></label>
@@ -2335,9 +2337,10 @@ function artListHtml(){ const L=ART.L; if(!L||!L.rows) return ""; const rows=L.r
     <div class="row">${L.heo||rows.some(r=>r.url)?`<button type="button" id="artl-det" ${busy?"disabled":""}>Details von heo holen</button>`:""}<button type="button" id="artl-chk" ${busy?"disabled":""}>Mit etron abgleichen</button>
       <button type="button" class="pri" id="artl-go" ${!L.checked||!n||busy?"disabled":""} title="${L.checked?"":"Bitte zuerst mit etron abgleichen"}">Ausgewählte anlegen (${n})</button>${busy?`<button type="button" id="artl-stop">Anhalten</button>`:""}<button type="button" id="artl-x" ${busy?"disabled":""}>Liste verwerfen</button></div>
     <p class="muted">${L.checked?"Abgeglichen. Zeilen, die es in etron schon gibt, sind abgewählt.":"Noch nicht abgeglichen."} Neue Verkaufspreise ohne UVP bitte in der Tabelle eintragen. Lieferant, Kategorie, Steuer und Typ kommen aus „Gemeinsame Einstellungen“ oben.</p>
-    <div class="tablebox"><table><thead><tr><th><input type="checkbox" id="artl-all" ${rows.every(r=>r.on)?"checked":""}></th><th>Name</th><th>Lief.-Nr.</th><th>EAN</th><th>EK</th><th>VK</th><th>Menge</th><th>Status</th></tr></thead><tbody>
+    ${artMap().pub&&ART.lists?.pub?`<p class="row" style="gap:6px">Onlineshop-Kategorie für alle ausgewählten Zeilen: <select id="artl-puball"><option value="">– wählen –</option>${ART.lists.pub.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select></p>`:""}
+    <div class="tablebox"><table><thead><tr><th><input type="checkbox" id="artl-all" ${rows.every(r=>r.on)?"checked":""}></th><th>Name</th>${artMap().pub?`<th>Onlineshop-Kategorie</th>`:""}<th>Lief.-Nr.</th><th>EAN</th><th>EK</th><th>VK</th><th>Menge</th><th>Status</th></tr></thead><tbody>
     ${rows.map((r,i)=>`<tr${artHard(r.dup).length?' class="dim"':""}><td><input type="checkbox" data-artr="${i}" ${r.on?"checked":""} ${r.done?"disabled":""}></td>
-      <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>
+      <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>${artMap().pub?`<td><select data-artpub="${i}"><option value="">– bitte wählen –</option>${(ART.lists?.pub||[]).map(x=>`<option value="${x.id}" ${String(x.id)===String(r.pub||"")?"selected":""}>${esc(x.name)}</option>`).join("")}</select></td>`:""}
       <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px" placeholder="${L.heo?"kommt von heo":""}"></td>
       <td>${r.ekList!=null?esc(fmtPrice(r.ekList))+(r.disc?` <span class="muted">− ${esc(String(r.disc).replace(".",","))} %</span><br><span class="muted">= ${esc(fmtPrice(r.ek))}</span>`:""):r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
       <td>${r.st||""}${r.pairs?`<details><summary class="muted">Gelesene Angaben</summary><table>${r.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(String(x).slice(0,80))}</td></tr>`).join("")}</table>${r.textHead?`<p class="muted" style="white-space:pre-wrap;max-width:420px">${esc(r.textHead)}</p>`:""}</details>`:""}${artHard(r.dup).length?`<span class="bad">gibt es schon:</span> ${artHard(r.dup).map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span> '+artHintHtml(r.dup):""}</td></tr>`).join("")}</tbody></table></div>`; }
@@ -2350,6 +2353,8 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
   app.querySelectorAll("[data-artc]").forEach(inp=>inp.addEventListener("change",()=>{ const r=L.rows[+inp.dataset.artc], k=inp.dataset.k; let v=inp.value.trim();
     if(k==="vk"){ v=priceOf(v); if(inp.value.trim()&&v==null) toast("Preis bitte als Zahl, z. B. 14,99."); } if(k==="ean") v=v.replace(/\D/g,""); r[k]=v; if(k!=="vk"&&k!=="name"){ L.checked=false; r.dup=null; drawArtList(); } }));
   const x=$("#artl-x"); if(x) x.onclick=()=>{ ART.L=null; drawArtList(); };
+  app.querySelectorAll("[data-artpub]").forEach(sl=>sl.onchange=()=>{ L.rows[+sl.dataset.artpub].pub=sl.value; });
+  const pa=$("#artl-puball"); if(pa) pa.onchange=()=>{ if(!pa.value) return; L.rows.forEach(r=>{ if(r.on&&!r.done) r.pub=pa.value; }); drawArtList(); };
   const stop=$("#artl-stop"); if(stop) stop.onclick=()=>{ L.stop=true; stop.disabled=true; };
   const det=$("#artl-det"); if(det) det.onclick=async()=>{ L.busy=true; L.stop=false; drawArtList(); let ok=0;
     for(const r of L.rows){ if(L.stop) break; if(!r.on||r.done) continue; const url=r.url||(r.supcode?HEO_URL(r.supcode):""); if(!url){ continue; } r.st="… lese heo-Seite"; drawArtList();
@@ -2369,7 +2374,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
     const noVk=todo.filter(r=>r.vk==null).length; if(noVk&&!L.vkOk){ L.vkOk=true; return toast(`${noVk} Zeilen haben keinen Verkaufspreis. Noch einmal klicken, um sie trotzdem (ohne Preis) anzulegen.`,6000); }
     L.busy=true; L.stop=false; drawArtList(); let ok=0, bad=0;
     for(const r of todo){ if(L.stop) break; r.st="… lege an"; drawArtList();
-      try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,disc:r.disc??null,desc:r.desc||""};
+      try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),pub:r.pub||"",name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,disc:r.disc??null,desc:r.desc||""};
         const img=r.img&&ART.f.imgOn!==false?await artImage(r.img):null; const res=await artCreate(vals,img); if(!res.id) throw new Error("keine Artikel-ID zurück (Vorlage "+res.tmpl+")");
         let note=""; if(ART.f.app){ const a=await artAppProduct(r.name,res,r.vk,{release:r.release||"",supplierOrdered:r.qty}); note=`, <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>`; }
         r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt${res.code?" als "+esc(res.code):""}</span>${img?"":` <span class="muted">${r.img?esc(ART.imgErr):"kein Bild gefunden"}</span>`} <a href="${esc(res.link||"")}" target="_blank" rel="noopener">in etron öffnen</a>${note} `; ok++; }
