@@ -934,10 +934,11 @@ const EW_ACTIONS = {
     if(fn(M.resp)&&id(b.supplier)) set(fn(M.resp),id(b.supplier),"Verantwortliche Person");
     const skip=[];
     if(!fn(M.pub)) skip.push("Onlineshop-Kategorie: Feld in etron nicht erkannt"); else if(!id(b.pub)) skip.push("Onlineshop-Kategorie: keine gewählt"); else if(!empty(t[fn(M.pub)])) skip.push("Onlineshop-Kategorie: schon eingetragen"); else { v[fn(M.pub)]=[[6,0,[id(b.pub)]]]; ch.push("Onlineshop-Kategorie"); }
-    if(!empty(t.image_128)) skip.push("Bild: schon vorhanden"); else if(!b.hasImg&&!b.image) skip.push("Bild: auf der Lieferantenseite keins gefunden"); else if(!b.dry&&!b.image) skip.push("Bild: nicht ladbar");
+    if(!empty(t.image_128)&&!b.imgReplace) skip.push("Bild: schon vorhanden (Haken „Vorhandene Bilder ersetzen“)"); else if(!b.hasImg&&!b.image) skip.push("Bild: auf der Lieferantenseite keins gefunden"); else if(!b.dry&&!b.image) skip.push("Bild: nicht ladbar");
     const d=ewStr(b.desc,4000); if(d){ if(fn(M.desc)) set(fn(M.desc),/<[a-z]/i.test(d)?d:"<p>"+d.replace(/[&<>]/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[x])).replace(/\n/g,"<br>")+"</p>","Langtext"); else set("description_sale",d.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,2000),"Verkaufsbeschreibung"); }
-    if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)&&empty(t.image_128)){ v.image_1920=b.image; ch.push("Bild"); }
-    else if(b.dry&&b.hasImg&&empty(t.image_128)) ch.push("Bild");
+    const imgFree=empty(t.image_128)||!!b.imgReplace;
+    if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)&&imgFree){ v.image_1920=b.image; ch.push(empty(t.image_128)?"Bild":"Bild ersetzt"); }
+    else if(b.dry&&b.hasImg&&imgFree) ch.push(empty(t.image_128)?"Bild":"Bild ersetzen");
     // Einkauf
     let sel=null; const sup=id(b.supplier); if(sup){ const si=ewList(await ewCall(c,"GET","/search_read/product.supplierinfo",{domain:["&",["product_tmpl_id","=",tid],["partner_id","=",sup]],fields:["id","price","product_code",...(M.disc?["discount"]:[])],limit:1}))[0];
       const line={...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})}; if(M.disc&&num(b.ekList)!=null){ line.price=num(b.ekList); line.discount=num(b.disc)||0; } else if(net!=null) line.price=net;
@@ -2064,7 +2065,7 @@ function bindBeta(){ const b=$("#beta-on"); if(b) b.onchange=()=>{ store("vb.bet
 const ART = { pid:undefined, f:{}, lists:null, loading:false, supX:[], dup:null, force:false, busy:false, res:"", scrSt:"", L:null };
 const artDef = () => { try{ return JSON.parse(store("vb.artdef")||"{}")||{}; }catch(e){ return {}; } };
 const artDefSave = o => store("vb.artdef", JSON.stringify({...artDef(),...o}));
-const ART_COMMON = ["supplier","categ","tax","pos","type","pub"];
+const ART_COMMON = ["supplier","categ","tax","pos","type","pub","imgRepl"];
 const artMapStored = () => { try{ return JSON.parse(store("vb.artmap")||"{}")||{}; }catch(e){ return {}; } };
 // Erkannte Felder; fehlt etwas, gilt was etron von sich aus hat (z. B. Herstellercode = manufacturer_pref)
 const artMap = () => { const M=artMapStored(), A=ART.lists?.auto||{}; return {...M, herst:M.herst||A.herst||"", pub:M.pub||A.pub||"", desc:M.desc||A.desc||"", resp:M.resp||A.resp||"", disc:!!(M.disc||A.disc)}; };
@@ -2109,7 +2110,9 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
     ART.lastImgs=L.slice(0,15).map(x=>x.u); ART.lastPick={code:byCode?.u||"",alt:byAlt?.u||"",og:m["og:image"]||"",big:d.img||""};
     o.img=o.img||(byCode&&byCode.u)||(byAlt&&byAlt.u)||m["og:image"]||d.img||""; o.imgCount=L.length;
     // heo-Bilder liegen unter heomedia.com/img/nrm/d_<nr>.jpg (Tommy, 28.11.)
-    if(!o.img&&code.length>=4&&isHeo(d.url)) o.img=`https://www.heomedia.com/img/nrm/d_${code}.jpg`; } if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
+    if(!o.img&&code.length>=4&&isHeo(d.url)) o.img=`https://www.heomedia.com/img/nrm/x_${code}.jpg`;
+    // großes Bild: x_ statt d_ (Mini) (Tommy, 28.11.)
+    o.img=String(o.img||"").replace(/(heomedia\.com\/img\/[a-z]+\/)[a-z]_([a-z0-9-]+\.jpg)/i,"$1x_$2"); } if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
   o.desc=String(d.desc||o.desc||m["og:description"]||"").trim().slice(0,4000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
   o.textHead=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]).slice(0,12).join("\n");
   o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
@@ -2121,7 +2124,7 @@ async function artImgConvert(b64, type){ type=String(type||""); ART.imgType=type
     const out=cv.toDataURL("image/png").split(",")[1]; ART.imgType=type+" → png"; return out; }
   catch(e){ ART.imgErr=`Bild (${type||"?"}) nicht umwandelbar`; return null; } }
 async function artImage(url){ ART.imgErr=""; if(!url) return null; let host=""; try{ host=new URL(url).host; }catch(e){}
-  try{ const r=await extSend({type:"img",url}); if(r?.b64) return await artImgConvert(r.b64, r.type); ART.imgErr=`Bild von ${host} nicht ladbar: ${r?.error||"?"}`; }catch(e){ ART.imgErr=`Bild von ${host} nicht ladbar`; } dlog("WARN",ART.imgErr); return null; }
+  try{ let r=await extSend({type:"img",url}); if(!r?.b64&&/heomedia\.com\/img\/[a-z]+\/x_/i.test(url)) r=await extSend({type:"img",url:url.replace(/\/x_/,"/d_")}); if(r?.b64) return await artImgConvert(r.b64, r.type); ART.imgErr=`Bild von ${host} nicht ladbar: ${r?.error||"?"}`; }catch(e){ ART.imgErr=`Bild von ${host} nicht ladbar`; } dlog("WARN",ART.imgErr); return null; }
 
 function renderArtikel(pid){ pid=pid||null;
   if(!betaOn()){ app.innerHTML=`<div class="panel"><h1>Artikel anlegen</h1><p class="muted">Diese Beta-Funktion ist nur für TU freigeschaltet (Einstellungen → Beta-Funktionen, als TU angemeldet).</p></div>`; return; }
@@ -2143,6 +2146,7 @@ function renderArtikel(pid){ pid=pid||null;
       <label>Kategorie${artSel("categ",Ls.cat?[{id:"auto",name:"automatisch nach Marke (z. B. Zubehör / Ultimate Guard)"},...Ls.cat]:null,"– Standard von etron –")}</label>
       <label>Steuer (Verkauf)${artSel("tax",Ls.tax,"– Standard von etron –")}</label>
       <label>Kassenkategorie${artSel("pos",Ls.pos,"– keine –")}</label>
+      <label class="row" style="gap:8px"><input type="checkbox" data-af="imgRepl" ${f.imgRepl?"checked":""}> Beim Ergänzen vorhandene Bilder ersetzen (z. B. Miniansicht durch großes Bild)</label>
       <label>Artikeltyp<select data-af="type">${[["product","Lagerartikel"],["consu","Verbrauchsartikel"],["service","Dienstleistung"]].map(([k,n])=>`<option value="${k}" ${f.type===k?"selected":""}>${n}</option>`).join("")}</select></label>
     </div>
     ${artMapHtml()}</div>
@@ -2229,7 +2233,7 @@ function artMissing(v, hasImg){ return [!v.name&&"Name",!v.categ&&"Produktkatego
   v.vk==null&&"Verkaufspreis",v.ek==null&&v.ekList==null&&"Einkaufspreis",!v.tax&&"Steuer",!hasImg&&"Bild",!v.desc&&"Langtext"].filter(Boolean); }
 function artVals(f){ const vk=priceOf(f.vk), ekList=priceOf(f.ekList), disc=priceOf(f.disc); let ek=priceOf(f.ek); if(ek==null&&ekList!=null) ek=r2(ekList*(1-(disc||0)/100));
   return { name:String(f.name||"").trim(), code:String(f.code||"").trim(), ean:String(f.ean||"").replace(/\D/g,""), supcode:String(f.supcode||"").trim(), vk, ek, ekList, disc, desc:String(f.desc||"").trim(),
-  supplier:ART.f.supplier||"", categ:ART.f.categ==="auto"?artAutoCateg(f.name||""):(ART.f.categ||""), tax:ART.f.tax||"", pos:ART.f.pos||"", pub:ART.f.pub||"", type:ART.f.type||"product", map:artMap() }; }
+  imgReplace:!!ART.f.imgRepl, supplier:ART.f.supplier||"", categ:ART.f.categ==="auto"?artAutoCateg(f.name||""):(ART.f.categ||""), tax:ART.f.tax||"", pos:ART.f.pos||"", pub:ART.f.pub||"", type:ART.f.type||"product", map:artMap() }; }
 function artMapHtml(){ const M=artMap(), R=ART.ref;
   return `<details class="fold" ${M.herst&&M.pub&&M.desc&&M.resp?"":"open"} style="margin-top:10px"><summary><b>Feld-Erkennung</b> <span class="muted">${["herst","pub","desc","resp"].filter(k=>M[k]).length} von 4 Feldern zugeordnet</span></summary>
     <p class="muted">Einmalig: die etron-Artikel-ID oder Lieferanten-Nr. eines fertig angelegten heo-Artikels eintragen (z. B. PCI14745). Die App liest diesen Artikel und erkennt, in welchen etron-Feldern Herstellercode, Onlineshop-Kategorie, Langtext, verantwortliche Person und Rabatt stehen.</p>
