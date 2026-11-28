@@ -856,7 +856,22 @@ const EW_ACTIONS = {
     const sup=await get("res.partner",[["supplier_rank",">",0]],["id","name"],"name"), cat=await get("product.category",[],["id","complete_name","name"],"complete_name"),
       tax=await get("account.tax",[["type_tax_use","=","sale"]],["id","name","amount"],"sequence"), pos=await get("pos.category",[],["id","name"],"name"), pub=await get("product.public.category",[],["id","display_name"],"sequence");
     const m=(r,fn)=>r.items?r.items.map(fn):null;
-    return { sup:m(sup,x=>({id:x.id,name:ewStr(x.name,80)})), cat:m(cat,x=>({id:x.id,name:ewStr(x.complete_name||x.name,120)})), tax:m(tax,x=>({id:x.id,name:ewStr(x.name,80)})), pos:m(pos,x=>({id:x.id,name:ewStr(x.name,80)})), pub:m(pub,x=>({id:x.id,name:ewStr(x.display_name,120)})).sort((a,b)=>a.name.localeCompare(b.name,"de")),
+    // Felder, die es in etron gibt (Herstellercode aus dem Modul „Hersteller“, Rabatt im Einkauf, Onlineshop-Kategorie)
+    const has=async(mo,fi)=>{ try{ await ewCall(c,"GET","/search_read/"+mo,{domain:[],fields:["id",fi],limit:1}); return true; }catch(e){ return false; } };
+    const auto={herst:"",disc:false,pub:"",desc:"",resp:"",labels:{}};
+    // Felder samt deutscher Beschriftung von etron holen (fields_get) und nach Beschriftung zuordnen
+    const fg=async mo=>{ try{ const r=await ewCall(c,"POST",`/call/${mo}/fields_get`,null,{ids:[],args:[],kwargs:{attributes:["string","type","relation"]}}); const v=r?.result??r; return v&&typeof v==="object"&&!Array.isArray(v)?v:null; }catch(e){ return null; } };
+    const T=await fg("product.template"), SI=await fg("product.supplierinfo");
+    if(T){ const E=Object.entries(T), pick=(test,pref)=>{ const l=E.filter(([k,d])=>test(k,d||{})); l.sort((a,b)=>(pref?pref(b):0)-(pref?pref(a):0)); return l[0]?l[0][0]:""; };
+      auto.herst=pick((k,d)=>/herstellercode|manufacturer.*(code|ref)/i.test(d.string||"")||k==="manufacturer_pref");
+      auto.resp=pick((k,d)=>d.type==="many2one"&&d.relation==="res.partner"&&/verantwort|responsib/i.test((d.string||"")+" "+k));
+      auto.pub=pick((k,d)=>d.type==="many2many"&&(k==="public_categ_ids"||/(website|webshop|onlineshop|e-?commerce).*kategor/i.test(d.string||"")));
+      auto.desc=pick((k,d)=>/^(html|text)$/.test(d.type)&&/(website|webshop|onlineshop|e-?commerce|langtext|lange beschreibung)/i.test((d.string||"")+" "+k)&&!/meta|seo|footer|header/i.test((d.string||"")+" "+k),([k,d])=>(d.type==="html"?2:0)+(/langtext|ecommerce/i.test((d.string||"")+k)?1:0));
+      for(const k of ["herst","resp","pub","desc"]) if(auto[k]) auto.labels[k]=String(T[auto[k]]?.string||auto[k]); }
+    else { auto.herst=await has("product.template","manufacturer_pref")?"manufacturer_pref":""; auto.pub=await has("product.template","public_categ_ids")?"public_categ_ids":""; }
+    auto.disc=SI?("discount" in SI):await has("product.supplierinfo","discount");
+    dlog("INFO",`etron-Felder: Herstellercode=${auto.herst||"?"}, verantwortlich=${auto.resp||"?"}, Onlineshop-Kategorie=${auto.pub||"?"}, Langtext=${auto.desc||"?"}, Rabatt=${auto.disc}`);
+    return { auto, sup:m(sup,x=>({id:x.id,name:ewStr(x.name,80)})), cat:m(cat,x=>({id:x.id,name:ewStr(x.complete_name||x.name,120)})), tax:m(tax,x=>({id:x.id,name:ewStr(x.name,80)})), pos:m(pos,x=>({id:x.id,name:ewStr(x.name,80)})), pub:m(pub,x=>({id:x.id,name:ewStr(x.display_name,120)})).sort((a,b)=>a.name.localeCompare(b.name,"de")),
       err:[sup,cat,tax].filter(r=>r.err).map(r=>r.err).join(" · ") }; },
   async art_sup_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
     return {items:ewList(await ewCall(c,"GET","/search_read/res.partner",{domain:["&",["is_company","=",true],["name","ilike",q]],fields:["id","name"],limit:20,order:"name"})).map(x=>({id:x.id,name:ewStr(x.name,80)}))}; },
@@ -2020,7 +2035,9 @@ const ART = { pid:undefined, f:{}, lists:null, loading:false, supX:[], dup:null,
 const artDef = () => { try{ return JSON.parse(store("vb.artdef")||"{}")||{}; }catch(e){ return {}; } };
 const artDefSave = o => store("vb.artdef", JSON.stringify({...artDef(),...o}));
 const ART_COMMON = ["supplier","categ","tax","pos","type","pub"];
-const artMap = () => { try{ return JSON.parse(store("vb.artmap")||"{}")||{}; }catch(e){ return {}; } };
+const artMapStored = () => { try{ return JSON.parse(store("vb.artmap")||"{}")||{}; }catch(e){ return {}; } };
+// Erkannte Felder; fehlt etwas, gilt was etron von sich aus hat (z. B. Herstellercode = manufacturer_pref)
+const artMap = () => { const M=artMapStored(), A=ART.lists?.auto||{}; return {...M, herst:M.herst||A.herst||"", pub:M.pub||A.pub||"", desc:M.desc||A.desc||"", resp:M.resp||A.resp||"", disc:!!(M.disc||A.disc)}; };
 // Verkaufspreis: x,95 bis x,99 wird auf den nächsten Euro aufgerundet (Tommy, 28.11.: 19,99 → 20)
 const vkRound = x => x==null?null:(Math.round(x*100)%100>=95?Math.ceil(x):x);
 const HEO_BASE = location.hostname==="localhost" ? "http://127.0.0.1:8792" : "https://www.heo.com";   // localhost: nur zum Testen mit einer nachgebauten heo-Seite
@@ -2061,7 +2078,8 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
   o.textHead=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]).slice(0,12).join("\n");
   o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
   return o; }
-async function artImage(url){ if(!url) return null; try{ const r=await extSend({type:"img",url}); return r?.b64||null; }catch(e){ return null; } }
+async function artImage(url){ ART.imgErr=""; if(!url) return null; let host=""; try{ host=new URL(url).host; }catch(e){}
+  try{ const r=await extSend({type:"img",url}); if(r?.b64) return r.b64; ART.imgErr=`Bild von ${host} nicht ladbar: ${r?.error||"?"}`; }catch(e){ ART.imgErr=`Bild von ${host} nicht ladbar`; } dlog("WARN",ART.imgErr); return null; }
 
 function renderArtikel(pid){ pid=pid||null;
   if(!betaOn()){ app.innerHTML=`<div class="panel"><h1>Artikel anlegen</h1><p class="muted">Diese Beta-Funktion ist nur für TU freigeschaltet (Einstellungen → Beta-Funktionen, als TU angemeldet).</p></div>`; return; }
@@ -2080,7 +2098,7 @@ function renderArtikel(pid){ pid=pid||null;
   <div class="panel"><h2>Gemeinsame Einstellungen</h2><p class="muted">Gelten für den einzelnen Artikel und für alle Zeilen einer Liste. Die Auswahl merkt sich die App auf diesem PC.</p>
     <div class="form">
       <label>Lieferant${artSel("supplier",sup,"– kein Lieferant –")}<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="art-sq" placeholder="anderen Lieferanten suchen" style="flex:1"><button type="button" class="sm" id="art-sqb">Suchen</button></span><span id="art-sqr" class="muted"></span></label>
-      <label>Kategorie${artSel("categ",Ls.cat,"– Standard von etron –")}</label>
+      <label>Kategorie${artSel("categ",Ls.cat?[{id:"auto",name:"automatisch nach Marke (z. B. Zubehör / Ultimate Guard)"},...Ls.cat]:null,"– Standard von etron –")}</label>
       <label>Steuer (Verkauf)${artSel("tax",Ls.tax,"– Standard von etron –")}</label>
       <label>Kassenkategorie${artSel("pos",Ls.pos,"– keine –")}</label>
       ${artMap().pub?`<label>Onlineshop-Kategorie${artSel("pub",Ls.pub,"– keine –")}</label>`:""}
@@ -2136,15 +2154,20 @@ async function artDupes(rows){ const up=x=>String(x||"").trim().toUpperCase(); c
 const ART_STOP = new Set("ultimate guard pokemon pokémon magic gathering the of and und der die das mit for von deutsche deutsch version englisch english german edition standard size sleeves tcg".split(" "));
 function artWords(name){ const w=[...new Set(String(name).toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").split(/[^a-z0-9+]+/).filter(x=>x.length>=3&&!ART_STOP.has(x)))];
   return w.sort((a,b)=>b.length-a.length).slice(0,4); }
+// Kategorie nach Marke: die Kategorie, deren letzter Teil (z. B. „Ultimate Guard“) im Artikelnamen vorkommt; bei mehreren die längste, bei Gleichstand „Zubehör“ bevorzugt
+function artAutoCateg(name){ const n=" "+String(name).toLowerCase()+" "; let best=null, bl=0;
+  for(const x of ART.lists?.cat||[]){ const seg=String(x.name).split("/").pop().trim().toLowerCase(); if(seg.length<4||!n.includes(seg)) continue;
+    const sc=seg.length*10+(/zubeh/i.test(x.name)?5:0); if(sc>bl){ bl=sc; best=x; } }
+  return best?String(best.id):""; }
 function artVals(f){ const vk=priceOf(f.vk), ekList=priceOf(f.ekList), disc=priceOf(f.disc); let ek=priceOf(f.ek); if(ek==null&&ekList!=null) ek=r2(ekList*(1-(disc||0)/100));
   return { name:String(f.name||"").trim(), code:String(f.code||"").trim(), ean:String(f.ean||"").replace(/\D/g,""), supcode:String(f.supcode||"").trim(), vk, ek, ekList, disc, desc:String(f.desc||"").trim(),
-  supplier:ART.f.supplier||"", categ:ART.f.categ||"", tax:ART.f.tax||"", pos:ART.f.pos||"", pub:ART.f.pub||"", type:ART.f.type||"product", map:artMap() }; }
+  supplier:ART.f.supplier||"", categ:ART.f.categ==="auto"?artAutoCateg(f.name||""):(ART.f.categ||""), tax:ART.f.tax||"", pos:ART.f.pos||"", pub:ART.f.pub||"", type:ART.f.type||"product", map:artMap() }; }
 function artMapHtml(){ const M=artMap(), R=ART.ref;
-  return `<details class="fold" ${M.herst||M.pub?"":"open"} style="margin-top:10px"><summary><b>Feld-Erkennung</b> <span class="muted">${M.from?`erkannt an „${esc(M.from)}“`:"noch nicht gemacht"}</span></summary>
+  return `<details class="fold" ${M.herst&&M.pub&&M.desc&&M.resp?"":"open"} style="margin-top:10px"><summary><b>Feld-Erkennung</b> <span class="muted">${["herst","pub","desc","resp"].filter(k=>M[k]).length} von 4 Feldern zugeordnet</span></summary>
     <p class="muted">Einmalig: die etron-Artikel-ID oder Lieferanten-Nr. eines fertig angelegten heo-Artikels eintragen (z. B. PCI14745). Die App liest diesen Artikel und erkennt, in welchen etron-Feldern Herstellercode, Onlineshop-Kategorie, Langtext, verantwortliche Person und Rabatt stehen.</p>
     <div class="row" style="gap:6px"><input id="art-refq" placeholder="z. B. PCI14745" style="max-width:220px"><button type="button" class="sm" id="art-ref">Erkennen</button></div>
     ${R?`<p class="${R.err?"bad":"ok"}">${esc(R.err||`Gelesen: „${R.name}“`)}</p>`:""}
-    <div class="form">${[["herst","Herstellercode (= Lieferanten-Art.-Nr.)"],["pub","Onlineshop-Kategorie"],["desc","Langtext"],["resp","Verantwortliche Person (= Lieferant)"]].map(([k,l])=>`<label>${l}<input data-amap="${k}" value="${esc(M[k]||"")}" placeholder="nicht erkannt" class="mono"></label>`).join("")}
+    <div class="form">${[["herst","Herstellercode (= Lieferanten-Art.-Nr.)"],["pub","Onlineshop-Kategorie"],["desc","Langtext"],["resp","Verantwortliche Person (= Lieferant)"]].map(([k,l])=>`<label>${l}<input data-amap="${k}" value="${esc(M[k]||"")}" placeholder="nicht erkannt" class="mono">${ART.lists?.auto?.labels?.[k]&&M[k]===ART.lists.auto[k]?`<span class="muted">in etron: „${esc(ART.lists.auto.labels[k])}“</span>`:""}</label>`).join("")}
       <label class="row" style="gap:8px"><input type="checkbox" data-amap="disc" ${M.disc?"checked":""}> Einkauf mit Listenpreis + Rabatt % (sonst nur Nettopreis)</label></div>
     ${R?.fields?.length?`<details><summary>Alle gelesenen Felder</summary><table>${R.fields.map(([k,x])=>`<tr><td class="mono">${esc(k)}</td><td>${esc(x)}</td></tr>`).join("")}</table></details>`:""}</details>`; }
 // Neues App-Produkt (oder vorhandenes gleichen Namens ohne etron-Verknüpfung) mit dem etron-Artikel verknüpfen
@@ -2160,9 +2183,9 @@ async function artCreate(vals, img){ if(!vals.name) throw new Error("Name fehlt"
 function bindArtikel(){ const f=ART.f;
   app.querySelectorAll("[data-af]").forEach(el=>{ const k=el.dataset.af; const set=()=>{ f[k]=el.type==="checkbox"?el.checked:el.value; if(ART_COMMON.includes(k)) artDefSave({[k]:f[k]}); if(["code","ean","supcode"].includes(k)){ ART.dup=null; ART.force=false; const d=$("#art-dup"); if(d) d.innerHTML=""; const g=$("#art-go"); if(g) g.textContent="In etron anlegen"; } };
     el.addEventListener(el.tagName==="SELECT"||el.type==="checkbox"?"change":"input", set); });
-  app.querySelectorAll("[data-amap]").forEach(el=>el.onchange=()=>{ const M=artMap(); M[el.dataset.amap]=el.type==="checkbox"?el.checked:el.value.trim(); store("vb.artmap",JSON.stringify(M)); if(el.dataset.amap==="pub") render(); });
+  app.querySelectorAll("[data-amap]").forEach(el=>el.onchange=()=>{ const M=artMap(); M[el.dataset.amap]=el.type==="checkbox"?el.checked:el.value.trim(); const MS=artMapStored(); MS[el.dataset.amap]=M[el.dataset.amap]; store("vb.artmap",JSON.stringify(MS)); if(el.dataset.amap==="pub") render(); });
   $("#art-ref").onclick=async()=>{ const q=$("#art-refq").value.trim(); if(!q) return toast("Bitte eine Artikel-ID oder Lieferanten-Nr. eintragen."); const b=$("#art-ref"); b.disabled=true; b.textContent="… lese";
-    try{ const r=await etronCall("art_ref",{q}); ART.ref=r; const M=artMap(); for(const k of ["herst","pub","desc","resp"]) if(r[k]) M[k]=r[k]; M.disc=!!r.disc; M.from=r.name; store("vb.artmap",JSON.stringify(M));
+    try{ const r=await etronCall("art_ref",{q}); ART.ref=r; const M=artMapStored(); for(const k of ["herst","pub","desc","resp"]) if(r[k]) M[k]=r[k]; M.disc=!!r.disc; M.from=r.name; store("vb.artmap",JSON.stringify(M));
       toast(`Erkannt: ${["herst","pub","desc","resp"].filter(k=>r[k]).length} von 4 Feldern${r.disc?", Rabatt":""}.`); ART.lists=null; }
     catch(e){ ART.ref={err:String(e.message||e)}; } render(); };
   const sq=$("#art-sq"), sqb=$("#art-sqb"); sq.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); sqb.click(); } };
@@ -2198,7 +2221,7 @@ function bindArtikel(){ const f=ART.f;
       let note=""; const p=S.products[ART.pid];
       if(p){ await write("products",p.id,{etronArtId:String(r.id),...(r.code?{articleNo:r.code}:{}),...(vals.vk!=null?{etronPrice:vals.vk,...(p.price==null?{price:vals.vk}:{})}:{})}); note=` Das Produkt „${esc(p.name)}“ ist jetzt damit verknüpft.`; }
       else if(f.app){ const a=await artAppProduct(vals.name,r,vals.vk,{release:String(f.release||"").trim()}); note=` <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>.`; }
-      ART.res=`<p class="ok">✓ In etron angelegt: <a href="${esc(r.link||"")}" target="_blank" rel="noopener">„${esc(vals.name)}“ in etron öffnen</a> (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", Bild konnte nicht geladen werden":""}).${note}</p>`;
+      ART.res=`<p class="ok">✓ In etron angelegt: <a href="${esc(r.link||"")}" target="_blank" rel="noopener">„${esc(vals.name)}“ in etron öffnen</a> (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", "+esc(ART.imgErr||"Bild nicht ladbar"):", kein Bild auf der heo-Seite gefunden"}).${note}</p>`;
       dlog("INFO",`Artikel in etron angelegt: ID ${r.id}, Vorlage ${r.tmpl}`);
       const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; }
     catch(e){ ART.res=`<p class="bad">✗ ${esc(e.message||e)}</p>`; }
@@ -2294,7 +2317,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
       try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,disc:r.disc??null,desc:r.desc||""};
         const img=r.img&&ART.f.imgOn!==false?await artImage(r.img):null; const res=await artCreate(vals,img); if(!res.id) throw new Error("keine Artikel-ID zurück (Vorlage "+res.tmpl+")");
         let note=""; if(ART.f.app){ const a=await artAppProduct(r.name,res,r.vk,{release:r.release||"",supplierOrdered:r.qty}); note=`, <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>`; }
-        r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt${res.code?" als "+esc(res.code):""}</span> <a href="${esc(res.link||"")}" target="_blank" rel="noopener">in etron öffnen</a>${note} `; ok++; }
+        r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt${res.code?" als "+esc(res.code):""}</span>${img?"":` <span class="muted">${r.img?esc(ART.imgErr):"kein Bild gefunden"}</span>`} <a href="${esc(res.link||"")}" target="_blank" rel="noopener">in etron öffnen</a>${note} `; ok++; }
       catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; bad++; }
       drawArtList(); }
     dlog("INFO",`Artikel-Liste: ${ok} in etron angelegt, ${bad} Fehler`); L.busy=false; L.vkOk=false; drawArtList(); toast(`${ok} Artikel angelegt${bad?`, ${bad} mit Fehler (siehe Status)`:""}.`,6000); };
