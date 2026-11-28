@@ -2194,8 +2194,9 @@ async function artDupes(rows){ const up=x=>String(x||"").trim().toUpperCase(); c
     for(const s of sup) if(r.supcode&&up(s.supcode)===up(r.supcode)) add({id:s.id,name:s.name,code:s.code||"",barcode:s.barcode||""},s.herst?"Herstellercode":"Lieferanten-Nr.");
     return [...hit.values()]; });
   // Keine Nummer gefunden: nach ähnlichem Namen suchen (die wichtigsten Wörter müssen alle im etron-Namen vorkommen)
-  const idx=rows.map((r,i)=>i).filter(i=>!out[i].length&&rows[i].name).slice(0,150);
-  if(idx.length){ const nr=await etronCall("art_names",{names:idx.map(i=>artWords(rows[i].name))}); (nr.items||[]).forEach((list,j)=>{ for(const x of list||[]) out[idx[j]].push({...x,why:"ähnlicher Name",hint:true}); }); }
+  const idx=[];
+  // Namensabgleich aus (Tommy, 28.11.: zu viele ähnliche Artikel). Geprüft wird nur EAN, Lieferanten-Art.-Nr. und Herstellercode.
+  if(false&&idx.length){ const nr=await etronCall("art_names",{names:idx.map(i=>artWords(rows[i].name))}); (nr.items||[]).forEach((list,j)=>{ for(const x of list||[]) out[idx[j]].push({...x,why:"ähnlicher Name",hint:true}); }); }
   return out; }
 const ART_STOP = new Set("ultimate guard pokemon pokémon magic gathering the of and und der die das mit for von deutsche deutsch version englisch english german edition standard size sleeves tcg".split(" "));
 function artWords(name){ const w=[...new Set(String(name).toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").split(/[^a-z0-9+]+/).filter(x=>x.length>=3&&!ART_STOP.has(x)))];
