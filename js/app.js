@@ -941,7 +941,7 @@ const EW_ACTIONS = {
     else if(b.dry&&b.hasImg&&imgFree) ch.push(empty(t.image_128)?"Bild":"Bild ersetzen");
     // Einkauf
     let sel=null; const sup=id(b.supplier); if(sup){ const si=ewList(await ewCall(c,"GET","/search_read/product.supplierinfo",{domain:["&",["product_tmpl_id","=",tid],["partner_id","=",sup]],fields:["id","price","product_code",...(M.disc?["discount"]:[])],limit:1}))[0];
-      const line={...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})}; if(M.disc&&num(b.ekList)!=null){ line.price=num(b.ekList); line.discount=num(b.disc)||0; } else if(net!=null) line.price=net;
+      const line={...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})}; if(M.disc&&num(b.ekList)!=null){ line.price=num(b.ekList); if(num(b.disc)!=null) line.discount=num(b.disc); } else if(net!=null) line.price=net;
       if(!si){ v.seller_ids=[[0,0,{partner_id:sup,min_qty:1,...line}]]; ch.push("Einkauf: Lieferantenzeile"); }
       else { const w={}; for(const [k,x] of Object.entries(line)) if(String(si[k]??"")!==String(x)) w[k]=x; if(Object.keys(w).length){ sel={id:si.id,w}; ch.push("Einkauf: "+Object.keys(w).map(k=>({price:"Preis",discount:"Rabatt",product_code:"Produktcode"}[k]||k)).join(", ")); } } }
     if(b.dry) return {changes:ch,skip,name:ewStr(t.name,120)};
