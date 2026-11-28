@@ -1,5 +1,5 @@
 // Offline-Unterstützung: App-Dateien zwischenspeichern. Dropbox-Aufrufe werden nie zwischengespeichert.
-const VERSION = 'vb-v111';
+const VERSION = 'vb-v112';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/app.css', 'js/app.js', 'js/storage.js', 'js/store.js', 'js/pkce.js', 'js/version.js', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

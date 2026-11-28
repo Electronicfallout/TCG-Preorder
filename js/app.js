@@ -2041,12 +2041,13 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
   const h1=String(d.h1||"").trim(); if(!o.name) o.name=h1&&!/loading|please wait/i.test(h1)?h1:(m["og:title"]||"");
   if(!o.ean){ const v=pv(/\b(ean|gtin|barcode|upc)\b/); o.ean=(v.match(/\d{8,14}/)||[""])[0]||tx(/\b(?:EAN|GTIN|Barcode)\b[^\d\n]{0,20}(\d{8,14})/i); }
   if(!o.supcode) o.supcode=(pv(/^(art(ikel)?\.?\s*-?\s*(nr|nummer)|artikelnr|heo|bestell\s*-?nr|sku|item)/).match(/[A-Z0-9][A-Z0-9-]{3,}/i)||[""])[0]||(String(d.url||"").match(/\/product\/([A-Z0-9-]+)/i)||["",""])[1];
-  const uvp=pv(/(uvp|empf|unverbindl|rrp|verkaufspreis)/)||tx(/(?:UVP|empf\.?\s*VK|unverbindliche Preisempfehlung)[^\d\n]{0,25}(\d{1,5}(?:[.,]\d{3})*[.,]\d{2})/i); if(uvp) o.vk=priceOf((uvp.match(/\d[\d.,]*/)||[""])[0]);
+  const uvp=pv(/(uvp|empf|unverbindl|rrp|srp|msrp|verkaufspreis|vk-preis|endkunden)/)||tx(/(?:UVP|empf\.?\s*VK|unverbindliche Preisempfehlung|SRP|RRP|Endkundenpreis|Verkaufspreis)[^\d\n]{0,30}(\d{1,5}(?:[.,]\d{3})*[.,]\d{2})/i); if(uvp) o.vk=priceOf((uvp.match(/\d[\d.,]*/)||[""])[0]);
   if(o.ek==null){ const ek=pv(/(ihr preis|händlerpreis|haendlerpreis|einkaufspreis|^ek\b|netto)/)||tx(/(?:Ihr Preis|Händlerpreis|EK)[^\d\n]{0,25}(\d{1,5}(?:[.,]\d{3})*[.,]\d{2})/i); if(ek) o.ek=priceOf((ek.match(/\d[\d.,]*/)||[""])[0]); }
   const rel=pv(/(erschein|release|liefertermin|verfügbar ab|vö\b)/)||tx(/(?:Erscheinungs(?:datum|termin)|Release|Liefertermin)[^\d\n]{0,20}(\d{1,2}\.\d{1,2}\.\d{4})/i);
   if(rel){ const dm=rel.match(/\d{1,2}\.\d{1,2}\.\d{4}/); o.release=dm?isoFix(dm[0]):rel.slice(0,30); }
   o.img=o.img||m["og:image"]||d.img||""; if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
   o.desc=String(d.desc||o.desc||m["og:description"]||"").trim().slice(0,4000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
+  o.textHead=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]).slice(0,12).join("\n");
   o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
   return o; }
 async function artImage(url){ if(!url) return null; try{ const r=await extSend({type:"img",url}); return r?.b64||null; }catch(e){ return null; } }
@@ -2245,8 +2246,8 @@ function artListHtml(){ const L=ART.L; if(!L||!L.rows) return ""; const rows=L.r
     ${rows.map((r,i)=>`<tr${r.dup?.length?' class="dim"':""}><td><input type="checkbox" data-artr="${i}" ${r.on?"checked":""} ${r.done?"disabled":""}></td>
       <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>
       <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="code" value="${esc(r.code)}" style="width:110px" placeholder="optional"></td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px" placeholder="${L.heo?"kommt von heo":""}"></td>
-      <td title="${r.ekList!=null?esc(fmtPrice(r.ekList))+(r.disc?" − "+esc(String(r.disc).replace(".",","))+" %":""):""}">${r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
-      <td>${r.st||""}${r.dup?.length?`<span class="bad">gibt es schon:</span> ${r.dup.map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span>':""}</td></tr>`).join("")}</tbody></table></div>`; }
+      <td>${r.ekList!=null?esc(fmtPrice(r.ekList))+(r.disc?` <span class="muted">− ${esc(String(r.disc).replace(".",","))} %</span><br><span class="muted">= ${esc(fmtPrice(r.ek))}</span>`:""):r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
+      <td>${r.st||""}${r.pairs?`<details><summary class="muted">Gelesene Angaben</summary><table>${r.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(String(x).slice(0,80))}</td></tr>`).join("")}</table>${r.textHead?`<p class="muted" style="white-space:pre-wrap;max-width:420px">${esc(r.textHead)}</p>`:""}</details>`:""}${r.dup?.length?`<span class="bad">gibt es schon:</span> ${r.dup.map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span>':""}</td></tr>`).join("")}</tbody></table></div>`; }
 function drawArtList(){ const el=$("#art-list"); if(!el) return; el.innerHTML=artListHtml(); bindArtList(); }
 function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
   const hd=$("#artl-head"); if(hd) hd.onchange=()=>{ L.hasHead=hd.checked; artListApply(); drawArtList(); };
@@ -2259,7 +2260,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
   const stop=$("#artl-stop"); if(stop) stop.onclick=()=>{ L.stop=true; stop.disabled=true; };
   const det=$("#artl-det"); if(det) det.onclick=async()=>{ L.busy=true; L.stop=false; drawArtList(); let ok=0;
     for(const r of L.rows){ if(L.stop) break; if(!r.on||r.done) continue; const url=r.url||(r.supcode?HEO_URL(r.supcode):""); if(!url){ continue; } r.st="… lese heo-Seite"; drawArtList();
-      try{ const o=await artScrape(url); if(o.name&&!/loading/i.test(o.name)){ r.name=o.name; r.full=true; } if(o.ean) r.ean=o.ean; if(o.vk!=null&&r.vk==null) r.vk=vkRound(o.vk); if(o.release&&!r.release) r.release=o.release; if(o.img) r.img=o.img; if(o.desc) r.desc=o.desc;
+      try{ const o=await artScrape(url); if(o.name&&!/loading/i.test(o.name)){ r.name=o.name; r.full=true; } if(o.ean) r.ean=o.ean; if(o.vk!=null&&r.vk==null) r.vk=vkRound(o.vk); if(o.release&&!r.release) r.release=o.release; if(o.img) r.img=o.img; if(o.desc) r.desc=o.desc; r.pairs=o.pairs; r.textHead=o.textHead;
         r.st=o.name||o.ean?'<span class="ok">✓ Details</span> ':(o.login?'<span class="bad">bei heo nicht angemeldet?</span> ':'<span class="bad">keine Daten gefunden</span> '); if(o.name||o.ean) ok++; }
       catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; if(/Erweiterung/.test(e.message||"")){ L.stop=true; } }
       L.checked=false; r.dup=null; drawArtList(); }
