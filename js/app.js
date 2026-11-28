@@ -35,7 +35,7 @@ setInterval(() => { if (staffEl.value && Date.now()-lastAct > STAFF_IDLE) { staf
 function markStaff(){ const v=staffEl.value.toUpperCase().trim(); const known=Object.values(S.staff||{}); const rec=known.find(m=>m.kuerzel===v);
   const btn=$("#staffbtn"), lab=$("#staffl"); if(btn){ btn.hidden=!known.length; lab.hidden=known.length>0;
     btn.textContent = rec ? `${rec.name} (${rec.kuerzel})` : "Wer bist du?"; btn.classList.toggle("need", !rec); btn.title = rec ? "Klicken, um zu wechseln" : "Bitte deinen Namen auswählen"; }
-  gateStaff();
+  gateStaff(); betaNav();
   staffEl.classList.toggle("need", !v || (known.length>0 && !rec)); staffEl.title = rec ? `Angemeldet als ${rec.name}` : (v && known.length ? "Kürzel nicht angelegt" : ""); }
 staffEl.addEventListener("change", () => { staffEl.value = staffEl.value.toUpperCase().trim(); sess("vb.staff", staffEl.value); markStaff(); });
 staffEl.addEventListener("input", markStaff); $("#staffbtn").onclick=()=>pickStaff(); markStaff();
@@ -232,7 +232,7 @@ const newId = p => p + Date.now().toString(36) + Math.random().toString(36).slic
 
 // ---------- views
 const h0=()=>(location.hash||"#produkte").slice(1);
-function route(){ const h=(location.hash||"#produkte").slice(1); document.querySelectorAll("#nav a").forEach(a=>{const v=a.dataset.v; a.classList.toggle("on", h===v || (v==="produkte"&&(h.startsWith("produkt-")||h.startsWith("serie-"))) || (v==="kunden"&&h.startsWith("kunde-")));}); render(); }
+function route(){ const h=(location.hash||"#produkte").slice(1); document.querySelectorAll("#nav a").forEach(a=>{const v=a.dataset.v; a.classList.toggle("on", h===v || (v==="produkte"&&(h.startsWith("produkt-")||h.startsWith("serie-"))) || (v==="kunden"&&h.startsWith("kunde-")) || (v==="etartikel"&&h.startsWith("etartikel")));}); render(); }
 // Ruhig neu zeichnen (Tommy, 26.11.): Während die Maustaste gedrückt ist, wird nicht neu gezeichnet (sonst geht der Klick verloren).
 // Scrollposition (Seite und Tabellen), Fokus und ein gerade getippter Wert bleiben erhalten.
 // Höchstens 700 ms warten (z. B. öffnet eine Auswahlliste und Chrome meldet das Loslassen nicht), danach wird auf jeden Fall gezeichnet.
@@ -258,7 +258,7 @@ function renderNow(){
   if (!S.skipImport && !Object.keys(S.products).length && !Object.keys(S.orders).length && h0()!=="einstellungen") return renderImport();
   const h=h0();
   const keepFocus = document.activeElement && document.activeElement.id; const sel = keepFocus && document.activeElement.selectionStart;
-  S.waqPage = h.startsWith("produkt-") || h.startsWith("serie-");
+  S.waqPage = h.startsWith("produkt-") || h.startsWith("serie-"); betaNav();
   try{ const nk=document.querySelector('#nav a[data-v="kunden"]'); if(nk){ const nd=Object.values(S.customers).filter(c=>dupesOf(c).length).length; nk.innerHTML=`Kunden${nd?` <span class="pill s-Warteliste" title="${nd} Kunden sehen nach Dublette aus (Name, etron-Nr., Telefon oder E-Mail)" style="font-size:11px;padding:0 6px">${nd}</span>`:""}`; } }catch(e){}
   if (h.startsWith("produkt-")) renderProduct(h.slice(8));
   else if (h.startsWith("kunde-")) renderCustomer(h.slice(6));
@@ -268,6 +268,7 @@ function renderNow(){
   else if (h==="export") renderExport();
   else if (h==="einstellungen") renderSettings();
   else if (h==="protokoll") renderLog();
+  else if (h==="etartikel"||h.startsWith("etartikel-")) renderArtikel(h.slice(10));
   else renderProducts();
   if (keepFocus){ const el=document.getElementById(keepFocus); if(el){ el.focus({preventScroll:true}); try{ if(sel!=null) el.setSelectionRange(sel,sel);}catch(e){} } }
 }
@@ -397,6 +398,7 @@ function renderProduct(pid){
    <div class="row">${addVarBtn()}${p.archived?`<button class="sm" id="arch" title="Für neue Einträge wieder öffnen. Das Produkt ist dann als „Wartend auf Nachlieferung“ markiert.">Für Nachlieferung wieder öffnen</button>`:`<button class="sm" id="arch" title="Zuteilung ist erledigt: Produkt aus der Liste nehmen (mit „Abgeschlossene Zuteilungen zeigen“ weiter sichtbar)">Zu „Abgeschlossene Zuteilungen“</button>`}<button class="sm danger" id="del">Löschen</button><span id="delc"></span></div></div>
   <div id="addvbox"></div>
   ${etSearchHtml("pd",(p.group||p.name||"").split("|")[0].trim(),p.etronArtId,p.etronArtId?"et-"+pid:null)}
+  ${betaOn()&&!p.etronArtId?`<div class="row"><button type="button" class="sm" data-hash="etartikel-${esc(pid)}">Gibt es noch nicht in etron? Hier anlegen <span class="pill s-Warteliste">Beta</span></button></div>`:""}
   ${p.archived?`<div class="note">Die Zuteilung für dieses Produkt ist abgeschlossen. Es erscheint nur mit „Abgeschlossene Zuteilungen zeigen“ in der Produktliste. Für neue Einträge oben „Für Nachlieferung wieder öffnen“.</div>`:p.restock?`<div class="note warn">${RESTOCK_PILL} Dieses Produkt wurde für eine zukünftige Nachlieferung wieder geöffnet. Neue Einträge sind möglich. Wenn die Nachlieferung zugeteilt ist, oben „Zu Abgeschlossene Zuteilungen“ klicken.</div>`:""}
   <div class="tiles">
     <div class="tile"><b>${s.pre}</b><span>vorbestellt</span></div>
@@ -849,6 +851,42 @@ const EW_ACTIONS = {
     if(names.length){ const tags=ewList(await ewCall(c,"GET","/search_read/crm.tag",{domain:[["name","in",names]],fields:["id","name"]})); const ids=tags.map(t=>parseInt(t.id,10)).filter(Boolean);
       if(ids.length<names.length) throw new Error(`Stichwort „${names.join(", ")}“ gibt es in etron nicht (genaue Schreibweise prüfen)`); values.tag_ids=[[6,0,ids]]; }
     return {result:await ewCall(c,"POST","/create/sale.order",null,{values})}; },
+  // ---- Artikelanlage (Beta)
+  async art_lists(c){ const get=async(m,dom,f,ord)=>{ try{ return {items:ewList(await ewCall(c,"GET","/search_read/"+m,{domain:dom,fields:f,limit:500,...(ord?{order:ord}:{})}))}; }catch(e){ return {err:`${m}: ${String(e.message||e).slice(0,160)}`}; } };
+    const sup=await get("res.partner",[["supplier_rank",">",0]],["id","name"],"name"), cat=await get("product.category",[],["id","complete_name","name"],"complete_name"),
+      tax=await get("account.tax",[["type_tax_use","=","sale"]],["id","name","amount"],"sequence"), pos=await get("pos.category",[],["id","name"],"name");
+    const m=(r,fn)=>r.items?r.items.map(fn):null;
+    return { sup:m(sup,x=>({id:x.id,name:ewStr(x.name,80)})), cat:m(cat,x=>({id:x.id,name:ewStr(x.complete_name||x.name,120)})), tax:m(tax,x=>({id:x.id,name:ewStr(x.name,80)})), pos:m(pos,x=>({id:x.id,name:ewStr(x.name,80)})),
+      err:[sup,cat,tax].filter(r=>r.err).map(r=>r.err).join(" · ") }; },
+  async art_sup_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
+    return {items:ewList(await ewCall(c,"GET","/search_read/res.partner",{domain:["&",["is_company","=",true],["name","ilike",q]],fields:["id","name"],limit:20,order:"name"})).map(x=>({id:x.id,name:ewStr(x.name,80)}))}; },
+  async art_dupes(c,b){ const codes=[...new Set((b.codes||[]).map(x=>ewStr(x,60)).filter(Boolean))].slice(0,600), eans=[...new Set((b.eans||[]).map(x=>ewStr(x,20)).filter(x=>/^\d{8,14}$/.test(x)))].slice(0,300);
+    const F=["id","default_code","barcode","name","active"], A=["active","in",[true,false]], items=[], sup=[];
+    for(let i=0;i<codes.length;i+=80){ const cc=codes.slice(i,i+80); items.push(...ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,"|",["default_code","in",cc],["default_code","in",cc.map(x=>x.toLowerCase())]],fields:F,limit:400})));
+      try{ const si=ewList(await ewCall(c,"GET","/search_read/product.supplierinfo",{domain:[["product_code","in",cc]],fields:["product_code","product_tmpl_id"],limit:400}));
+        const tids=[...new Set(si.map(s=>Array.isArray(s.product_tmpl_id)?s.product_tmpl_id[0]:s.product_tmpl_id).filter(Boolean))];
+        const pp=tids.length?ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["product_tmpl_id","in",tids]],fields:[...F,"product_tmpl_id"],limit:400})):[];
+        for(const s of si){ const t=Array.isArray(s.product_tmpl_id)?s.product_tmpl_id[0]:s.product_tmpl_id; for(const p of pp.filter(p=>(Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id)===t)) sup.push({supcode:s.product_code,id:p.id,name:ewStr(p.name,120),code:p.default_code||"",barcode:p.barcode||""}); } }
+      catch(e){ dlog("WARN","Lieferanten-Nummern in etron nicht lesbar: "+String(e.message||e).slice(0,160)); } }
+    for(let i=0;i<eans.length;i+=80) items.push(...ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["barcode","in",eans.slice(i,i+80)]],fields:F,limit:400})));
+    dlog("INFO",`Artikel-Abgleich: ${codes.length} Nummern, ${eans.length} EAN → ${items.length} Treffer, ${sup.length} über Lieferanten-Nr.`);
+    return {items:items.map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,120),active:p.active!==false})),sup}; },
+  async art_names(c,b){ const A=["active","in",[true,false]], out=[];
+    for(const w of (b.names||[]).slice(0,150)){ const ws=(w||[]).map(x=>ewStr(x,40)).filter(Boolean).slice(0,4); if(!ws.length){ out.push([]); continue; }
+      const dom=[]; for(let i=0;i<ws.length;i++) dom.push("&"); dom.push(A,...ws.map(x=>["name","ilike",x]));
+      out.push(ewList(await ewCall(c,"GET","/search_read/product.product",{domain:dom,fields:["id","default_code","barcode","name","active"],limit:3})).map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,120),active:p.active!==false}))); }
+    return {items:out}; },
+  async art_create(c,b){ const name=ewStr(b.name,200); if(!name) throw new Error("Name fehlt"); const id=x=>parseInt(x,10)>0?parseInt(x,10):null, num=x=>typeof x==="number"&&isFinite(x)&&x>=0?x:null;
+    const v={name,sale_ok:true,purchase_ok:true,detailed_type:["product","consu","service"].includes(b.type)?b.type:"product"};
+    if(ewStr(b.code)) v.default_code=ewStr(b.code,60); if(/^\d{8,14}$/.test(ewStr(b.ean))) v.barcode=ewStr(b.ean);
+    if(num(b.vk)!=null) v.list_price=num(b.vk); if(num(b.ek)!=null) v.standard_price=num(b.ek);
+    if(id(b.categ)) v.categ_id=id(b.categ); if(id(b.tax)) v.taxes_id=[[6,0,[id(b.tax)]]]; if(id(b.pos)){ v.pos_categ_id=id(b.pos); v.available_in_pos=true; }
+    if(id(b.supplier)) v.seller_ids=[[0,0,{partner_id:id(b.supplier),min_qty:1,...(num(b.ek)!=null?{price:num(b.ek)}:{}),...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})}]];
+    if(ewStr(b.desc)) v.description_sale=ewStr(b.desc,2000);
+    if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)) v.image_1920=b.image;
+    const tid=etronIdOf(await ewCall(c,"POST","/create/product.template",null,{values:v})); if(!tid) throw new Error("etron hat keine Nummer für den neuen Artikel zurückgegeben");
+    const pp=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],["product_tmpl_id","=",tid]],fields:["id","default_code"],limit:2}));
+    return {tmpl:tid,id:pp[0]?.id||null,code:pp[0]?.default_code||v.default_code||""}; },
 };
 async function etronWeb(action, data){ const c=await ewCfg(); if(!c||!c.key||!c.secret||!c.url) throw new Error("etron-Zugang ist nicht eingerichtet (Einstellungen → etron-Schnittstelle).");
   const f=EW_ACTIONS[action]; if(!f) throw new Error("unbekannte Aktion");
@@ -1906,6 +1944,7 @@ function renderSettings(){
     <div class="row"><button id="inv">Einladungscode anzeigen</button></div><textarea id="invt" hidden rows="3" style="width:100%" readonly></textarea></div>` : ""}
   ${etronPanel()}
   ${etronApiPanel()}
+  ${betaPanel()}
   ${fixPanel()}
   ${waPanel()}
   ${gamesPanel()}
@@ -1919,7 +1958,7 @@ function renderSettings(){
     <p class="muted">Liest eine Excel-Liste (z. B. Name, Telefon, E-Mail, Produkt A, Produkt B) nur hier im Browser ein. In den Produktspalten zählt eine Zahl als Menge, jeder andere Eintrag als 1 Stück.</p>
     <div class="row"><input type="file" id="xlf" accept=".xlsx,.xls,.csv"></div><div id="xlui"></div></div>`;
   $("#xlf").onchange = e => xlStart(e.target.files[0]);
-  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi(); bindFix(); document.querySelectorAll('input[name="wamode"]').forEach(r=>r.onchange=()=>{ setWaMode(r.value); toast(r.value==="web"?"WhatsApp Web wird verwendet":"WhatsApp-App am PC wird verwendet"); });
+  $("#syncnow").onclick = () => S.doc.sync(); bindTemplates(); bindStaff(); bindGames(); bindEtron(); bindEtronApi(); bindFix(); bindBeta(); document.querySelectorAll('input[name="wamode"]').forEach(r=>r.onchange=()=>{ setWaMode(r.value); toast(r.value==="web"?"WhatsApp Web wird verwendet":"WhatsApp-App am PC wird verwendet"); });
   if (isDisk) { bindMigrate();
     $("#openlog").onclick = () => desk("/api/openlog", { method: "POST" }).then(r => r.json()).then(j => toast("Log: " + j.path, 6000));
     $("#openlogdir").onclick = () => desk("/api/openlog?folder=1", { method: "POST" }).then(r => r.json()).then(j => toast("Ordner: " + j.path, 6000)); $("#quit").onclick = async () => { await S.doc.sync(); try { await desk("/api/quit", { method: "POST" }); } catch (e) {}
@@ -1928,6 +1967,271 @@ function renderSettings(){
   const inv = $("#inv"); if (inv) inv.onclick = () => { const t = $("#invt"); t.hidden = false; t.value = makeInvite(S.cred); t.select(); };
   $("#bk2").onclick = () => saveFile(`vorbestellungen-sicherung-${today()}.json`, new Blob([JSON.stringify(backupData(), null, 1)], { type: "application/json" }));
   $("#impf2").onchange = e => importFile(e.target.files[0], $("#impst2"));
+}
+
+// ---------- etron-Artikel aus der App anlegen (BETA, Tommy 28.11.): nur sichtbar, wenn TU angemeldet ist und es auf diesem PC eingeschaltet hat.
+// Einzeln (auch aus einem heo-Link), aus einer Liste (Excel/CSV) oder aus einer eingefügten heo-Bestellung. Vor dem Anlegen Abgleich mit vorhandenen etron-Artikeln.
+function betaOk(){ try{ return staff()==="TU"; }catch(e){ return false; } }
+function betaOn(){ return betaOk() && store("vb.beta")==="1"; }
+function betaNav(){ try{ const nav=document.querySelector("#nav"); if(!nav) return; let a=nav.querySelector('a[data-v="etartikel"]');
+  if(betaOn()&&!a){ a=document.createElement("a"); a.href="#etartikel"; a.dataset.v="etartikel"; a.innerHTML=`Artikel anlegen <span class="pill s-Warteliste">Beta</span>`; nav.insertBefore(a, nav.querySelector('a[data-v="protokoll"]')); }
+  if(!betaOn()&&a){ a.remove(); if(h0().startsWith("etartikel")) render(); } }catch(e){} }
+document.addEventListener("click", e => { const b=e.target.closest?.("[data-hash]"); if(b){ e.preventDefault(); location.hash=b.dataset.hash; } });
+function betaPanel(){ if(!betaOk()) return "";
+  return `<div class="panel"><h2>Beta-Funktionen <span class="pill s-Warteliste">nur TU</span></h2>
+    <label class="row" style="gap:8px"><input type="checkbox" id="beta-on" ${store("vb.beta")==="1"?"checked":""}> etron-Artikel aus der App anlegen (einzeln, per heo-Link, aus einer Liste oder einer eingefügten heo-Bestellung)</label>
+    <p class="muted">Diesen Bereich sieht nur TU. Eingeschaltet wird nur auf diesem PC, und nur solange TU angemeldet ist. ${betaOn()?`<a href="#etartikel">Zur Artikelanlage</a>`:""}</p></div>`; }
+function bindBeta(){ const b=$("#beta-on"); if(b) b.onchange=()=>{ store("vb.beta", b.checked?"1":"0"); betaNav(); render(); toast(b.checked?"Beta eingeschaltet: oben gibt es jetzt „Artikel anlegen“.":"Beta ausgeschaltet"); }; }
+
+const ART = { pid:undefined, f:{}, lists:null, loading:false, supX:[], dup:null, force:false, busy:false, res:"", scrSt:"", L:null };
+const artDef = () => { try{ return JSON.parse(store("vb.artdef")||"{}")||{}; }catch(e){ return {}; } };
+const artDefSave = o => store("vb.artdef", JSON.stringify({...artDef(),...o}));
+const ART_COMMON = ["supplier","categ","tax","pos","type"];
+const HEO_BASE = location.hostname==="localhost" ? "http://127.0.0.1:8792" : "https://www.heo.com";   // localhost: nur zum Testen mit einer nachgebauten heo-Seite
+const HEO_URL = code => `${HEO_BASE}/de/de/product/${encodeURIComponent(code)}`;
+const isHeo = u => /^https:\/\/(www\.)?heo\.com\//i.test(String(u||"")) || (location.hostname==="localhost" && String(u||"").startsWith(HEO_BASE));
+const r2 = x => x==null?null:Math.round(x*100)/100;
+
+async function artLoadLists(){ ART.loading=true; try{ ART.lists=await etronCall("art_lists",{}); }catch(e){ ART.lists={err:String(e.message||e)}; } ART.loading=false;
+  const f=ART.f; if(!f.supplier&&ART.L?.heo) artPickHeo(); render(); }
+function artPickHeo(){ const h=(ART.lists?.sup||[]).find(x=>/\bheo\b/i.test(x.name)); if(h) ART.f.supplier=String(h.id); }
+const artSel = (key, list, empty) => { const v=ART.f[key]; if(!list) return `<select disabled><option>${ART.loading||!ART.lists?"… lädt aus etron":"in etron nicht verfügbar"}</option></select>`;
+  return `<select data-af="${key}"><option value="">${empty}</option>${list.map(x=>`<option value="${x.id}" ${String(x.id)===String(v??"")?"selected":""}>${esc(x.name)}</option>`).join("")}</select>`; };
+
+// Daten einer heo-Seite über die Erweiterung holen (die Seite wird kurz im Hintergrund in Chrome geöffnet, mit deinem heo-Login)
+async function artScrape(url){ let r; try{ r=await extSend({type:"scrape",url}); }catch(e){ throw new Error("Chrome-Erweiterung nicht gefunden."); }
+  if(r?.error) throw new Error(/Adresse nicht erlaubt$/.test(r.error)?"Die Chrome-Erweiterung ist noch Version 1.0. Bitte auf Version 1.1 aktualisieren (Anleitung oben auf dieser Seite).":r.error); return artParse(r); }
+function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatMap(flat):x&&x["@graph"]?flat(x["@graph"]):x?[x]:[];
+  const prod=flat(d.ld||[]).find(x=>x&&/Product/i.test([].concat(x["@type"]||"").join(" ")));
+  if(prod){ o.name=prod.name; o.ean=prod.gtin13||prod.gtin||prod.gtin14||prod.gtin12||prod.gtin8||""; o.supcode=prod.sku||prod.mpn||""; o.desc=prod.description||"";
+    const of=[].concat(prod.offers||[])[0]; if(of&&of.price!=null) o.ek=priceOf(String(of.price)); let im=[].concat(prod.image||[])[0]; if(im&&typeof im==="object") im=im.url; o.img=im||""; }
+  const m=d.meta||{}; const P=(d.pairs||[]).map(([k,v])=>[String(k||"").toLowerCase().replace(/\s+/g," ").trim(),String(v||"").replace(/\s+/g," ").trim()]).filter(([k,v])=>k&&v&&k.length<50);
+  o.pairs=P.slice(0,80); const pv=re=>{ const p=P.find(([k])=>re.test(k)); return p?p[1]:""; };
+  const T=String(d.text||""); const tx=re=>{ const x=T.match(re); return x?x[1]:""; };
+  const h1=String(d.h1||"").trim(); if(!o.name) o.name=h1&&!/loading|please wait/i.test(h1)?h1:(m["og:title"]||"");
+  if(!o.ean){ const v=pv(/\b(ean|gtin|barcode|upc)\b/); o.ean=(v.match(/\d{8,14}/)||[""])[0]||tx(/\b(?:EAN|GTIN|Barcode)\b[^\d\n]{0,20}(\d{8,14})/i); }
+  if(!o.supcode) o.supcode=(pv(/^(art(ikel)?\.?\s*-?\s*(nr|nummer)|artikelnr|heo|bestell\s*-?nr|sku|item)/).match(/[A-Z0-9][A-Z0-9-]{3,}/i)||[""])[0]||(String(d.url||"").match(/\/product\/([A-Z0-9-]+)/i)||["",""])[1];
+  const uvp=pv(/(uvp|empf|unverbindl|rrp|verkaufspreis)/)||tx(/(?:UVP|empf\.?\s*VK|unverbindliche Preisempfehlung)[^\d\n]{0,25}(\d{1,5}(?:[.,]\d{3})*[.,]\d{2})/i); if(uvp) o.vk=priceOf((uvp.match(/\d[\d.,]*/)||[""])[0]);
+  if(o.ek==null){ const ek=pv(/(ihr preis|händlerpreis|haendlerpreis|einkaufspreis|^ek\b|netto)/)||tx(/(?:Ihr Preis|Händlerpreis|EK)[^\d\n]{0,25}(\d{1,5}(?:[.,]\d{3})*[.,]\d{2})/i); if(ek) o.ek=priceOf((ek.match(/\d[\d.,]*/)||[""])[0]); }
+  const rel=pv(/(erschein|release|liefertermin|verfügbar ab|vö\b)/)||tx(/(?:Erscheinungs(?:datum|termin)|Release|Liefertermin)[^\d\n]{0,20}(\d{1,2}\.\d{1,2}\.\d{4})/i);
+  if(rel){ const dm=rel.match(/\d{1,2}\.\d{1,2}\.\d{4}/); o.release=dm?isoFix(dm[0]):rel.slice(0,30); }
+  o.img=o.img||m["og:image"]||d.img||""; if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
+  o.desc=String(o.desc||m["og:description"]||"").slice(0,2000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
+  o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
+  return o; }
+async function artImage(url){ if(!url) return null; try{ const r=await extSend({type:"img",url}); return r?.b64||null; }catch(e){ return null; } }
+
+function renderArtikel(pid){ pid=pid||null;
+  if(!betaOn()){ app.innerHTML=`<div class="panel"><h1>Artikel anlegen</h1><p class="muted">Diese Beta-Funktion ist nur für TU freigeschaltet (Einstellungen → Beta-Funktionen, als TU angemeldet).</p></div>`; return; }
+  if(!etronOn()){ app.innerHTML=`<div class="panel"><h1>Artikel anlegen</h1><p class="bad">Die Chrome-Erweiterung für etron wurde nicht gefunden.</p><p class="muted">Einstellungen → etron-Schnittstelle zeigt, was fehlt.</p></div>`; extCheck().then(v=>v&&render()); return; }
+  if(pid!==ART.pid){ ART.pid=pid; ART.f={}; ART.dup=null; ART.force=false; ART.res=""; ART.scrSt=""; const p=S.products[pid];
+    if(p) Object.assign(ART.f,{name:p.name,code:p.articleNo||"",vk:p.price!=null?String(p.price).replace(".",","):"",release:p.release||"",game:gameOf(p)}); }
+  const f=ART.f, d=artDef(); for(const k of ART_COMMON) if(f[k]==null&&d[k]!=null) f[k]=d[k]; if(f.type==null) f.type="product"; if(f.app==null) f.app=!pid; if(f.game==null) f.game=S.game==="Alle"?"One Piece":S.game; if(f.imgOn==null) f.imgOn=true;
+  if(!ART.lists&&!ART.loading) artLoadLists();
+  const Ls=ART.lists||{}, sup=Ls.sup?[...Ls.sup,...ART.supX.filter(x=>!Ls.sup.some(y=>y.id===x.id))]:null;
+  const v=k=>esc(f[k]??""), p=pid&&S.products[pid];
+  const ext=String(S.extOk||""), extOld=ext&&ext!=="true"&&!/^1\.[1-9]/.test(ext);
+  app.innerHTML=`<div><a class="back" href="#${p?"produkt-"+pid:"produkte"}">← ${p?esc(p.name):"Produkte"}</a><h1>etron-Artikel anlegen <span class="pill s-Warteliste">Beta</span></h1>
+    <p class="sub">${p?`Für das Produkt „${esc(p.name)}“. Nach dem Anlegen wird es automatisch mit dem neuen etron-Artikel verknüpft.`:"Neue Artikel in etron anlegen: einzeln, über einen heo-Link oder für viele Artikel auf einmal aus einer Liste oder Bestellung."} Vor dem Anlegen prüft die App, ob es den Artikel in etron schon gibt.</p></div>
+  ${extOld?`<div class="note bad">Für das Auslesen von heo-Seiten braucht die Chrome-Erweiterung Version 1.1 (jetzt: ${esc(ext)}). <a href="download/erweiterung-1.1.zip">ZIP herunterladen</a>, den Inhalt in den Dropbox-Ordner <span class="mono">erweiterung</span> kopieren (alte Dateien ersetzen), dann in <span class="mono">chrome://extensions</span> bei der Erweiterung auf ↻ klicken und die App neu laden.</div>`:""}
+  ${Ls.err?`<div class="note bad">Nicht alle Auswahllisten aus etron ladbar: ${esc(Ls.err)}</div>`:""}
+  <div class="panel"><h2>Gemeinsame Einstellungen</h2><p class="muted">Gelten für den einzelnen Artikel und für alle Zeilen einer Liste. Die Auswahl merkt sich die App auf diesem PC.</p>
+    <div class="form">
+      <label>Lieferant${artSel("supplier",sup,"– kein Lieferant –")}<span class="row" style="gap:6px;flex-wrap:nowrap"><input id="art-sq" placeholder="anderen Lieferanten suchen" style="flex:1"><button type="button" class="sm" id="art-sqb">Suchen</button></span><span id="art-sqr" class="muted"></span></label>
+      <label>Kategorie${artSel("categ",Ls.cat,"– Standard von etron –")}</label>
+      <label>Steuer (Verkauf)${artSel("tax",Ls.tax,"– Standard von etron –")}</label>
+      <label>Kassenkategorie${artSel("pos",Ls.pos,"– keine –")}</label>
+      <label>Artikeltyp<select data-af="type">${[["product","Lagerartikel"],["consu","Verbrauchsartikel"],["service","Dienstleistung"]].map(([k,n])=>`<option value="${k}" ${f.type===k?"selected":""}>${n}</option>`).join("")}</select></label>
+      ${p?"":`<label class="row" style="gap:8px"><input type="checkbox" data-af="app" ${f.app?"checked":""}> Auch als Produkt in der App anlegen</label><label>Spiel für die App<select data-af="game">${gameOptions(f.game)}</select></label>`}
+    </div></div>
+  <div class="panel"><h2>Ein Artikel</h2>
+    <div class="row" style="gap:6px"><input id="art-url" data-af="url" value="${v("url")}" placeholder="heo-Link einfügen, z. B. https://www.heo.com/de/de/product/UGD011897" style="flex:1"><button type="button" class="sm" id="art-scr">Daten von heo holen</button></div>
+    <p class="muted" id="art-scrst">${ART.scrSt}</p>
+    <form class="form" id="art-f" autocomplete="off">
+      <label class="wide">Name in etron<input data-af="name" value="${v("name")}" required></label>
+      <label>Art.-Nr. (interne Referenz)<span class="row" style="gap:6px;flex-wrap:nowrap"><input data-af="code" value="${v("code")}" style="flex:1"><button type="button" class="sm" id="art-cp" title="Lieferanten-Art.-Nr. übernehmen">← Lief.-Nr.</button></span></label>
+      <label>EAN / Barcode<input data-af="ean" value="${v("ean")}" inputmode="numeric"></label>
+      <label>Lieferanten-Art.-Nr.<input data-af="supcode" value="${v("supcode")}"></label>
+      <label>Verkaufspreis (brutto)<input data-af="vk" value="${v("vk")}" placeholder="z. B. 14,99"></label>
+      <label>Einkaufspreis<input data-af="ek" value="${v("ek")}" placeholder="z. B. 9,59"></label>
+      ${p?"":`<label>Release (für die App)<input data-af="release" value="${v("release")}" placeholder="2027-05-15 oder leer"></label>`}
+      <label class="wide">Beschreibung<textarea data-af="desc" rows="2">${v("desc")}</textarea></label>
+      ${f.img?`<label class="row wide" style="gap:8px"><input type="checkbox" data-af="imgOn" ${f.imgOn?"checked":""}><img src="${esc(f.img)}" alt="" style="height:64px;border-radius:6px"> Bild übernehmen</label>`:""}
+    </form>
+    <div id="art-dup">${artDupHtml()}</div>
+    <div class="row"><button class="pri" id="art-go" ${ART.busy?"disabled":""}>${ART.force?"Trotzdem in etron anlegen":"In etron anlegen"}</button><button type="button" id="art-clr">Formular leeren</button></div>
+    <div id="art-res">${ART.res}</div></div>
+  ${p?"":`<div class="panel"><h2>Viele Artikel: Liste oder Bestellung</h2>
+    <p class="muted">Excel/CSV-Datei oder eine heo-Rechnung als PDF wählen, oder eine Bestellung (z. B. aus der heo-Bestellbestätigung) unten hineinkopieren. Nichts wird angelegt, bevor du die Prüfliste kontrolliert und auf „Ausgewählte anlegen“ geklickt hast.</p>
+    <div class="row"><input type="file" id="art-file" accept=".xlsx,.xls,.csv,.txt,.pdf"></div>
+    <textarea id="art-paste" rows="5" style="width:100%;margin-top:8px" placeholder="Bestellung hier einfügen (Strg+V)"></textarea>
+    <div class="row"><button type="button" id="art-pok">Eingefügten Text einlesen</button></div>
+    <div id="art-list">${artListHtml()}</div></div>`}`;
+  bindArtikel(); }
+
+function artDupHtml(){ const d=ART.dup; if(!d) return ""; if(!d.length) return `<p class="ok">✓ In etron gibt es noch keinen Artikel mit dieser Art.-Nr., Lieferanten-Nr. oder EAN.</p>`;
+  return `<div class="note bad"><b>Diesen Artikel gibt es in etron vielleicht schon:</b><ul>${d.map(x=>`<li>${esc(x.name)} <span class="muted">(ID ${x.id}${x.code?", Art.-Nr. "+esc(x.code):""}${x.barcode?", EAN "+esc(x.barcode):""}${x.why?", gleich: "+esc(x.why):""}${x.active===false?", archiviert":""})</span>${ART.pid?` <button type="button" class="sm" data-artlink="${x.id}" data-code="${esc(x.code||"")}">Stattdessen diesen verknüpfen</button>`:""}</li>`).join("")}</ul>Wenn es wirklich ein anderer Artikel ist, noch einmal auf „Trotzdem in etron anlegen“ klicken.</div>`; }
+
+// Abgleich: interne Referenz, EAN und Lieferanten-Art.-Nr. (Lieferanten-Preisliste in etron)
+async function artDupes(rows){ const up=x=>String(x||"").trim().toUpperCase(); const codes=new Set(), eans=new Set();
+  for(const r of rows){ if(r.code) codes.add(up(r.code)); if(r.supcode) codes.add(up(r.supcode)); if(r.ean) eans.add(String(r.ean)); }
+  const res=codes.size||eans.size?await etronCall("art_dupes",{codes:[...codes],eans:[...eans]}):{}; const items=res.items||[], sup=res.sup||[];
+  const out=rows.map(r=>{ const hit=new Map(); const add=(x,why)=>{ const h=hit.get(x.id)||{...x,why:""}; h.why=h.why?h.why+", "+why:why; hit.set(x.id,h); };
+    for(const x of items){ if(r.code&&up(x.code)===up(r.code)) add(x,"Art.-Nr."); else if(r.supcode&&up(x.code)===up(r.supcode)) add(x,"Art.-Nr. = Lief.-Nr."); if(r.ean&&String(x.barcode)===String(r.ean)) add(x,"EAN"); }
+    for(const s of sup) if(r.supcode&&up(s.supcode)===up(r.supcode)) add({id:s.id,name:s.name,code:s.code||"",barcode:s.barcode||""},"Lieferanten-Nr.");
+    return [...hit.values()]; });
+  // Keine Nummer gefunden: nach ähnlichem Namen suchen (die wichtigsten Wörter müssen alle im etron-Namen vorkommen)
+  const idx=rows.map((r,i)=>i).filter(i=>!out[i].length&&rows[i].name).slice(0,150);
+  if(idx.length){ const nr=await etronCall("art_names",{names:idx.map(i=>artWords(rows[i].name))}); (nr.items||[]).forEach((list,j)=>{ for(const x of list||[]) out[idx[j]].push({...x,why:"ähnlicher Name"}); }); }
+  return out; }
+const ART_STOP = new Set("ultimate guard pokemon pokémon magic gathering the of and und der die das mit for von deutsche deutsch version englisch english german edition standard size sleeves tcg".split(" "));
+function artWords(name){ const w=[...new Set(String(name).toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").split(/[^a-z0-9+]+/).filter(x=>x.length>=3&&!ART_STOP.has(x)))];
+  return w.sort((a,b)=>b.length-a.length).slice(0,4); }
+function artVals(f){ const vk=priceOf(f.vk), ek=priceOf(f.ek); return { name:String(f.name||"").trim(), code:String(f.code||"").trim(), ean:String(f.ean||"").replace(/\D/g,""), supcode:String(f.supcode||"").trim(), vk, ek, desc:String(f.desc||"").trim(),
+  supplier:ART.f.supplier||"", categ:ART.f.categ||"", tax:ART.f.tax||"", pos:ART.f.pos||"", type:ART.f.type||"product" }; }
+// Neues App-Produkt (oder vorhandenes gleichen Namens ohne etron-Verknüpfung) mit dem etron-Artikel verknüpfen
+async function artAppProduct(name, r, vk, extra={}){ const ex=Object.values(S.products).find(x=>x.name.toLowerCase()===name.toLowerCase());
+  const link={etronArtId:String(r.id),...(r.code?{articleNo:r.code}:{}),...(vk!=null?{etronPrice:vk}:{})};
+  if(ex){ if(ex.etronArtId&&String(ex.etronArtId)!==String(r.id)) return {id:ex.id,note:"App-Produkt gleichen Namens ist schon mit einem anderen etron-Artikel verknüpft, nicht geändert"};
+    await write("products",ex.id,{...link,...(ex.price==null&&vk!=null?{price:vk}:{}),...(extra.supplierOrdered!=null&&ex.supplierOrdered==null?{supplierOrdered:extra.supplierOrdered}:{})}); return {id:ex.id,note:"mit vorhandenem App-Produkt verknüpft"}; }
+  const id="p-"+name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,50)+"-"+Date.now().toString(36).slice(-4);
+  await write("products",id,{name,group:name.split("|")[0].trim(),variant:(name.split("|")[1]||"").trim(),release:extra.release||"",unit:"",game:ART.f.game||NO_GAME,...link,...(vk!=null?{price:vk}:{}),received:null,supplierOrdered:extra.supplierOrdered??null,supplierConfirmed:null,archived:false},"set");
+  return {id,note:"App-Produkt angelegt"}; }
+async function artCreate(vals, img){ if(!vals.name) throw new Error("Name fehlt"); return await etronCall("art_create",{...vals,...(img?{image:img}:{})}); }
+
+function bindArtikel(){ const f=ART.f;
+  app.querySelectorAll("[data-af]").forEach(el=>{ const k=el.dataset.af; const set=()=>{ f[k]=el.type==="checkbox"?el.checked:el.value; if(ART_COMMON.includes(k)) artDefSave({[k]:f[k]}); if(["code","ean","supcode"].includes(k)){ ART.dup=null; ART.force=false; const d=$("#art-dup"); if(d) d.innerHTML=""; const g=$("#art-go"); if(g) g.textContent="In etron anlegen"; } };
+    el.addEventListener(el.tagName==="SELECT"||el.type==="checkbox"?"change":"input", set); });
+  const sq=$("#art-sq"), sqb=$("#art-sqb"); sq.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); sqb.click(); } };
+  sqb.onclick=async()=>{ const q=sq.value.trim(); if(q.length<2) return toast("Bitte mindestens 2 Zeichen eingeben."); const out=$("#art-sqr"); out.textContent="… suche";
+    try{ const r=await etronCall("art_sup_search",{q}); out.innerHTML=(r.items||[]).length?r.items.map(x=>`<button type="button" class="sm" data-sup="${x.id}" data-n="${esc(x.name)}">${esc(x.name)}</button>`).join(" "):"Keine Firma mit diesem Namen gefunden.";
+      out.querySelectorAll("[data-sup]").forEach(b=>b.onclick=()=>{ const x={id:+b.dataset.sup,name:b.dataset.n}; if(!ART.supX.some(y=>y.id===x.id)) ART.supX.push(x); f.supplier=String(x.id); artDefSave({supplier:f.supplier}); render(); }); }
+    catch(e){ out.innerHTML=`<span class="bad">${esc(e.message||e)}</span>`; } };
+  $("#art-cp").onclick=()=>{ if(!f.supcode) return toast("Keine Lieferanten-Art.-Nr. eingetragen."); f.code=f.supcode; ART.dup=null; ART.force=false; render(); };
+  $("#art-clr").onclick=()=>{ const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; ART.res=""; ART.scrSt=""; const p=S.products[ART.pid]; if(p) Object.assign(ART.f,{name:p.name,code:p.articleNo||""}); render(); };
+  $("#art-url").onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#art-scr").click(); } };
+  $("#art-scr").onclick=async()=>{ const url=String(f.url||"").trim(); if(!isHeo(url)) return toast("Bitte einen Link von heo.com einfügen.");
+    const b=$("#art-scr"); b.disabled=true; ART.scrSt="… heo-Seite wird im Hintergrund geöffnet und gelesen (bis zu 30 Sekunden)"; $("#art-scrst").textContent=ART.scrSt;
+    try{ const o=await artScrape(url); const got=[];
+      for(const k of ["name","ean","supcode","desc","img","release"]) if(o[k]){ f[k]=o[k]; got.push(k); }
+      if(o.vk!=null){ f.vk=String(o.vk).replace(".",","); got.push("vk"); } if(o.ek!=null){ f.ek=String(o.ek).replace(".",","); got.push("ek"); }
+      if(!ART.f.supplier){ artPickHeo(); if(ART.f.supplier) artDefSave({supplier:ART.f.supplier}); }
+      const nm={name:"Name",ean:"EAN",supcode:"heo-Nr.",desc:"Beschreibung",img:"Bild",release:"Release",vk:"UVP",ek:"Einkaufspreis"};
+      ART.scrSt = got.length ? `<span class="ok">✓ Übernommen: ${got.map(k=>nm[k]).join(", ")}.</span> Bitte alles prüfen.${o.ek==null?" Kein Einkaufspreis gefunden (bei heo angemeldet?).":""}${o.vk==null?" Keine UVP gefunden, Verkaufspreis bitte selbst eintragen.":""}`
+        : `<span class="bad">Auf der Seite wurden keine Artikeldaten gefunden.</span>${o.login?" Bitte in Chrome bei heo anmelden und noch einmal versuchen.":""}`;
+      if(o.pairs.length) ART.scrSt+=` <details><summary>Gelesene Angaben anzeigen</summary><table>${o.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(x.slice(0,120))}</td></tr>`).join("")}</table></details>`;
+      ART.dup=null; ART.force=false; }
+    catch(e){ ART.scrSt=`<span class="bad">✗ ${esc(e.message||e)}</span>`; }
+    render(); };
+  app.querySelectorAll("[data-artlink]").forEach(b=>b.onclick=async()=>{ const p=S.products[ART.pid]; if(!p) return; const id=b.dataset.artlink;
+    if(await write("products",p.id,{etronArtId:String(id),...(b.dataset.code?{articleNo:b.dataset.code}:{})})){ toast("Mit dem vorhandenen etron-Artikel verknüpft"); ART.pid=undefined; location.hash="produkt-"+p.id; } });
+  $("#art-go").onclick=async()=>{ if(ART.busy) return; const vals=artVals(f); if(!vals.name) return toast("Bitte einen Namen eintragen.");
+    if(vals.ean&&!/^\d{8,14}$/.test(vals.ean)) return toast("Die EAN muss 8 bis 14 Ziffern haben.");
+    if(String(f.vk||"").trim()&&vals.vk==null) return toast("Verkaufspreis bitte als Zahl, z. B. 14,99."); if(String(f.ek||"").trim()&&vals.ek==null) return toast("Einkaufspreis bitte als Zahl, z. B. 9,59.");
+    ART.busy=true; const go=$("#art-go"); go.disabled=true; const out=$("#art-res"); out.textContent="… prüfe, ob es den Artikel in etron schon gibt";
+    try{
+      if(!ART.force){ const [d]=await artDupes([vals]); ART.dup=d; if(d.length){ ART.force=true; ART.res=""; ART.busy=false; return render(); } }
+      out.textContent="… lege in etron an"; const img=f.img&&f.imgOn?await artImage(f.img):null;
+      const r=await artCreate(vals,img); if(!r.id) throw new Error("etron hat den Artikel angelegt (Vorlage "+r.tmpl+"), aber keine Artikel-ID zurückgegeben. Bitte in etron prüfen.");
+      let note=""; const p=S.products[ART.pid];
+      if(p){ await write("products",p.id,{etronArtId:String(r.id),...(r.code?{articleNo:r.code}:{}),...(vals.vk!=null?{etronPrice:vals.vk,...(p.price==null?{price:vals.vk}:{})}:{})}); note=` Das Produkt „${esc(p.name)}“ ist jetzt damit verknüpft.`; }
+      else if(f.app){ const a=await artAppProduct(vals.name,r,vals.vk,{release:String(f.release||"").trim()}); note=` <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>.`; }
+      ART.res=`<p class="ok">✓ In etron angelegt: „${esc(vals.name)}“ (Artikel-ID ${r.id}${img?", mit Bild":f.img&&f.imgOn?", Bild konnte nicht geladen werden":""}).${note}</p>`;
+      dlog("INFO",`Artikel in etron angelegt: ID ${r.id}, Vorlage ${r.tmpl}`);
+      const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; }
+    catch(e){ ART.res=`<p class="bad">✗ ${esc(e.message||e)}</p>`; }
+    ART.busy=false; render(); };
+  const fl=$("#art-file"); if(fl) fl.onchange=async e=>{ const file=e.target.files[0]; if(!file) return; try{ let rows;
+      if(/\.pdf$/i.test(file.name)){ const t=artTextRows((await pdfLines(await file.arrayBuffer())).join("\n")); if(!t) return toast("In diesem PDF wurden keine Rechnungs- oder Bestellzeilen erkannt."); return artListSet(t.rows,t.kind,file.name); }
+      if(/\.(csv|txt)$/i.test(file.name)) rows=parseCsv(await file.text()); else { await loadXlsx(); const wb=XLSX.read(await file.arrayBuffer(),{type:"array",cellDates:true}); rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:"",raw:true}); }
+      artListLoad(rows, file.name); }catch(err){ toast("Datei nicht lesbar: "+(err.message||err)); } };
+  const pk=$("#art-pok"); if(pk) pk.onclick=()=>{ const t=$("#art-paste").value; if(!t.trim()) return toast("Bitte zuerst die Bestellung in das Feld einfügen.");
+    const x=artTextRows(t); if(x) artListSet(x.rows,x.kind,"eingefügter Text"); else artListLoad(parseCsv(t),"eingefügter Text"); $("#art-paste").value=""; };
+  bindArtList(); }
+
+// ---- Liste / Bestellung
+const ART_COLS = [["name","Name"],["supcode","Lieferanten-Art.-Nr."],["code","Art.-Nr. (intern)"],["ean","EAN"],["ek","Einkaufspreis"],["vk","Verkaufspreis"],["qty","Menge"],["release","Release"]];
+const ART_GUESS = { name:/bezeichnung|artikelname|^name|produkt|titel|description/i, supcode:/lief|heo|bestell.?nr|artikel.?nr|art\.?.?nr|^sku|item/i, code:/intern|referenz/i, ean:/ean|gtin|barcode|upc/i,
+  ek:/ek|einkauf|netto|händler|ihr preis|einzelpreis|preis/i, vk:/vk|uvp|verkauf|empf/i, qty:/menge|anzahl|stück|qty|bestellt/i, release:/release|erschein|liefertermin|datum/i };
+// heo-Bestellung: „10 von 10  UGD011897  Name…  10,66 €  10,00 %  95,94 €“ (Namen sind gekürzt → Details von der heo-Seite holen)
+function artHeoParse(t){ const out=[]; const re=/^\s*(\d+)\s+von\s+(\d+)\s+([A-Z]{2,6}\d{3,}[A-Z0-9-]*)\s+(.+?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s*€?\s+(\d{1,3},\d{1,2})\s*%\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s*€?\s*$/;
+  for(const line of String(t).split(/\r?\n/)){ const m=line.replace(/\t/g," ").match(re); if(!m) continue; const qty=+m[2]||+m[1], tot=priceOf(m[7]), unit=priceOf(m[5]);
+    out.push({supcode:m[3],name:m[4].replace(/\s*[?"“]+$/,"").trim(),short:true,qty,ek:tot!=null&&qty?r2(tot/qty):unit,ekList:unit,url:HEO_URL(m[3])}); }
+  return out; }
+// heo-Rechnung (PDF oder kopierter Text): „1  PCI14745  Name…  2  31,00 €  0,00 %  31,00 €  62,00 €“, Name läuft oft in der nächsten Zeile weiter
+function artInvParse(lines){ const P="(\\d{1,3}(?:\\.\\d{3})*,\\d{2})\\s*€";
+  const re=new RegExp("^\\s*(\\d{1,3})\\s+([A-Z0-9][A-Z0-9.\\-/]{3,})\\s+(.+?)\\s+(\\d{1,5})\\s+"+P+"\\s+(\\d{1,3},\\d{1,2})\\s*%\\s+"+P+"\\s+"+P+"\\s*$");
+  const out=[]; let cur=null;
+  for(const raw of lines){ const l=String(raw).replace(/\t/g," "), m=l.match(re);
+    if(m){ cur={supcode:m[2],name:m[3].trim(),qty:+m[4],ekList:priceOf(m[5]),ek:priceOf(m[7]),url:HEO_URL(m[2])}; out.push(cur); continue; }
+    const t=l.trim(); if(!cur||!t) continue;
+    if(/Herkunftsland|HS-Code|Zwischensumme|Seite \d|Übertrag|€|%|^Pos\.|Rechnung/i.test(t)){ cur=null; continue; }
+    if(t.length<80) cur.name=(cur.name+" "+t).replace(/\s+/g," ").trim(); }
+  return out; }
+function loadPdfjs(){ return window.pdfjsLib?Promise.resolve():new Promise((ok,no)=>{ const sc=document.createElement("script"); sc.src="vendor/pdfjs/pdf.min.js"; sc.onload=()=>{ window.pdfjsLib.GlobalWorkerOptions.workerSrc="vendor/pdfjs/pdf.worker.min.js"; ok(); }; sc.onerror=()=>no(new Error("PDF-Bibliothek nicht ladbar")); document.head.appendChild(sc); }); }
+// PDF nur hier im Browser lesen: Textstücke nach Zeilen (y) und Spalten (x) zusammensetzen
+async function pdfLines(buf){ await loadPdfjs(); const doc=await window.pdfjsLib.getDocument({data:buf}).promise; const out=[];
+  for(let i=1;i<=doc.numPages;i++){ const tc=await (await doc.getPage(i)).getTextContent(); const rows=[];
+    for(const it of tc.items){ if(!it.str||!it.str.trim()) continue; const x=it.transform[4], y=it.transform[5]; let row=rows.find(q=>Math.abs(q.y-y)<2.5); if(!row){ row={y,items:[]}; rows.push(row); } row.items.push({x,s:it.str.trim()}); }
+    rows.sort((a,b)=>b.y-a.y); for(const row of rows){ row.items.sort((a,b)=>a.x-b.x); out.push(row.items.map(q=>q.s).join("   ")); } }
+  return out; }
+function artTextRows(t){ const lines=String(t).split(/\r?\n/); let rows=artHeoParse(t); if(rows.length) return {rows,kind:"heo-Bestellung"}; rows=artInvParse(lines); if(rows.length) return {rows,kind:"heo-Rechnung"}; return null; }
+function artListLoad(rows, src){ rows=(rows||[]).map(r=>r.map(x=>x instanceof Date?x.toISOString().slice(0,10):String(x??"").trim())).filter(r=>r.some(Boolean)); if(!rows.length) return toast("Keine Zeilen gefunden.");
+  const head=rows[0], hits=ART_COLS.filter(([k])=>head.some(h=>ART_GUESS[k].test(h))).length, hasHead=hits>=2;
+  const map={}; const used=new Set(); if(hasHead) for(const [k] of ART_COLS){ const i=head.findIndex((h,j)=>!used.has(j)&&ART_GUESS[k].test(h)); if(i>=0){ map[k]=i; used.add(i); } }
+  ART.L={src,raw:rows,hasHead,map,heo:false,rows:null,checked:false}; artListApply(); render(); }
+function artListApply(){ const L=ART.L; const body=L.hasHead?L.raw.slice(1):L.raw; const g=(r,k)=>L.map[k]!=null?String(r[L.map[k]]||"").trim():"";
+  L.rows=body.slice(0,300).map(r=>({name:g(r,"name"),supcode:g(r,"supcode"),code:g(r,"code"),ean:g(r,"ean").replace(/\D/g,""),ek:priceOf(g(r,"ek")),vk:priceOf(g(r,"vk")),qty:parseInt(g(r,"qty"),10)||null,release:g(r,"release")?isoFix(g(r,"release")):"",on:true,st:""})).filter(r=>r.name||r.supcode||r.code||r.ean);
+  L.checked=false; L.more=Math.max(0,body.length-300); }
+function artListSet(rows, kind, from){ ART.L={src:kind+(from?" ("+from+")":""),heo:/^heo/.test(kind),rows:rows.map(r=>({...r,on:true,st:""})),checked:false}; if(/^heo/.test(kind)&&!ART.f.supplier){ artPickHeo(); if(ART.f.supplier) artDefSave({supplier:ART.f.supplier}); } render(); }
+function artListHtml(){ const L=ART.L; if(!L||!L.rows) return ""; const rows=L.rows, n=rows.filter(r=>r.on).length, busy=!!L.busy;
+  const mapUi=L.raw?`<details ${L.checked?"":"open"}><summary>Spalten zuordnen (${esc(L.src)})</summary><div class="form"><label class="row" style="gap:8px"><input type="checkbox" id="artl-head" ${L.hasHead?"checked":""}> Erste Zeile sind Überschriften</label>
+    ${ART_COLS.map(([k,lab])=>`<label>${lab}<select data-artmap="${k}"><option value="">– nicht vorhanden –</option>${L.raw[0].map((h,i)=>`<option value="${i}" ${L.map[k]===i?"selected":""}>${esc(L.hasHead?h||"Spalte "+(i+1):"Spalte "+(i+1)+": "+String(h).slice(0,25))}</option>`).join("")}</select></label>`).join("")}</div></details>`:"";
+  return `${mapUi}<p><b>${rows.length} Zeilen</b> aus ${esc(L.src)}${L.more?`, ${L.more} weitere nicht übernommen (höchstens 300 auf einmal)`:""}. ${L.heo?"Die Namen in der heo-Bestellung sind gekürzt. „Details von heo holen“ liest für jede Zeile die heo-Seite (voller Name, EAN, UVP, Bild).":""}</p>
+    <div class="row">${L.heo||rows.some(r=>r.url)?`<button type="button" id="artl-det" ${busy?"disabled":""}>Details von heo holen</button>`:""}<button type="button" id="artl-chk" ${busy?"disabled":""}>Mit etron abgleichen</button>
+      <button type="button" class="pri" id="artl-go" ${!L.checked||!n||busy?"disabled":""} title="${L.checked?"":"Bitte zuerst mit etron abgleichen"}">Ausgewählte anlegen (${n})</button>${busy?`<button type="button" id="artl-stop">Anhalten</button>`:""}<button type="button" id="artl-x" ${busy?"disabled":""}>Liste verwerfen</button></div>
+    <p class="muted">${L.checked?"Abgeglichen. Zeilen, die es in etron schon gibt, sind abgewählt.":"Noch nicht abgeglichen."} Neue Verkaufspreise ohne UVP bitte in der Tabelle eintragen. Lieferant, Kategorie, Steuer und Typ kommen aus „Gemeinsame Einstellungen“ oben.</p>
+    <div class="tablebox"><table><thead><tr><th><input type="checkbox" id="artl-all" ${rows.every(r=>r.on)?"checked":""}></th><th>Name</th><th>Lief.-Nr.</th><th>Art.-Nr.</th><th>EAN</th><th>EK</th><th>VK</th><th>Menge</th><th>Status</th></tr></thead><tbody>
+    ${rows.map((r,i)=>`<tr${r.dup?.length?' class="dim"':""}><td><input type="checkbox" data-artr="${i}" ${r.on?"checked":""} ${r.done?"disabled":""}></td>
+      <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>
+      <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="code" value="${esc(r.code)}" style="width:110px"></td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px"></td>
+      <td>${r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
+      <td>${r.st||""}${r.dup?.length?`<span class="bad">gibt es schon:</span> ${r.dup.map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span>':""}</td></tr>`).join("")}</tbody></table></div>`; }
+function drawArtList(){ const el=$("#art-list"); if(!el) return; el.innerHTML=artListHtml(); bindArtList(); }
+function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
+  const hd=$("#artl-head"); if(hd) hd.onchange=()=>{ L.hasHead=hd.checked; artListApply(); drawArtList(); };
+  app.querySelectorAll("[data-artmap]").forEach(s=>s.onchange=()=>{ const k=s.dataset.artmap; if(s.value==="") delete L.map[k]; else L.map[k]=+s.value; artListApply(); drawArtList(); });
+  app.querySelectorAll("[data-artr]").forEach(c=>c.onchange=()=>{ L.rows[+c.dataset.artr].on=c.checked; drawArtList(); });
+  const all=$("#artl-all"); if(all) all.onchange=()=>{ L.rows.forEach(r=>{ if(!r.done) r.on=all.checked; }); drawArtList(); };
+  app.querySelectorAll("[data-artc]").forEach(inp=>inp.addEventListener("change",()=>{ const r=L.rows[+inp.dataset.artc], k=inp.dataset.k; let v=inp.value.trim();
+    if(k==="vk"){ v=priceOf(v); if(inp.value.trim()&&v==null) toast("Preis bitte als Zahl, z. B. 14,99."); } if(k==="ean") v=v.replace(/\D/g,""); r[k]=v; if(k!=="vk"&&k!=="name"){ L.checked=false; r.dup=null; drawArtList(); } }));
+  const x=$("#artl-x"); if(x) x.onclick=()=>{ ART.L=null; drawArtList(); };
+  const stop=$("#artl-stop"); if(stop) stop.onclick=()=>{ L.stop=true; stop.disabled=true; };
+  const det=$("#artl-det"); if(det) det.onclick=async()=>{ L.busy=true; L.stop=false; drawArtList(); let ok=0;
+    for(const r of L.rows){ if(L.stop) break; if(!r.on||r.done) continue; const url=r.url||(r.supcode?HEO_URL(r.supcode):""); if(!url){ continue; } r.st="… lese heo-Seite"; drawArtList();
+      try{ const o=await artScrape(url); if(o.name&&!/loading/i.test(o.name)){ r.name=o.name; r.full=true; } if(o.ean) r.ean=o.ean; if(o.vk!=null&&r.vk==null) r.vk=o.vk; if(o.release&&!r.release) r.release=o.release; if(o.img) r.img=o.img; if(o.desc) r.desc=o.desc;
+        r.st=o.name||o.ean?'<span class="ok">✓ Details</span> ':(o.login?'<span class="bad">bei heo nicht angemeldet?</span> ':'<span class="bad">keine Daten gefunden</span> '); if(o.name||o.ean) ok++; }
+      catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; if(/Erweiterung/.test(e.message||"")){ L.stop=true; } }
+      L.checked=false; r.dup=null; drawArtList(); }
+    L.busy=false; drawArtList(); toast(`Details für ${ok} Zeilen geholt. Bitte jetzt „Mit etron abgleichen“.`); };
+  const chk=$("#artl-chk"); if(chk) chk.onclick=async()=>{ L.busy=true; drawArtList();
+    try{ const d=await artDupes(L.rows); L.rows.forEach((r,i)=>{ if(r.done) return; r.dup=d[i]; if(d[i].length) r.on=false; if(/lese|Details|bad/.test(r.st||"")&&!/✓ angelegt/.test(r.st)) r.st=r.st.includes("✓ Details")?r.st:""; }); L.checked=true;
+      // gleiche Lief.-Nr./EAN doppelt in der Liste
+      const seen=new Map(); L.rows.forEach((r,i)=>{ const k=r.supcode||r.ean||r.code; if(!k) return; if(seen.has(k)){ r.on=false; r.st='<span class="bad">doppelt in der Liste</span> '; } else seen.set(k,i); });
+      toast(`Abgleich fertig: ${L.rows.filter(r=>r.dup?.length).length} gibt es schon, ${L.rows.filter(r=>!r.dup?.length&&!r.done).length} neu.`); }
+    catch(e){ toast("Abgleich fehlgeschlagen: "+(e.message||e),6000); }
+    L.busy=false; drawArtList(); };
+  const go=$("#artl-go"); if(go) go.onclick=async()=>{ const todo=L.rows.filter(r=>r.on&&!r.done); if(!todo.length) return;
+    const noVk=todo.filter(r=>r.vk==null).length; if(noVk&&!L.vkOk){ L.vkOk=true; return toast(`${noVk} Zeilen haben keinen Verkaufspreis. Noch einmal klicken, um sie trotzdem (ohne Preis) anzulegen.`,6000); }
+    L.busy=true; L.stop=false; drawArtList(); let ok=0, bad=0;
+    for(const r of todo){ if(L.stop) break; r.st="… lege an"; drawArtList();
+      try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,desc:r.desc||""};
+        const img=r.img&&ART.f.imgOn!==false?await artImage(r.img):null; const res=await artCreate(vals,img); if(!res.id) throw new Error("keine Artikel-ID zurück (Vorlage "+res.tmpl+")");
+        let note=""; if(ART.f.app){ const a=await artAppProduct(r.name,res,r.vk,{release:r.release||"",supplierOrdered:r.qty}); note=`, <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>`; }
+        r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt (ID ${res.id})</span>${note} `; ok++; }
+      catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; bad++; }
+      drawArtList(); }
+    dlog("INFO",`Artikel-Liste: ${ok} in etron angelegt, ${bad} Fehler`); L.busy=false; L.vkOk=false; drawArtList(); toast(`${ok} Artikel angelegt${bad?`, ${bad} mit Fehler (siehe Status)`:""}.`,6000); };
 }
 
 // ---------- Excel-Import (läuft nur im Browser, nichts verlässt das Gerät außer in die Dropbox)
