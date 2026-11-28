@@ -854,9 +854,9 @@ const EW_ACTIONS = {
   // ---- Artikelanlage (Beta)
   async art_lists(c){ const get=async(m,dom,f,ord)=>{ try{ return {items:ewList(await ewCall(c,"GET","/search_read/"+m,{domain:dom,fields:f,limit:500,...(ord?{order:ord}:{})}))}; }catch(e){ return {err:`${m}: ${String(e.message||e).slice(0,160)}`}; } };
     const sup=await get("res.partner",[["supplier_rank",">",0]],["id","name"],"name"), cat=await get("product.category",[],["id","complete_name","name"],"complete_name"),
-      tax=await get("account.tax",[["type_tax_use","=","sale"]],["id","name","amount"],"sequence"), pos=await get("pos.category",[],["id","name"],"name");
+      tax=await get("account.tax",[["type_tax_use","=","sale"]],["id","name","amount"],"sequence"), pos=await get("pos.category",[],["id","name"],"name"), pub=await get("product.public.category",[],["id","display_name"],"sequence");
     const m=(r,fn)=>r.items?r.items.map(fn):null;
-    return { sup:m(sup,x=>({id:x.id,name:ewStr(x.name,80)})), cat:m(cat,x=>({id:x.id,name:ewStr(x.complete_name||x.name,120)})), tax:m(tax,x=>({id:x.id,name:ewStr(x.name,80)})), pos:m(pos,x=>({id:x.id,name:ewStr(x.name,80)})),
+    return { sup:m(sup,x=>({id:x.id,name:ewStr(x.name,80)})), cat:m(cat,x=>({id:x.id,name:ewStr(x.complete_name||x.name,120)})), tax:m(tax,x=>({id:x.id,name:ewStr(x.name,80)})), pos:m(pos,x=>({id:x.id,name:ewStr(x.name,80)})), pub:m(pub,x=>({id:x.id,name:ewStr(x.display_name,120)})).sort((a,b)=>a.name.localeCompare(b.name,"de")),
       err:[sup,cat,tax].filter(r=>r.err).map(r=>r.err).join(" · ") }; },
   async art_sup_search(c,b){ const q=ewStr(b.q,60); if(q.length<2) return {items:[]};
     return {items:ewList(await ewCall(c,"GET","/search_read/res.partner",{domain:["&",["is_company","=",true],["name","ilike",q]],fields:["id","name"],limit:20,order:"name"})).map(x=>({id:x.id,name:ewStr(x.name,80)}))}; },
@@ -876,13 +876,40 @@ const EW_ACTIONS = {
       const dom=[]; for(let i=0;i<ws.length;i++) dom.push("&"); dom.push(A,...ws.map(x=>["name","ilike",x]));
       out.push(ewList(await ewCall(c,"GET","/search_read/product.product",{domain:dom,fields:["id","default_code","barcode","name","active"],limit:3})).map(p=>({id:p.id,code:p.default_code||"",barcode:p.barcode||"",name:ewStr(p.name,120),active:p.active!==false}))); }
     return {items:out}; },
+  // Feld-Erkennung: einen fertigen Artikel lesen und herausfinden, wie Herstellercode, Onlineshop-Kategorie, Langtext und verantwortliche Person intern heißen
+  async art_ref(c,b){ const q=ewStr(b.q,60); if(!q) throw new Error("Bitte eine etron-Artikel-ID oder Lieferanten-Nr. eintragen"); const A=["active","in",[true,false]]; let tid=null;
+    const t0=v=>Array.isArray(v)?v[0]:v;
+    if(/^\d+$/.test(q)){ const p=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["id","=",+q]],fields:["id","product_tmpl_id"],limit:1}))[0]; tid=p&&t0(p.product_tmpl_id); }
+    if(!tid){ const si=ewList(await ewCall(c,"GET","/search_read/product.supplierinfo",{domain:[["product_code","=",q]],fields:["product_tmpl_id"],limit:1}))[0]; tid=si&&t0(si.product_tmpl_id); }
+    if(!tid){ const p=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["default_code","=",q]],fields:["id","product_tmpl_id"],limit:1}))[0]; tid=p&&t0(p.product_tmpl_id); }
+    if(!tid) throw new Error(`Keinen etron-Artikel zu „${q}“ gefunden`);
+    const t=ewList(await ewCall(c,"GET","/search_read/product.template",{domain:["&",A,["id","=",tid]],limit:1}))[0]; if(!t) throw new Error("Artikel nicht lesbar");
+    const sellers=ewList(await ewCall(c,"GET","/search_read/product.supplierinfo",{domain:[["product_tmpl_id","=",tid]],limit:10}));
+    const codes=new Set(sellers.map(x=>String(x.product_code||"").trim()).filter(Boolean)), sids=new Set(sellers.map(x=>t0(x.partner_id)).filter(Boolean));
+    const skip=/^(default_code|barcode|name|display_name|seller_ids|variant_seller_ids|company_id|create_uid|write_uid|message_|activity_|website_id|__)/;
+    const keys=Object.keys(t).filter(k=>!skip.test(k)); const out={tmpl:tid,name:ewStr(t.name,120),fields:[],herst:"",resp:"",pub:"",desc:"",disc:sellers.length&&("discount" in sellers[0])};
+    for(const k of keys){ const v=t[k]; if(typeof v==="string"&&codes.has(v.trim())&&!out.herst) out.herst=k;
+      if(Array.isArray(v)&&v.length===2&&typeof v[0]==="number"&&typeof v[1]==="string"&&sids.has(v[0])&&!out.resp) out.resp=k; }
+    if("public_categ_ids" in t) out.pub="public_categ_ids";
+    const txt=keys.filter(k=>typeof t[k]==="string"&&/descr|text|website/i.test(k)&&String(t[k]).replace(/<[^>]*>/g,"").trim().length>40).sort((a,b)=>(/ecommerce|website/.test(b)?1:0)-(/ecommerce|website/.test(a)?1:0)||String(t[b]).length-String(t[a]).length);
+    out.desc=txt[0]||"";
+    out.fields=keys.filter(k=>t[k]!==false&&t[k]!==null&&!(typeof t[k]==="string"&&t[k].length>300)&&!(Array.isArray(t[k])&&!t[k].length)).map(k=>[k,ewStr(Array.isArray(t[k])?JSON.stringify(t[k]):t[k],80)]).slice(0,200);
+    out.sellerKeys=sellers[0]?Object.keys(sellers[0]).filter(k=>!/^(__|create_|write_|display_name)/.test(k)):[];
+    dlog("INFO",`Feld-Erkennung an Vorlage ${tid}: Herstellercode=${out.herst||"?"}, Verantwortlich=${out.resp||"?"}, Onlineshop=${out.pub||"?"}, Langtext=${out.desc||"?"}, Rabatt=${out.disc}`);
+    return out; },
   async art_create(c,b){ const name=ewStr(b.name,200); if(!name) throw new Error("Name fehlt"); const id=x=>parseInt(x,10)>0?parseInt(x,10):null, num=x=>typeof x==="number"&&isFinite(x)&&x>=0?x:null;
     const v={name,sale_ok:true,purchase_ok:true,detailed_type:["product","consu","service"].includes(b.type)?b.type:"product"};
     if(ewStr(b.code)) v.default_code=ewStr(b.code,60); if(/^\d{8,14}$/.test(ewStr(b.ean))) v.barcode=ewStr(b.ean);
     if(num(b.vk)!=null) v.list_price=num(b.vk); if(num(b.ek)!=null) v.standard_price=num(b.ek);
     if(id(b.categ)) v.categ_id=id(b.categ); if(id(b.tax)) v.taxes_id=[[6,0,[id(b.tax)]]]; if(id(b.pos)){ v.pos_categ_id=id(b.pos); v.available_in_pos=true; }
-    if(id(b.supplier)) v.seller_ids=[[0,0,{partner_id:id(b.supplier),min_qty:1,...(num(b.ek)!=null?{price:num(b.ek)}:{}),...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})}]];
-    if(ewStr(b.desc)) v.description_sale=ewStr(b.desc,2000);
+    const M=b.map||{}, fn=x=>/^[a-z_][a-z0-9_]{1,60}$/.test(String(x||""))?x:"";
+    const disc=num(b.disc)!=null&&b.disc<100?num(b.disc):null, ekl=num(b.ekList);
+    if(id(b.supplier)){ const line={partner_id:id(b.supplier),min_qty:1,...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})};
+      if(M.disc&&ekl!=null){ line.price=ekl; if(disc!=null) line.discount=disc; } else if(num(b.ek)!=null) line.price=num(b.ek);
+      v.seller_ids=[[0,0,line]]; if(fn(M.resp)) v[fn(M.resp)]=id(b.supplier); }
+    if(fn(M.herst)&&ewStr(b.supcode)) v[fn(M.herst)]=ewStr(b.supcode,60);
+    if(id(b.pub)&&fn(M.pub)) v[fn(M.pub)]=[[6,0,[id(b.pub)]]];
+    if(ewStr(b.desc)){ const d=ewStr(b.desc,4000); if(fn(M.desc)) v[fn(M.desc)]=/<[a-z]/i.test(d)?d:d.split(/\n{2,}/).map(x=>"<p>"+x.replace(/[&<>]/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[ch])).replace(/\n/g,"<br>")+"</p>").join(""); else v.description_sale=d.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,2000); }
     if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)) v.image_1920=b.image;
     const tid=etronIdOf(await ewCall(c,"POST","/create/product.template",null,{values:v})); if(!tid) throw new Error("etron hat keine Nummer für den neuen Artikel zurückgegeben");
     const pp=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",["active","in",[true,false]],["product_tmpl_id","=",tid]],fields:["id","default_code"],limit:2}));
@@ -1986,7 +2013,10 @@ function bindBeta(){ const b=$("#beta-on"); if(b) b.onchange=()=>{ store("vb.bet
 const ART = { pid:undefined, f:{}, lists:null, loading:false, supX:[], dup:null, force:false, busy:false, res:"", scrSt:"", L:null };
 const artDef = () => { try{ return JSON.parse(store("vb.artdef")||"{}")||{}; }catch(e){ return {}; } };
 const artDefSave = o => store("vb.artdef", JSON.stringify({...artDef(),...o}));
-const ART_COMMON = ["supplier","categ","tax","pos","type"];
+const ART_COMMON = ["supplier","categ","tax","pos","type","pub"];
+const artMap = () => { try{ return JSON.parse(store("vb.artmap")||"{}")||{}; }catch(e){ return {}; } };
+// Verkaufspreis: x,95 bis x,99 wird auf den nächsten Euro aufgerundet (Tommy, 28.11.: 19,99 → 20)
+const vkRound = x => x==null?null:(Math.round(x*100)%100>=95?Math.ceil(x):x);
 const HEO_BASE = location.hostname==="localhost" ? "http://127.0.0.1:8792" : "https://www.heo.com";   // localhost: nur zum Testen mit einer nachgebauten heo-Seite
 const HEO_URL = code => `${HEO_BASE}/de/de/product/${encodeURIComponent(code)}`;
 const isHeo = u => /^https:\/\/(www\.)?heo\.com\//i.test(String(u||"")) || (location.hostname==="localhost" && String(u||"").startsWith(HEO_BASE));
@@ -2016,7 +2046,7 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
   const rel=pv(/(erschein|release|liefertermin|verfügbar ab|vö\b)/)||tx(/(?:Erscheinungs(?:datum|termin)|Release|Liefertermin)[^\d\n]{0,20}(\d{1,2}\.\d{1,2}\.\d{4})/i);
   if(rel){ const dm=rel.match(/\d{1,2}\.\d{1,2}\.\d{4}/); o.release=dm?isoFix(dm[0]):rel.slice(0,30); }
   o.img=o.img||m["og:image"]||d.img||""; if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
-  o.desc=String(o.desc||m["og:description"]||"").slice(0,2000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
+  o.desc=String(d.desc||o.desc||m["og:description"]||"").trim().slice(0,4000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
   o.login=/anmelden|einloggen|login/i.test(h1)||(!o.name&&/anmelden|login/i.test(T.slice(0,2000)));
   return o; }
 async function artImage(url){ if(!url) return null; try{ const r=await extSend({type:"img",url}); return r?.b64||null; }catch(e){ return null; } }
@@ -2041,9 +2071,11 @@ function renderArtikel(pid){ pid=pid||null;
       <label>Kategorie${artSel("categ",Ls.cat,"– Standard von etron –")}</label>
       <label>Steuer (Verkauf)${artSel("tax",Ls.tax,"– Standard von etron –")}</label>
       <label>Kassenkategorie${artSel("pos",Ls.pos,"– keine –")}</label>
+      ${artMap().pub?`<label>Onlineshop-Kategorie${artSel("pub",Ls.pub,"– keine –")}</label>`:""}
       <label>Artikeltyp<select data-af="type">${[["product","Lagerartikel"],["consu","Verbrauchsartikel"],["service","Dienstleistung"]].map(([k,n])=>`<option value="${k}" ${f.type===k?"selected":""}>${n}</option>`).join("")}</select></label>
       ${p?"":`<label class="row" style="gap:8px"><input type="checkbox" data-af="app" ${f.app?"checked":""}> Auch als Produkt in der App anlegen</label><label>Spiel für die App<select data-af="game">${gameOptions(f.game)}</select></label>`}
-    </div></div>
+    </div>
+    ${artMapHtml()}</div>
   <div class="panel"><h2>Ein Artikel</h2>
     <div class="row" style="gap:6px"><input id="art-url" data-af="url" value="${v("url")}" placeholder="heo-Link einfügen, z. B. https://www.heo.com/de/de/product/UGD011897" style="flex:1"><button type="button" class="sm" id="art-scr">Daten von heo holen</button></div>
     <p class="muted" id="art-scrst">${ART.scrSt}</p>
@@ -2053,7 +2085,9 @@ function renderArtikel(pid){ pid=pid||null;
       <label>EAN / Barcode<input data-af="ean" value="${v("ean")}" inputmode="numeric"></label>
       <label>Lieferanten-Art.-Nr.<input data-af="supcode" value="${v("supcode")}"></label>
       <label>Verkaufspreis (brutto)<input data-af="vk" value="${v("vk")}" placeholder="z. B. 14,99"></label>
-      <label>Einkaufspreis<input data-af="ek" value="${v("ek")}" placeholder="z. B. 9,59"></label>
+      <label>Einkaufspreis (Liste)<input data-af="ekList" value="${v("ekList")}" placeholder="z. B. 10,66"></label>
+      <label>Rabatt %<input data-af="disc" value="${v("disc")}" placeholder="z. B. 10"></label>
+      <label>Einkaufspreis netto<input data-af="ek" value="${v("ek")}" placeholder="wird berechnet"></label>
       ${p?"":`<label>Release (für die App)<input data-af="release" value="${v("release")}" placeholder="2027-05-15 oder leer"></label>`}
       <label class="wide">Beschreibung<textarea data-af="desc" rows="2">${v("desc")}</textarea></label>
       ${f.img?`<label class="row wide" style="gap:8px"><input type="checkbox" data-af="imgOn" ${f.imgOn?"checked":""}><img src="${esc(f.img)}" alt="" style="height:64px;border-radius:6px"> Bild übernehmen</label>`:""}
@@ -2087,8 +2121,17 @@ async function artDupes(rows){ const up=x=>String(x||"").trim().toUpperCase(); c
 const ART_STOP = new Set("ultimate guard pokemon pokémon magic gathering the of and und der die das mit for von deutsche deutsch version englisch english german edition standard size sleeves tcg".split(" "));
 function artWords(name){ const w=[...new Set(String(name).toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").split(/[^a-z0-9+]+/).filter(x=>x.length>=3&&!ART_STOP.has(x)))];
   return w.sort((a,b)=>b.length-a.length).slice(0,4); }
-function artVals(f){ const vk=priceOf(f.vk), ek=priceOf(f.ek); return { name:String(f.name||"").trim(), code:String(f.code||"").trim(), ean:String(f.ean||"").replace(/\D/g,""), supcode:String(f.supcode||"").trim(), vk, ek, desc:String(f.desc||"").trim(),
-  supplier:ART.f.supplier||"", categ:ART.f.categ||"", tax:ART.f.tax||"", pos:ART.f.pos||"", type:ART.f.type||"product" }; }
+function artVals(f){ const vk=priceOf(f.vk), ekList=priceOf(f.ekList), disc=priceOf(f.disc); let ek=priceOf(f.ek); if(ek==null&&ekList!=null) ek=r2(ekList*(1-(disc||0)/100));
+  return { name:String(f.name||"").trim(), code:String(f.code||"").trim(), ean:String(f.ean||"").replace(/\D/g,""), supcode:String(f.supcode||"").trim(), vk, ek, ekList, disc, desc:String(f.desc||"").trim(),
+  supplier:ART.f.supplier||"", categ:ART.f.categ||"", tax:ART.f.tax||"", pos:ART.f.pos||"", pub:ART.f.pub||"", type:ART.f.type||"product", map:artMap() }; }
+function artMapHtml(){ const M=artMap(), R=ART.ref;
+  return `<details class="fold" ${M.herst||M.pub?"":"open"} style="margin-top:10px"><summary><b>Feld-Erkennung</b> <span class="muted">${M.from?`erkannt an „${esc(M.from)}“`:"noch nicht gemacht"}</span></summary>
+    <p class="muted">Einmalig: die etron-Artikel-ID oder Lieferanten-Nr. eines fertig angelegten heo-Artikels eintragen (z. B. PCI14745). Die App liest diesen Artikel und erkennt, in welchen etron-Feldern Herstellercode, Onlineshop-Kategorie, Langtext, verantwortliche Person und Rabatt stehen.</p>
+    <div class="row" style="gap:6px"><input id="art-refq" placeholder="z. B. PCI14745" style="max-width:220px"><button type="button" class="sm" id="art-ref">Erkennen</button></div>
+    ${R?`<p class="${R.err?"bad":"ok"}">${esc(R.err||`Gelesen: „${R.name}“`)}</p>`:""}
+    <div class="form">${[["herst","Herstellercode (= Lieferanten-Art.-Nr.)"],["pub","Onlineshop-Kategorie"],["desc","Langtext"],["resp","Verantwortliche Person (= Lieferant)"]].map(([k,l])=>`<label>${l}<input data-amap="${k}" value="${esc(M[k]||"")}" placeholder="nicht erkannt" class="mono"></label>`).join("")}
+      <label class="row" style="gap:8px"><input type="checkbox" data-amap="disc" ${M.disc?"checked":""}> Einkauf mit Listenpreis + Rabatt % (sonst nur Nettopreis)</label></div>
+    ${R?.fields?.length?`<details><summary>Alle gelesenen Felder</summary><table>${R.fields.map(([k,x])=>`<tr><td class="mono">${esc(k)}</td><td>${esc(x)}</td></tr>`).join("")}</table></details>`:""}</details>`; }
 // Neues App-Produkt (oder vorhandenes gleichen Namens ohne etron-Verknüpfung) mit dem etron-Artikel verknüpfen
 async function artAppProduct(name, r, vk, extra={}){ const ex=Object.values(S.products).find(x=>x.name.toLowerCase()===name.toLowerCase());
   const link={etronArtId:String(r.id),...(r.code?{articleNo:r.code}:{}),...(vk!=null?{etronPrice:vk}:{})};
@@ -2102,6 +2145,11 @@ async function artCreate(vals, img){ if(!vals.name) throw new Error("Name fehlt"
 function bindArtikel(){ const f=ART.f;
   app.querySelectorAll("[data-af]").forEach(el=>{ const k=el.dataset.af; const set=()=>{ f[k]=el.type==="checkbox"?el.checked:el.value; if(ART_COMMON.includes(k)) artDefSave({[k]:f[k]}); if(["code","ean","supcode"].includes(k)){ ART.dup=null; ART.force=false; const d=$("#art-dup"); if(d) d.innerHTML=""; const g=$("#art-go"); if(g) g.textContent="In etron anlegen"; } };
     el.addEventListener(el.tagName==="SELECT"||el.type==="checkbox"?"change":"input", set); });
+  app.querySelectorAll("[data-amap]").forEach(el=>el.onchange=()=>{ const M=artMap(); M[el.dataset.amap]=el.type==="checkbox"?el.checked:el.value.trim(); store("vb.artmap",JSON.stringify(M)); if(el.dataset.amap==="pub") render(); });
+  $("#art-ref").onclick=async()=>{ const q=$("#art-refq").value.trim(); if(!q) return toast("Bitte eine Artikel-ID oder Lieferanten-Nr. eintragen."); const b=$("#art-ref"); b.disabled=true; b.textContent="… lese";
+    try{ const r=await etronCall("art_ref",{q}); ART.ref=r; const M=artMap(); for(const k of ["herst","pub","desc","resp"]) if(r[k]) M[k]=r[k]; M.disc=!!r.disc; M.from=r.name; store("vb.artmap",JSON.stringify(M));
+      toast(`Erkannt: ${["herst","pub","desc","resp"].filter(k=>r[k]).length} von 4 Feldern${r.disc?", Rabatt":""}.`); ART.lists=null; }
+    catch(e){ ART.ref={err:String(e.message||e)}; } render(); };
   const sq=$("#art-sq"), sqb=$("#art-sqb"); sq.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); sqb.click(); } };
   sqb.onclick=async()=>{ const q=sq.value.trim(); if(q.length<2) return toast("Bitte mindestens 2 Zeichen eingeben."); const out=$("#art-sqr"); out.textContent="… suche";
     try{ const r=await etronCall("art_sup_search",{q}); out.innerHTML=(r.items||[]).length?r.items.map(x=>`<button type="button" class="sm" data-sup="${x.id}" data-n="${esc(x.name)}">${esc(x.name)}</button>`).join(" "):"Keine Firma mit diesem Namen gefunden.";
@@ -2114,9 +2162,9 @@ function bindArtikel(){ const f=ART.f;
     const b=$("#art-scr"); b.disabled=true; ART.scrSt="… heo-Seite wird im Hintergrund geöffnet und gelesen (bis zu 30 Sekunden)"; $("#art-scrst").textContent=ART.scrSt;
     try{ const o=await artScrape(url); const got=[];
       for(const k of ["name","ean","supcode","desc","img","release"]) if(o[k]){ f[k]=o[k]; got.push(k); }
-      if(o.vk!=null){ f.vk=String(o.vk).replace(".",","); got.push("vk"); } if(o.ek!=null){ f.ek=String(o.ek).replace(".",","); got.push("ek"); }
+      if(o.vk!=null){ f.vk=String(vkRound(o.vk)).replace(".",","); got.push("vk"); } if(o.ek!=null){ f.ekList=String(o.ek).replace(".",","); f.ek=""; got.push("ek"); }
       if(!ART.f.supplier){ artPickHeo(); if(ART.f.supplier) artDefSave({supplier:ART.f.supplier}); }
-      const nm={name:"Name",ean:"EAN",supcode:"heo-Nr.",desc:"Beschreibung",img:"Bild",release:"Release",vk:"UVP",ek:"Einkaufspreis"};
+      const nm={name:"Name",ean:"EAN",supcode:"heo-Nr.",desc:"Langtext",img:"Bild",release:"Release",vk:"Verkaufspreis (UVP, aufgerundet)",ek:"Einkaufspreis"};
       ART.scrSt = got.length ? `<span class="ok">✓ Übernommen: ${got.map(k=>nm[k]).join(", ")}.</span> Bitte alles prüfen.${o.ek==null?" Kein Einkaufspreis gefunden (bei heo angemeldet?).":""}${o.vk==null?" Keine UVP gefunden, Verkaufspreis bitte selbst eintragen.":""}`
         : `<span class="bad">Auf der Seite wurden keine Artikeldaten gefunden.</span>${o.login?" Bitte in Chrome bei heo anmelden und noch einmal versuchen.":""}`;
       if(o.pairs.length) ART.scrSt+=` <details><summary>Gelesene Angaben anzeigen</summary><table>${o.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(x.slice(0,120))}</td></tr>`).join("")}</table></details>`;
@@ -2156,14 +2204,14 @@ const ART_GUESS = { name:/bezeichnung|artikelname|^name|produkt|titel|descriptio
 // heo-Bestellung: „10 von 10  UGD011897  Name…  10,66 €  10,00 %  95,94 €“ (Namen sind gekürzt → Details von der heo-Seite holen)
 function artHeoParse(t){ const out=[]; const re=/^\s*(\d+)\s+von\s+(\d+)\s+([A-Z]{2,6}\d{3,}[A-Z0-9-]*)\s+(.+?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s*€?\s+(\d{1,3},\d{1,2})\s*%\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s*€?\s*$/;
   for(const line of String(t).split(/\r?\n/)){ const m=line.replace(/\t/g," ").match(re); if(!m) continue; const qty=+m[2]||+m[1], tot=priceOf(m[7]), unit=priceOf(m[5]);
-    out.push({supcode:m[3],name:m[4].replace(/\s*[?"“]+$/,"").trim(),short:true,qty,ek:tot!=null&&qty?r2(tot/qty):unit,ekList:unit,url:HEO_URL(m[3])}); }
+    out.push({supcode:m[3],name:m[4].replace(/\s*[?"“]+$/,"").trim(),short:true,qty,ek:tot!=null&&qty?r2(tot/qty):unit,ekList:unit,disc:priceOf(m[6]),url:HEO_URL(m[3])}); }
   return out; }
 // heo-Rechnung (PDF oder kopierter Text): „1  PCI14745  Name…  2  31,00 €  0,00 %  31,00 €  62,00 €“, Name läuft oft in der nächsten Zeile weiter
 function artInvParse(lines){ const P="(\\d{1,3}(?:\\.\\d{3})*,\\d{2})\\s*€";
   const re=new RegExp("^\\s*(\\d{1,3})\\s+([A-Z0-9][A-Z0-9.\\-/]{3,})\\s+(.+?)\\s+(\\d{1,5})\\s+"+P+"\\s+(\\d{1,3},\\d{1,2})\\s*%\\s+"+P+"\\s+"+P+"\\s*$");
   const out=[]; let cur=null;
   for(const raw of lines){ const l=String(raw).replace(/\t/g," "), m=l.match(re);
-    if(m){ cur={supcode:m[2],name:m[3].trim(),qty:+m[4],ekList:priceOf(m[5]),ek:priceOf(m[7]),url:HEO_URL(m[2])}; out.push(cur); continue; }
+    if(m){ cur={supcode:m[2],name:m[3].trim(),qty:+m[4],ekList:priceOf(m[5]),disc:priceOf(m[6]),ek:priceOf(m[7]),url:HEO_URL(m[2])}; out.push(cur); continue; }
     const t=l.trim(); if(!cur||!t) continue;
     if(/Herkunftsland|HS-Code|Zwischensumme|Seite \d|Übertrag|€|%|^Pos\.|Rechnung/i.test(t)){ cur=null; continue; }
     if(t.length<80) cur.name=(cur.name+" "+t).replace(/\s+/g," ").trim(); }
@@ -2195,7 +2243,7 @@ function artListHtml(){ const L=ART.L; if(!L||!L.rows) return ""; const rows=L.r
     ${rows.map((r,i)=>`<tr${r.dup?.length?' class="dim"':""}><td><input type="checkbox" data-artr="${i}" ${r.on?"checked":""} ${r.done?"disabled":""}></td>
       <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>
       <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="code" value="${esc(r.code)}" style="width:110px"></td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px"></td>
-      <td>${r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
+      <td title="${r.ekList!=null?esc(fmtPrice(r.ekList))+(r.disc?" − "+esc(String(r.disc).replace(".",","))+" %":""):""}">${r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
       <td>${r.st||""}${r.dup?.length?`<span class="bad">gibt es schon:</span> ${r.dup.map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span>':""}</td></tr>`).join("")}</tbody></table></div>`; }
 function drawArtList(){ const el=$("#art-list"); if(!el) return; el.innerHTML=artListHtml(); bindArtList(); }
 function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
@@ -2209,7 +2257,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
   const stop=$("#artl-stop"); if(stop) stop.onclick=()=>{ L.stop=true; stop.disabled=true; };
   const det=$("#artl-det"); if(det) det.onclick=async()=>{ L.busy=true; L.stop=false; drawArtList(); let ok=0;
     for(const r of L.rows){ if(L.stop) break; if(!r.on||r.done) continue; const url=r.url||(r.supcode?HEO_URL(r.supcode):""); if(!url){ continue; } r.st="… lese heo-Seite"; drawArtList();
-      try{ const o=await artScrape(url); if(o.name&&!/loading/i.test(o.name)){ r.name=o.name; r.full=true; } if(o.ean) r.ean=o.ean; if(o.vk!=null&&r.vk==null) r.vk=o.vk; if(o.release&&!r.release) r.release=o.release; if(o.img) r.img=o.img; if(o.desc) r.desc=o.desc;
+      try{ const o=await artScrape(url); if(o.name&&!/loading/i.test(o.name)){ r.name=o.name; r.full=true; } if(o.ean) r.ean=o.ean; if(o.vk!=null&&r.vk==null) r.vk=vkRound(o.vk); if(o.release&&!r.release) r.release=o.release; if(o.img) r.img=o.img; if(o.desc) r.desc=o.desc;
         r.st=o.name||o.ean?'<span class="ok">✓ Details</span> ':(o.login?'<span class="bad">bei heo nicht angemeldet?</span> ':'<span class="bad">keine Daten gefunden</span> '); if(o.name||o.ean) ok++; }
       catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; if(/Erweiterung/.test(e.message||"")){ L.stop=true; } }
       L.checked=false; r.dup=null; drawArtList(); }
@@ -2225,7 +2273,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
     const noVk=todo.filter(r=>r.vk==null).length; if(noVk&&!L.vkOk){ L.vkOk=true; return toast(`${noVk} Zeilen haben keinen Verkaufspreis. Noch einmal klicken, um sie trotzdem (ohne Preis) anzulegen.`,6000); }
     L.busy=true; L.stop=false; drawArtList(); let ok=0, bad=0;
     for(const r of todo){ if(L.stop) break; r.st="… lege an"; drawArtList();
-      try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,desc:r.desc||""};
+      try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,disc:r.disc??null,desc:r.desc||""};
         const img=r.img&&ART.f.imgOn!==false?await artImage(r.img):null; const res=await artCreate(vals,img); if(!res.id) throw new Error("keine Artikel-ID zurück (Vorlage "+res.tmpl+")");
         let note=""; if(ART.f.app){ const a=await artAppProduct(r.name,res,r.vk,{release:r.release||"",supplierOrdered:r.qty}); note=`, <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>`; }
         r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt (ID ${res.id})</span>${note} `; ok++; }

@@ -62,6 +62,9 @@ function extract() {
   out.pairs = out.pairs.slice(0, 200);
   const im = [...document.images].filter((i) => i.naturalWidth >= 200 && /^https:/.test(i.currentSrc || i.src)).sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight)[0];
   out.img = im ? (im.currentSrc || im.src) : '';
+  // Langtext: längster Textblock in einem Beschreibungs-Bereich
+  const ds = [...document.querySelectorAll('[class*="descr" i],[id*="descr" i],[class*="beschreib" i],[id*="beschreib" i],[class*="longtext" i],[class*="product-text" i]')].map((e) => (e.innerText || '').trim()).filter((t) => t.length > 60).sort((a, b) => b.length - a.length);
+  out.desc = (ds[0] || '').slice(0, 4000);
   out.text = (document.body && document.body.innerText || '').slice(0, 30000);
   return out;
 }
