@@ -2334,6 +2334,12 @@ function artHeoParse(t){ const out=[]; const re=/^\s*(\d+)\s+von\s+(\d+)\s+([A-Z
   for(const line of String(t).split(/\r?\n/)){ const m=line.replace(/\t/g," ").match(re); if(!m) continue; const qty=+m[2]||+m[1], tot=priceOf(m[7]), unit=priceOf(m[5]);
     out.push({supcode:m[3],name:m[4].replace(/\s*[?"“]+$/,"").trim(),short:true,qty,ek:tot!=null&&qty?r2(tot/qty):unit,ekList:unit,disc:priceOf(m[6]),url:HEO_URL(m[3])}); }
   return out; }
+// heo-Vorbestellliste (Kundenkonto): „2 / 2  UGD012146  Name  12,00 €“ bzw. „1  BNG032003  Name  (Mitte/Ende März 2027)  36,58 €“; gleiche Art.-Nr. mit mehreren Lieferterminen wird zusammengefasst
+function artHeoPreParse(t){ const re=/^\s*(\d{1,4})(?:\s*\/\s*(\d{1,4}))?\s+((?=[A-Z0-9-]*\d)[A-Z]{2,}[A-Z0-9-]{3,})\s+(.+?)\s+(?:\(([^)]*)\)\s+)?(\d{1,3}(?:\.\d{3})*,\d{2})\s*€?\s*$/; const by=new Map();
+  for(const line of String(t).split(/\r?\n/)){ const m=line.replace(/\t/g," ").replace(/&amp;/g,"&").match(re); if(!m||/%|€/.test(m[4])) continue; const qty=+(m[2]||m[1])||0, code=m[3];
+    const o=by.get(code); if(o){ o.qty+=qty; if(m[5]&&!o.termin.includes(m[5])) o.termin.push(m[5]); continue; }
+    by.set(code,{supcode:code,name:m[4].trim(),qty,ek:priceOf(m[6]),termin:m[5]?[m[5]]:[],url:HEO_URL(code)}); }
+  return [...by.values()].map(r=>({...r,termin:r.termin.join(", ")})); }
 // heo-Rechnung (PDF oder kopierter Text): „1  PCI14745  Name…  2  31,00 €  0,00 %  31,00 €  62,00 €“, Name läuft oft in der nächsten Zeile weiter
 function artInvParse(lines){ const P="(\\d{1,3}(?:\\.\\d{3})*,\\d{2})\\s*€";
   const re=new RegExp("^\\s*(\\d{1,3})\\s+([A-Z0-9][A-Z0-9.\\-/]{3,})\\s+(.+?)\\s+(\\d{1,5})\\s+"+P+"\\s+(\\d{1,3},\\d{1,2})\\s*%\\s+"+P+"\\s+"+P+"\\s*$");
@@ -2353,7 +2359,7 @@ async function pdfLines(buf){ await loadPdfjs(); const doc=await window.pdfjsLib
   return out; }
 function artTextRows(t){ const lines=String(t).split(/\r?\n/);
   // nur heo-Nummern (eine oder mehrere, durch Zeilen, Leerzeichen oder Kommas getrennt)
-  const toks=String(t).split(/[\s,;]+/).filter(Boolean); if(toks.length&&toks.length<=300&&toks.every(x=>/^[A-Z]{2,6}[A-Z0-9-]*\d{3,}[A-Z0-9-]*$/i.test(x))) return {rows:[...new Set(toks.map(x=>x.toUpperCase()))].map(c=>({supcode:c,name:"",short:true,url:HEO_URL(c)})),kind:"heo-Nummern"}; let rows=artHeoParse(t); if(rows.length) return {rows,kind:"heo-Bestellung"}; rows=artInvParse(lines); if(rows.length) return {rows,kind:"heo-Rechnung"}; return null; }
+  const toks=String(t).split(/[\s,;]+/).filter(Boolean); if(toks.length&&toks.length<=300&&toks.every(x=>/^[A-Z]{2,6}[A-Z0-9-]*\d{3,}[A-Z0-9-]*$/i.test(x))) return {rows:[...new Set(toks.map(x=>x.toUpperCase()))].map(c=>({supcode:c,name:"",short:true,url:HEO_URL(c)})),kind:"heo-Nummern"}; let rows=artHeoParse(t); if(rows.length) return {rows,kind:"heo-Bestellung"}; rows=artHeoPreParse(t); if(rows.length>=1) return {rows,kind:"heo-Vorbestellung"}; rows=artInvParse(lines); if(rows.length) return {rows,kind:"heo-Rechnung"}; return null; }
 function artListLoad(rows, src){ rows=(rows||[]).map(r=>r.map(x=>x instanceof Date?x.toISOString().slice(0,10):String(x??"").trim())).filter(r=>r.some(Boolean)); if(!rows.length) return toast("Keine Zeilen gefunden.");
   const head=rows[0], hits=ART_COLS.filter(([k])=>head.some(h=>ART_GUESS[k].test(h))).length, hasHead=hits>=2;
   const map={}; const used=new Set(); if(hasHead) for(const [k] of ART_COLS){ const i=head.findIndex((h,j)=>!used.has(j)&&ART_GUESS[k].test(h)); if(i>=0){ map[k]=i; used.add(i); } }
