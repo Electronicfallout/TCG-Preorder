@@ -2082,7 +2082,6 @@ function renderArtikel(pid){ pid=pid||null;
     <p class="muted" id="art-scrst">${ART.scrSt}</p>
     <form class="form" id="art-f" autocomplete="off">
       <label class="wide">Name in etron<input data-af="name" value="${v("name")}" required></label>
-      <label>Art.-Nr. (interne Referenz)<span class="row" style="gap:6px;flex-wrap:nowrap"><input data-af="code" value="${v("code")}" style="flex:1"><button type="button" class="sm" id="art-cp" title="Lieferanten-Art.-Nr. übernehmen">← Lief.-Nr.</button></span></label>
       <label>EAN / Barcode<input data-af="ean" value="${v("ean")}" inputmode="numeric"></label>
       <label>Lieferanten-Art.-Nr.<input data-af="supcode" value="${v("supcode")}"></label>
       <label>Verkaufspreis (brutto)<input data-af="vk" value="${v("vk")}" placeholder="z. B. 14,99"></label>
@@ -2156,7 +2155,6 @@ function bindArtikel(){ const f=ART.f;
     try{ const r=await etronCall("art_sup_search",{q}); out.innerHTML=(r.items||[]).length?r.items.map(x=>`<button type="button" class="sm" data-sup="${x.id}" data-n="${esc(x.name)}">${esc(x.name)}</button>`).join(" "):"Keine Firma mit diesem Namen gefunden.";
       out.querySelectorAll("[data-sup]").forEach(b=>b.onclick=()=>{ const x={id:+b.dataset.sup,name:b.dataset.n}; if(!ART.supX.some(y=>y.id===x.id)) ART.supX.push(x); f.supplier=String(x.id); artDefSave({supplier:f.supplier}); render(); }); }
     catch(e){ out.innerHTML=`<span class="bad">${esc(e.message||e)}</span>`; } };
-  $("#art-cp").onclick=()=>{ if(!f.supcode) return toast("Keine Lieferanten-Art.-Nr. eingetragen."); f.code=f.supcode; ART.dup=null; ART.force=false; render(); };
   $("#art-clr").onclick=()=>{ const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; ART.res=""; ART.scrSt=""; const p=S.products[ART.pid]; if(p) Object.assign(ART.f,{name:p.name,code:p.articleNo||""}); render(); };
   $("#art-url").onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); $("#art-scr").click(); } };
   $("#art-scr").onclick=async()=>{ const url=String(f.url||"").trim(); if(!isHeo(url)) return toast("Bitte einen Link von heo.com einfügen.");
@@ -2185,7 +2183,7 @@ function bindArtikel(){ const f=ART.f;
       let note=""; const p=S.products[ART.pid];
       if(p){ await write("products",p.id,{etronArtId:String(r.id),...(r.code?{articleNo:r.code}:{}),...(vals.vk!=null?{etronPrice:vals.vk,...(p.price==null?{price:vals.vk}:{})}:{})}); note=` Das Produkt „${esc(p.name)}“ ist jetzt damit verknüpft.`; }
       else if(f.app){ const a=await artAppProduct(vals.name,r,vals.vk,{release:String(f.release||"").trim()}); note=` <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>.`; }
-      ART.res=`<p class="ok">✓ In etron angelegt: „${esc(vals.name)}“ (Artikel-ID ${r.id}${img?", mit Bild":f.img&&f.imgOn?", Bild konnte nicht geladen werden":""}).${note}</p>`;
+      ART.res=`<p class="ok">✓ In etron angelegt: „${esc(vals.name)}“ (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", Bild konnte nicht geladen werden":""}).${note}</p>`;
       dlog("INFO",`Artikel in etron angelegt: ID ${r.id}, Vorlage ${r.tmpl}`);
       const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; }
     catch(e){ ART.res=`<p class="bad">✗ ${esc(e.message||e)}</p>`; }
@@ -2199,7 +2197,7 @@ function bindArtikel(){ const f=ART.f;
   bindArtList(); }
 
 // ---- Liste / Bestellung
-const ART_COLS = [["name","Name"],["supcode","Lieferanten-Art.-Nr."],["code","Art.-Nr. (intern)"],["ean","EAN"],["ek","Einkaufspreis"],["vk","Verkaufspreis"],["qty","Menge"],["release","Release"]];
+const ART_COLS = [["name","Name"],["supcode","Lieferanten-Art.-Nr."],["ean","EAN"],["ek","Einkaufspreis"],["vk","Verkaufspreis"],["qty","Menge"],["release","Release"]];
 const ART_GUESS = { name:/bezeichnung|artikelname|^name|produkt|titel|description/i, supcode:/lief|heo|bestell.?nr|artikel.?nr|art\.?.?nr|^sku|item/i, code:/intern|referenz/i, ean:/ean|gtin|barcode|upc/i,
   ek:/ek|einkauf|netto|händler|ihr preis|einzelpreis|preis/i, vk:/vk|uvp|verkauf|empf/i, qty:/menge|anzahl|stück|qty|bestellt/i, release:/release|erschein|liefertermin|datum/i };
 // heo-Bestellung: „10 von 10  UGD011897  Name…  10,66 €  10,00 %  95,94 €“ (Namen sind gekürzt → Details von der heo-Seite holen)
@@ -2242,10 +2240,10 @@ function artListHtml(){ const L=ART.L; if(!L||!L.rows) return ""; const rows=L.r
     <div class="row">${L.heo||rows.some(r=>r.url)?`<button type="button" id="artl-det" ${busy?"disabled":""}>Details von heo holen</button>`:""}<button type="button" id="artl-chk" ${busy?"disabled":""}>Mit etron abgleichen</button>
       <button type="button" class="pri" id="artl-go" ${!L.checked||!n||busy?"disabled":""} title="${L.checked?"":"Bitte zuerst mit etron abgleichen"}">Ausgewählte anlegen (${n})</button>${busy?`<button type="button" id="artl-stop">Anhalten</button>`:""}<button type="button" id="artl-x" ${busy?"disabled":""}>Liste verwerfen</button></div>
     <p class="muted">${L.checked?"Abgeglichen. Zeilen, die es in etron schon gibt, sind abgewählt.":"Noch nicht abgeglichen."} Neue Verkaufspreise ohne UVP bitte in der Tabelle eintragen. Lieferant, Kategorie, Steuer und Typ kommen aus „Gemeinsame Einstellungen“ oben.</p>
-    <div class="tablebox"><table><thead><tr><th><input type="checkbox" id="artl-all" ${rows.every(r=>r.on)?"checked":""}></th><th>Name</th><th>Lief.-Nr.</th><th>Art.-Nr.</th><th>EAN</th><th>EK</th><th>VK</th><th>Menge</th><th>Status</th></tr></thead><tbody>
+    <div class="tablebox"><table><thead><tr><th><input type="checkbox" id="artl-all" ${rows.every(r=>r.on)?"checked":""}></th><th>Name</th><th>Lief.-Nr.</th><th>EAN</th><th>EK</th><th>VK</th><th>Menge</th><th>Status</th></tr></thead><tbody>
     ${rows.map((r,i)=>`<tr${r.dup?.length?' class="dim"':""}><td><input type="checkbox" data-artr="${i}" ${r.on?"checked":""} ${r.done?"disabled":""}></td>
       <td><input data-artc="${i}" data-k="name" value="${esc(r.name)}" style="min-width:260px">${r.short&&!r.full?' <span class="muted" title="In der Bestellung gekürzt">gekürzt</span>':""}</td>
-      <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="code" value="${esc(r.code)}" style="width:110px" placeholder="optional"></td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px" placeholder="${L.heo?"kommt von heo":""}"></td>
+      <td class="mono">${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.supcode)}</a>`:esc(r.supcode)}</td><td><input data-artc="${i}" data-k="ean" value="${esc(r.ean)}" style="width:130px" placeholder="${L.heo?"kommt von heo":""}"></td>
       <td>${r.ekList!=null?esc(fmtPrice(r.ekList))+(r.disc?` <span class="muted">− ${esc(String(r.disc).replace(".",","))} %</span><br><span class="muted">= ${esc(fmtPrice(r.ek))}</span>`:""):r.ek!=null?esc(fmtPrice(r.ek)):"–"}</td><td><input data-artc="${i}" data-k="vk" value="${r.vk!=null?esc(String(r.vk).replace(".",",")):""}" style="width:80px"></td><td>${r.qty??""}</td>
       <td>${r.st||""}${r.pairs?`<details><summary class="muted">Gelesene Angaben</summary><table>${r.pairs.map(([k,x])=>`<tr><td>${esc(k)}</td><td>${esc(String(x).slice(0,80))}</td></tr>`).join("")}</table>${r.textHead?`<p class="muted" style="white-space:pre-wrap;max-width:420px">${esc(r.textHead)}</p>`:""}</details>`:""}${r.dup?.length?`<span class="bad">gibt es schon:</span> ${r.dup.map(x=>`${esc(x.name)} <span class="muted">(ID ${x.id}, ${esc(x.why)})</span>`).join("; ")}`:L.checked&&!r.done?'<span class="ok">neu</span>':""}</td></tr>`).join("")}</tbody></table></div>`; }
 function drawArtList(){ const el=$("#art-list"); if(!el) return; el.innerHTML=artListHtml(); bindArtList(); }
@@ -2279,7 +2277,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
       try{ if(!r.name) throw new Error("Name fehlt"); const vals={...artVals({}),name:r.name,code:r.code||"",ean:r.ean||"",supcode:r.supcode||"",vk:r.vk??null,ek:r.ek??null,ekList:r.ekList??null,disc:r.disc??null,desc:r.desc||""};
         const img=r.img&&ART.f.imgOn!==false?await artImage(r.img):null; const res=await artCreate(vals,img); if(!res.id) throw new Error("keine Artikel-ID zurück (Vorlage "+res.tmpl+")");
         let note=""; if(ART.f.app){ const a=await artAppProduct(r.name,res,r.vk,{release:r.release||"",supplierOrdered:r.qty}); note=`, <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>`; }
-        r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt (ID ${res.id})</span>${note} `; ok++; }
+        r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt${res.code?" als "+esc(res.code):""} (ID ${res.id})</span>${note} `; ok++; }
       catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; bad++; }
       drawArtList(); }
     dlog("INFO",`Artikel-Liste: ${ok} in etron angelegt, ${bad} Fehler`); L.busy=false; L.vkOk=false; drawArtList(); toast(`${ok} Artikel angelegt${bad?`, ${bad} mit Fehler (siehe Status)`:""}.`,6000); };
