@@ -2272,6 +2272,9 @@ function bindArtikel(){ const f=ART.f;
   $("#art-go").onclick=async()=>{ if(ART.busy) return; const vals=artVals(f); if(!vals.name) return toast("Bitte einen Namen eintragen.");
     if(vals.ean&&!/^\d{8,14}$/.test(vals.ean)) return toast("Die EAN muss 8 bis 14 Ziffern haben.");
     if(String(f.vk||"").trim()&&vals.vk==null) return toast("Verkaufspreis bitte als Zahl, z. B. 14,99."); if(String(f.ek||"").trim()&&vals.ek==null) return toast("Einkaufspreis bitte als Zahl, z. B. 9,59.");
+    // Warnung ohne Produkt- bzw. Onlineshop-Kategorie (Tommy, 28.11.)
+    const miss=[!vals.categ&&"Produktkategorie",artMap().pub&&!vals.pub&&"Onlineshop-Kategorie"].filter(Boolean);
+    if(miss.length&&ART.catWarn!==miss.join()){ ART.catWarn=miss.join(); return toast(`Achtung: ${miss.join(" und ")} fehlt${miss.length>1?"en":""}${ART.f.categ==="auto"?" (keine Kategorie zur Marke gefunden)":""}. Bitte wählen oder noch einmal klicken, um trotzdem anzulegen.`,7000); }
     ART.busy=true; const go=$("#art-go"); go.disabled=true; const out=$("#art-res"); out.textContent="… prüfe, ob es den Artikel in etron schon gibt";
     try{
       if(!ART.force){ const [d]=await artDupes([vals]); ART.dup=d; ART.upd=null; if(artHard(d).length){ ART.force=true; ART.res=""; ART.busy=false; return render(); } }
@@ -2282,7 +2285,7 @@ function bindArtikel(){ const f=ART.f;
       else if(f.app){ const a=await artAppProduct(vals.name,r,vals.vk,{release:String(f.release||"").trim()}); note=` <a href="#produkt-${esc(a.id)}">${esc(a.note)}</a>.`; }
       ART.res=`<p class="ok">✓ In etron angelegt: <a href="${esc(r.link||"")}" target="_blank" rel="noopener">„${esc(vals.name)}“ in etron öffnen</a> (Artikel-ID ${r.id}${r.code?", Art.-Nr. "+esc(r.code):""}${img?", mit Bild":f.img&&f.imgOn?", "+esc(ART.imgErr||"Bild nicht ladbar"):", kein Bild auf der heo-Seite gefunden"}).${note}</p>`;
       dlog("INFO",`Artikel in etron angelegt: ID ${r.id}, Vorlage ${r.tmpl}`);
-      const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; }
+      const keep={}; for(const k of [...ART_COMMON,"app","game"]) keep[k]=f[k]; ART.f=keep; ART.dup=null; ART.force=false; ART.catWarn=null; }
     catch(e){ ART.res=`<p class="bad">✗ ${esc(e.message||e)}</p>`; }
     ART.busy=false; render(); };
   const fl=$("#art-file"); if(fl) fl.onchange=async e=>{ const file=e.target.files[0]; if(!file) return; try{ let rows;
@@ -2365,7 +2368,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
       catch(e){ r.upMsg=`<span class="bad">✗ ${esc(e.message||e)}</span>`; }
       drawArtList(); }
     L.updReady=!L.updReady&&ex.some(r=>r.upd?.length); L.busy=false; drawArtList(); };
-  app.querySelectorAll("[data-artpub]").forEach(sl=>sl.onchange=()=>{ L.rows[+sl.dataset.artpub].pub=sl.value; });
+  app.querySelectorAll("[data-artpub]").forEach(sl=>sl.onchange=()=>{ L.rows[+sl.dataset.artpub].pub=sl.value; L.catOk=false; });
   const pa=$("#artl-puball"); if(pa) pa.onchange=()=>{ if(!pa.value) return; L.rows.forEach(r=>{ if(r.on&&!r.done) r.pub=pa.value; }); drawArtList(); };
   const stop=$("#artl-stop"); if(stop) stop.onclick=()=>{ L.stop=true; stop.disabled=true; };
   const det=$("#artl-det"); if(det) det.onclick=async()=>{ L.busy=true; L.stop=false; drawArtList(); let ok=0;
@@ -2383,6 +2386,8 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
     catch(e){ toast("Abgleich fehlgeschlagen: "+(e.message||e),6000); }
     L.busy=false; drawArtList(); };
   const go=$("#artl-go"); if(go) go.onclick=async()=>{ const todo=L.rows.filter(r=>r.on&&!r.done); if(!todo.length) return;
+    const noCat=todo.filter(r=>!(ART.f.categ==="auto"?artAutoCateg(r.name):ART.f.categ)).length, noPub=artMap().pub?todo.filter(r=>!r.pub).length:0;
+    if((noCat||noPub)&&!L.catOk){ L.catOk=true; return toast(`Achtung: ${[noCat&&`${noCat} Zeilen ohne Produktkategorie`,noPub&&`${noPub} ohne Onlineshop-Kategorie`].filter(Boolean).join(", ")}. Bitte wählen oder noch einmal klicken, um trotzdem anzulegen.`,8000); }
     const noVk=todo.filter(r=>r.vk==null).length; if(noVk&&!L.vkOk){ L.vkOk=true; return toast(`${noVk} Zeilen haben keinen Verkaufspreis. Noch einmal klicken, um sie trotzdem (ohne Preis) anzulegen.`,6000); }
     L.busy=true; L.stop=false; drawArtList(); let ok=0, bad=0;
     for(const r of todo){ if(L.stop) break; r.st="… lege an"; drawArtList();
@@ -2392,7 +2397,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
         r.done=true; r.on=false; r.st=`<span class="ok">✓ angelegt${res.code?" als "+esc(res.code):""}</span>${img?"":` <span class="muted">${r.img?esc(ART.imgErr):"kein Bild gefunden"}</span>`} <a href="${esc(res.link||"")}" target="_blank" rel="noopener">in etron öffnen</a>${note} `; ok++; }
       catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; bad++; }
       drawArtList(); }
-    dlog("INFO",`Artikel-Liste: ${ok} in etron angelegt, ${bad} Fehler`); L.busy=false; L.vkOk=false; drawArtList(); toast(`${ok} Artikel angelegt${bad?`, ${bad} mit Fehler (siehe Status)`:""}.`,6000); };
+    dlog("INFO",`Artikel-Liste: ${ok} in etron angelegt, ${bad} Fehler`); L.busy=false; L.vkOk=false; L.catOk=false; drawArtList(); toast(`${ok} Artikel angelegt${bad?`, ${bad} mit Fehler (siehe Status)`:""}.`,6000); };
 }
 
 // ---------- Excel-Import (läuft nur im Browser, nichts verlässt das Gerät außer in die Dropbox)
