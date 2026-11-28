@@ -918,6 +918,34 @@ const EW_ACTIONS = {
     out.sellerKeys=sellers[0]?Object.keys(sellers[0]).filter(k=>!/^(__|create_|write_|display_name)/.test(k)):[];
     dlog("INFO",`Feld-Erkennung an Vorlage ${tid}: Herstellercode=${out.herst||"?"}, Verantwortlich=${out.resp||"?"}, Onlineshop=${out.pub||"?"}, Langtext=${out.desc||"?"}, Rabatt=${out.disc}`);
     return out; },
+  // Vorhandenen Artikel ergänzen (Tommy, 28.11.: Artikel werden nie gelöscht). Nur leere Felder füllen; Einkaufszeile des Lieferanten anlegen bzw. Preis/Rabatt/Code angleichen.
+  async art_update(c,b){ const pid=parseInt(b.id,10); if(!pid) throw new Error("Artikel-ID fehlt"); const A=["active","in",[true,false]], t0=v=>Array.isArray(v)?v[0]:v;
+    const id=x=>parseInt(x,10)>0?parseInt(x,10):null, num=x=>typeof x==="number"&&isFinite(x)&&x>=0?x:null, M=b.map||{}, fn=x=>/^[a-z_][a-z0-9_]{1,60}$/.test(String(x||""))?x:"";
+    const pp=ewList(await ewCall(c,"GET","/search_read/product.product",{domain:["&",A,["id","=",pid]],fields:["id","product_tmpl_id"],limit:1}))[0]; const tid=pp&&t0(pp.product_tmpl_id); if(!tid) throw new Error("Artikel nicht gefunden");
+    const F=["name","barcode","list_price","standard_price","categ_id","description_sale","image_128",...["herst","resp","pub","desc"].map(k=>fn(M[k])).filter(Boolean)];
+    const t=ewList(await ewCall(c,"GET","/search_read/product.template",{domain:["&",A,["id","=",tid]],fields:[...new Set(F)],limit:1}))[0]; if(!t) throw new Error("Artikel nicht lesbar");
+    const empty=v=>v===false||v===null||v===""||(Array.isArray(v)&&!v.length)||(typeof v==="string"&&!v.replace(/<[^>]*>/g,"").trim()); const v={}, ch=[];
+    const set=(k,val,lab)=>{ if(val==null||val===""||!empty(t[k])) return; v[k]=val; ch.push(lab); };
+    if(/^\d{8,14}$/.test(ewStr(b.ean))) set("barcode",ewStr(b.ean),"Barcode");
+    if(num(b.vk)!=null&&!t.list_price){ v.list_price=num(b.vk); ch.push("Verkaufspreis"); }
+    const net=num(b.ek)!=null?num(b.ek):(num(b.ekList)!=null?Math.round(num(b.ekList)*(100-(num(b.disc)||0)))/100:null); if(net!=null&&!t.standard_price){ v.standard_price=net; ch.push("Kosten"); }
+    if(id(b.categ)&&(empty(t.categ_id)||/^(all|alle)$/i.test(String(Array.isArray(t.categ_id)?t.categ_id[1]:"").trim()))){ v.categ_id=id(b.categ); ch.push("Produktkategorie"); }
+    if(fn(M.herst)&&ewStr(b.supcode)) set(fn(M.herst),ewStr(b.supcode,60),"Herstellercode");
+    if(fn(M.resp)&&id(b.supplier)) set(fn(M.resp),id(b.supplier),"Verantwortliche Person");
+    if(fn(M.pub)&&id(b.pub)&&empty(t[fn(M.pub)])){ v[fn(M.pub)]=[[6,0,[id(b.pub)]]]; ch.push("Onlineshop-Kategorie"); }
+    const d=ewStr(b.desc,4000); if(d){ if(fn(M.desc)) set(fn(M.desc),/<[a-z]/i.test(d)?d:"<p>"+d.replace(/[&<>]/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[x])).replace(/\n/g,"<br>")+"</p>","Langtext"); else set("description_sale",d.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,2000),"Verkaufsbeschreibung"); }
+    if(typeof b.image==="string"&&b.image.length<7e6&&/^[A-Za-z0-9+/=]+$/.test(b.image)&&empty(t.image_128)){ v.image_1920=b.image; ch.push("Bild"); }
+    else if(b.dry&&b.hasImg&&empty(t.image_128)) ch.push("Bild");
+    // Einkauf
+    let sel=null; const sup=id(b.supplier); if(sup){ const si=ewList(await ewCall(c,"GET","/search_read/product.supplierinfo",{domain:["&",["product_tmpl_id","=",tid],["partner_id","=",sup]],fields:["id","price","product_code",...(M.disc?["discount"]:[])],limit:1}))[0];
+      const line={...(ewStr(b.supcode)?{product_code:ewStr(b.supcode,60)}:{})}; if(M.disc&&num(b.ekList)!=null){ line.price=num(b.ekList); line.discount=num(b.disc)||0; } else if(net!=null) line.price=net;
+      if(!si){ v.seller_ids=[[0,0,{partner_id:sup,min_qty:1,...line}]]; ch.push("Einkauf: Lieferantenzeile"); }
+      else { const w={}; for(const [k,x] of Object.entries(line)) if(String(si[k]??"")!==String(x)) w[k]=x; if(Object.keys(w).length){ sel={id:si.id,w}; ch.push("Einkauf: "+Object.keys(w).map(k=>({price:"Preis",discount:"Rabatt",product_code:"Produktcode"}[k]||k)).join(", ")); } } }
+    if(b.dry) return {changes:ch,name:ewStr(t.name,120)};
+    if(Object.keys(v).length) await ewCall(c,"POST","/call/product.template/write",null,{ids:[tid],args:[v],kwargs:{}});
+    if(sel) await ewCall(c,"POST","/call/product.supplierinfo/write",null,{ids:[sel.id],args:[sel.w],kwargs:{}});
+    dlog("INFO",`Artikel ${pid} ergänzt: ${ch.join(", ")||"nichts"}`);
+    return {changes:ch,link:ewBase(c).replace(/\/api\/v2$/,"")+`/web#id=${tid}&model=product.template&view_type=form`}; },
   async art_create(c,b){ const name=ewStr(b.name,200); if(!name) throw new Error("Name fehlt"); const id=x=>parseInt(x,10)>0?parseInt(x,10):null, num=x=>typeof x==="number"&&isFinite(x)&&x>=0?x:null;
     const v={name,sale_ok:true,purchase_ok:true,detailed_type:["product","consu","service"].includes(b.type)?b.type:"product"};
     if(ewStr(b.code)) v.default_code=ewStr(b.code,60); if(/^\d{8,14}$/.test(ewStr(b.ean))) v.barcode=ewStr(b.ean);
@@ -2137,7 +2165,10 @@ const artHard = d => (d||[]).filter(x=>!x.hint), artHint = d => (d||[]).filter(x
 const artHintHtml = d => artHint(d).length?`<span class="muted">ähnlicher Name, bitte selbst prüfen: ${artHint(d).map(x=>`${esc(x.name)} (ID ${x.id})`).join("; ")}</span>`:"";
 function artDupHtml(){ const all=ART.dup; if(!all) return ""; const d=artHard(all);
   if(!d.length) return `<p class="ok">✓ In etron gibt es keinen Artikel mit dieser Lieferanten-Nr., diesem Herstellercode oder dieser EAN.</p>${artHint(all).length?`<p>${artHintHtml(all)}</p>`:""}`;
-  return `<div class="note bad"><b>Diesen Artikel gibt es in etron schon:</b><ul>${d.map(x=>`<li>${esc(x.name)} <span class="muted">(ID ${x.id}${x.code?", Art.-Nr. "+esc(x.code):""}${x.barcode?", EAN "+esc(x.barcode):""}${x.why?", gleich: "+esc(x.why):""}${x.active===false?", archiviert":""})</span>${ART.pid?` <button type="button" class="sm" data-artlink="${x.id}" data-code="${esc(x.code||"")}">Stattdessen diesen verknüpfen</button>`:""}</li>`).join("")}</ul>Wenn es wirklich ein anderer Artikel ist, noch einmal auf „Trotzdem in etron anlegen“ klicken.</div>`; }
+  return `<div class="note bad"><b>Diesen Artikel gibt es in etron schon:</b><ul>${d.map(x=>`<li>${esc(x.name)} <span class="muted">(ID ${x.id}${x.code?", Art.-Nr. "+esc(x.code):""}${x.barcode?", EAN "+esc(x.barcode):""}${x.why?", gleich: "+esc(x.why):""}${x.active===false?", archiviert":""})</span>${ART.pid?` <button type="button" class="sm" data-artlink="${x.id}" data-code="${esc(x.code||"")}">Stattdessen diesen verknüpfen</button>`:""} <button type="button" class="sm" data-artupd="${x.id}">Mit diesen Daten ergänzen</button>${ART.upd?.id===x.id?artUpdHtml():""}</li>`).join("")}</ul>Fehlt beim vorhandenen Artikel etwas, „Mit diesen Daten ergänzen“: es werden nur leere Felder gefüllt, nichts gelöscht. Nur wenn es wirklich ein anderer Artikel ist, noch einmal auf „Trotzdem in etron anlegen“ klicken.</div>`; }
+function artUpdHtml(){ const u=ART.upd; if(!u) return ""; if(u.err) return `<p class="bad">✗ ${esc(u.err)}</p>`; if(u.busy) return `<p class="muted">… ${esc(u.busy)}</p>`;
+  if(u.done) return `<p class="ok">✓ Ergänzt: ${esc(u.done.join(", ")||"nichts")}. <a href="${esc(u.link||"")}" target="_blank" rel="noopener">In etron öffnen</a></p>`;
+  if(u.changes) return u.changes.length?`<p>Würde ergänzen: <b>${esc(u.changes.join(", "))}</b> <button type="button" class="sm pri" id="art-updgo">Jetzt ergänzen</button></p>`:`<p class="ok">Nichts zu ergänzen, alles schon ausgefüllt.</p>`; return ""; }
 
 // Abgleich: interne Referenz, EAN und Lieferanten-Art.-Nr. (Lieferanten-Preisliste in etron)
 async function artDupes(rows){ const up=x=>String(x||"").trim().toUpperCase(); const codes=new Set(), eans=new Set();
@@ -2208,6 +2239,11 @@ function bindArtikel(){ const f=ART.f;
       ART.dup=null; ART.force=false; }
     catch(e){ ART.scrSt=`<span class="bad">✗ ${esc(e.message||e)}</span>`; }
     render(); };
+  app.querySelectorAll("[data-artupd]").forEach(b=>b.onclick=async()=>{ const id=+b.dataset.artupd; ART.upd={id,busy:"prüfe, was fehlt"}; render();
+    try{ const r=await etronCall("art_update",{...artVals(f),id,dry:true,hasImg:!!(f.img&&f.imgOn)}); ART.upd={id,changes:r.changes}; }catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); });
+  const ug=$("#art-updgo"); if(ug) ug.onclick=async()=>{ const id=ART.upd.id; ART.upd={id,busy:"ergänze in etron"}; render();
+    try{ const img=f.img&&f.imgOn?await artImage(f.img):null; const r=await etronCall("art_update",{...artVals(f),id,...(img?{image:img}:{})}); ART.upd={id,done:r.changes.concat(f.img&&f.imgOn&&!img&&ART.imgErr?["(Bild: "+ART.imgErr+")"]:[]),link:r.link}; }
+    catch(e){ ART.upd={id,err:String(e.message||e)}; } render(); };
   app.querySelectorAll("[data-artlink]").forEach(b=>b.onclick=async()=>{ const p=S.products[ART.pid]; if(!p) return; const id=b.dataset.artlink;
     if(await write("products",p.id,{etronArtId:String(id),...(b.dataset.code?{articleNo:b.dataset.code}:{})})){ toast("Mit dem vorhandenen etron-Artikel verknüpft"); ART.pid=undefined; location.hash="produkt-"+p.id; } });
   $("#art-go").onclick=async()=>{ if(ART.busy) return; const vals=artVals(f); if(!vals.name) return toast("Bitte einen Namen eintragen.");
@@ -2215,7 +2251,7 @@ function bindArtikel(){ const f=ART.f;
     if(String(f.vk||"").trim()&&vals.vk==null) return toast("Verkaufspreis bitte als Zahl, z. B. 14,99."); if(String(f.ek||"").trim()&&vals.ek==null) return toast("Einkaufspreis bitte als Zahl, z. B. 9,59.");
     ART.busy=true; const go=$("#art-go"); go.disabled=true; const out=$("#art-res"); out.textContent="… prüfe, ob es den Artikel in etron schon gibt";
     try{
-      if(!ART.force){ const [d]=await artDupes([vals]); ART.dup=d; if(artHard(d).length){ ART.force=true; ART.res=""; ART.busy=false; return render(); } }
+      if(!ART.force){ const [d]=await artDupes([vals]); ART.dup=d; ART.upd=null; if(artHard(d).length){ ART.force=true; ART.res=""; ART.busy=false; return render(); } }
       out.textContent="… lege in etron an"; const img=f.img&&f.imgOn?await artImage(f.img):null;
       const r=await artCreate(vals,img); if(!r.id) throw new Error("etron hat den Artikel angelegt (Vorlage "+r.tmpl+"), aber keine Artikel-ID zurückgegeben. Bitte in etron prüfen.");
       let note=""; const p=S.products[ART.pid];
