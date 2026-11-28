@@ -2043,7 +2043,12 @@ function artParse(d){ const o={pairs:[]}; const flat=x=>Array.isArray(x)?x.flatM
   if(!o.supcode) o.supcode=(pv(/^(art(ikel)?\.?\s*-?\s*(nr|nummer)|artikelnr|heo|bestell\s*-?nr|sku|item)/).match(/[A-Z0-9][A-Z0-9-]{3,}/i)||[""])[0]||(String(d.url||"").match(/\/product\/([A-Z0-9-]+)/i)||["",""])[1];
   const uvp=pv(/(uvp|empf|unverbindl|rrp|srp|msrp|verkaufspreis|vk-preis|endkunden)/)||tx(/(?:UVP|empf\.?\s*VK|unverbindliche Preisempfehlung|SRP|RRP|Endkundenpreis|Verkaufspreis)[^\d\n]{0,30}(\d{1,5}(?:[.,]\d{3})*[.,]\d{2})/i); if(uvp) o.vk=priceOf((uvp.match(/\d[\d.,]*/)||[""])[0]);
   if(o.ek==null){ const ek=pv(/(ihr preis|händlerpreis|haendlerpreis|einkaufspreis|^ek\b|netto)/)||tx(/(?:Ihr Preis|Händlerpreis|EK)[^\d\n]{0,25}(\d{1,5}(?:[.,]\d{3})*[.,]\d{2})/i); if(ek) o.ek=priceOf((ek.match(/\d[\d.,]*/)||[""])[0]); }
-  const rel=pv(/(erschein|release|liefertermin|verfügbar ab|vö\b)/)||tx(/(?:Erscheinungs(?:datum|termin)|Release|Liefertermin)[^\d\n]{0,20}(\d{1,2}\.\d{1,2}\.\d{4})/i);
+  // heo (Tommy, 28.11.): Preiszeilen „9,59 €“ (dein Preis) · „Basispreis: 10,66 €“ (Listen-EK) · „19,99 €“ (UVP, ohne Beschriftung)
+  const PR=/(\d{1,4}(?:\.\d{3})*,\d{2})\s*€/, pl=(T.match(/[^\n]{0,60}\d{1,4},\d{2}\s*€[^\n]{0,40}/g)||[]), bi=pl.findIndex(l=>/basispreis/i.test(l));
+  if(bi>=0){ const b=priceOf((pl[bi].match(PR)||[])[1]); if(b!=null){ o.ekList=b; const net=bi>0?priceOf((pl[bi-1].match(PR)||[])[1]):null;
+      if(net!=null&&net<b){ o.ekNet=net; const d=(1-net/b)*100; o.disc=Math.abs(d-Math.round(d))<0.3?Math.round(d):Math.round(d*10)/10; }
+      if(!uvp){ const nx=pl.slice(bi+1).map(l=>priceOf((l.match(PR)||[])[1])).find(x=>x!=null&&x>b); if(nx!=null) o.vk=nx; } } }
+  const rel=pv(/(erstverkauf|erschein|release|liefertermin|verfügbar ab|vö\b)/)||tx(/(?:Erstverkaufstag|Erscheinungs(?:datum|termin)|Release|Liefertermin)[^\d\n]{0,20}(\d{1,2}\.\d{1,2}\.\d{4})/i);
   if(rel){ const dm=rel.match(/\d{1,2}\.\d{1,2}\.\d{4}/); o.release=dm?isoFix(dm[0]):rel.slice(0,30); }
   o.img=o.img||m["og:image"]||d.img||""; if(o.img&&!/^https:\/\//.test(o.img)) o.img="";
   o.desc=String(d.desc||o.desc||m["og:description"]||"").trim().slice(0,4000); o.name=String(o.name||"").trim().slice(0,200); o.ean=String(o.ean||"").replace(/\D/g,""); o.url=d.url||"";
@@ -2161,7 +2166,7 @@ function bindArtikel(){ const f=ART.f;
     const b=$("#art-scr"); b.disabled=true; ART.scrSt="… heo-Seite wird im Hintergrund geöffnet und gelesen (bis zu 30 Sekunden)"; $("#art-scrst").textContent=ART.scrSt;
     try{ const o=await artScrape(url); const got=[];
       for(const k of ["name","ean","supcode","desc","img","release"]) if(o[k]){ f[k]=o[k]; got.push(k); }
-      if(o.vk!=null){ f.vk=String(vkRound(o.vk)).replace(".",","); got.push("vk"); } if(o.ek!=null){ f.ekList=String(o.ek).replace(".",","); f.ek=""; got.push("ek"); }
+      if(o.vk!=null){ f.vk=String(vkRound(o.vk)).replace(".",","); got.push("vk"); } if(o.ekList!=null){ f.ekList=String(o.ekList).replace(".",","); f.disc=o.disc!=null?String(o.disc).replace(".",","):""; f.ek=""; got.push("ek"); } else if(o.ek!=null){ f.ekList=String(o.ek).replace(".",","); f.ek=""; got.push("ek"); }
       if(!ART.f.supplier){ artPickHeo(); if(ART.f.supplier) artDefSave({supplier:ART.f.supplier}); }
       const nm={name:"Name",ean:"EAN",supcode:"heo-Nr.",desc:"Langtext",img:"Bild",release:"Release",vk:"Verkaufspreis (UVP, aufgerundet)",ek:"Einkaufspreis"};
       ART.scrSt = got.length ? `<span class="ok">✓ Übernommen: ${got.map(k=>nm[k]).join(", ")}.</span> Bitte alles prüfen.${o.ek==null?" Kein Einkaufspreis gefunden (bei heo angemeldet?).":""}${o.vk==null?" Keine UVP gefunden, Verkaufspreis bitte selbst eintragen.":""}`
@@ -2258,7 +2263,7 @@ function bindArtList(){ const L=ART.L; if(!L||!L.rows) return;
   const stop=$("#artl-stop"); if(stop) stop.onclick=()=>{ L.stop=true; stop.disabled=true; };
   const det=$("#artl-det"); if(det) det.onclick=async()=>{ L.busy=true; L.stop=false; drawArtList(); let ok=0;
     for(const r of L.rows){ if(L.stop) break; if(!r.on||r.done) continue; const url=r.url||(r.supcode?HEO_URL(r.supcode):""); if(!url){ continue; } r.st="… lese heo-Seite"; drawArtList();
-      try{ const o=await artScrape(url); if(o.name&&!/loading/i.test(o.name)){ r.name=o.name; r.full=true; } if(o.ean) r.ean=o.ean; if(o.vk!=null&&r.vk==null) r.vk=vkRound(o.vk); if(o.release&&!r.release) r.release=o.release; if(o.img) r.img=o.img; if(o.desc) r.desc=o.desc; r.pairs=o.pairs; r.textHead=o.textHead;
+      try{ const o=await artScrape(url); if(o.name&&!/loading/i.test(o.name)){ r.name=o.name; r.full=true; } if(o.ean) r.ean=o.ean; if(o.vk!=null&&r.vk==null) r.vk=vkRound(o.vk); if(o.release&&!r.release) r.release=o.release; if(r.ekList==null&&o.ekList!=null){ r.ekList=o.ekList; if(o.disc!=null) r.disc=o.disc; r.ek=o.ekNet??r.ek; } if(o.img) r.img=o.img; if(o.desc) r.desc=o.desc; r.pairs=o.pairs; r.textHead=o.textHead;
         r.st=o.name||o.ean?'<span class="ok">✓ Details</span> ':(o.login?'<span class="bad">bei heo nicht angemeldet?</span> ':'<span class="bad">keine Daten gefunden</span> '); if(o.name||o.ean) ok++; }
       catch(e){ r.st=`<span class="bad">✗ ${esc(e.message||e)}</span> `; if(/Erweiterung/.test(e.message||"")){ L.stop=true; } }
       L.checked=false; r.dup=null; drawArtList(); }
